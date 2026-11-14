@@ -103,6 +103,17 @@ expanded and memoized per label set. A few more rules apply:
 
 ## Deviations from the paper
 
+- **Raw coalescing only produces contractive types.** Every recursive
+  occurrence is under a function or record field. A variable cycle with no
+  constructor in between, like `α ≤ β ≤ α`, gives the neutral element of
+  its context (`⊥` in a union, `⊤` in an intersection). The paper's
+  §3.3.3 would give an unguarded `μα. … ∧ α` here instead. Under the
+  paper's own Fig. 10, `X ≤ μα. X ∧ α` isn't derivable: it needs a
+  hypothesis that's never unlocked. So such a type is strictly below `X`,
+  but the simplifier (the paper's and ours) drops these cycles, which would
+  be unsound. Emitting only contractive types removes the conflict. The
+  Lean development (`lean/SimpleSub/Types.lean`) is restricted to
+  contractive types too.
 - **Reflexive constraints are skipped.** `constrain` returns immediately
   when `lhs` and `rhs` are equal, and the paper's Fig. 9 doesn't. Without
   the check, `α <: α` records α as its own bound. That's sound, but it
@@ -127,7 +138,70 @@ expanded and memoized per label set. A few more rules apply:
   union of records keeps only the common fields. Those merges would be
   unsound for overloading or flow typing.
 
+## Mechanized metatheory (Lean)
+
+`lean/` is a Lake project on Lean v4.35.0, with no Mathlib. Run `lake build`
+in `lean/`. Everything below is proved; there are no `sorry`s.
+
+- `SimpleSub/Syntax.lean`: terms, mirroring `lib/syntax.ml`.
+- `SimpleSub/Types.lean`: types with rows, μ-binders as de Bruijn
+  indices (locally nameless), local closedness, contractiveness, and the
+  *unguarded size* `ug`. That's the size of the part not under a function
+  type or record field. Unfolding a contractive μ strictly decreases it
+  (`ug_open`).
+- `SimpleSub/Sub.lean`: declarative subtyping with equi-recursive types.
+  `Step R` is one layer of subtyping. It's inductive and uses the
+  coinductive hypothesis `R` only under a function type or record field,
+  which is the paper's ▷/◁ discipline. `Sub` is the greatest fixed point
+  (Knaster–Tarski), with a coinduction principle `Sub.coind`. Proved so far:
+  - `Sub.refl`: every closed contractive type is a subtype of itself.
+  - `Sub.trans`: transitivity, with no side conditions (not even
+    contractiveness). The proof is cut elimination on single layers
+    (`cut`): induction on the two finite derivations, with the composed
+    relation as the coinductive hypothesis.
+  - `Sub.unfold`/`Sub.fold` (S-Rec): `μα. a ≡ a[μα. a/α]`.
+  - `paper_example`: the paper's §5.1.3 example,
+    `μα₀. τ → τ → α₀ ≤ μα₁. τ → α₁`.
+  - `M_le_int` and `not_int_le_M`: the non-contractive `μα. int ∧ α` is
+    strictly below `int`. This is why raw coalescing only emits contractive
+    types.
+  - `field_in_compound_tail`, `bottom_tail`, `nested_tail`: row facts
+    that need tails to be looked into. One is the shape the simplifier
+    produces for `count`. `not_empty_le_field` checks the other direction.
+
+  Records are compared as rows, i.e. total maps from labels to fields:
+  `{fs | t} ≤ {gs | u}` when every label's field is related. `Ty.field`
+  looks a label up in the explicit fields, then in the tail. A row
+  variable's fields are opaque atoms `proj l ρ`. Not covered yet: recursive
+  rows in tail position (kept opaque), kinds, and the MLsub lattice
+  equations. The OCaml code uses five such equations that aren't derivable
+  yet: merging intersections and unions of functions, merging intersections
+  and unions of records, and distributing a row over a union of tails.
+  Adding them while keeping transitivity is the next milestone.
+- `SimpleSub/Rows.lean`: the row algebra. Rows are modeled by what they
+  denote: a total map from labels to fields, with explicit fields
+  overriding the tail. Each theorem shows a row rewrite in the OCaml code
+  preserves that denotation:
+  - `merge_exact`: merging two rows is exact under the covers condition
+    (`add_row` in the simplifier, `merge_rows` in subsumption).
+  - `merge_inexact`: without the condition, merging is wrong. This is
+    the bug the mutation test introduced.
+  - `combine_sound`: combining two atomic tails is the pointwise meet or
+    join, given the lattice laws for `Abs` (top) and `⊥`.
+  - `drop_abs_fields`: dropping `Abs` fields when the tail is `Abs`
+    (`mk_row`) is exact, provided labels are distinct.
+  - `flatten`: nested rows flatten to appended fields (`mk_row`,
+    `row_view`, `norm_row`).
+
+These are proofs about a model of the code, not the OCaml itself.
+
 ## Not yet implemented
 
+- **Kinds for row variables** (Rémy): the set of labels a row variable is
+  guaranteed not to contain. Without them, ill-kinded types such as
+  `{| 'a} -> {y: int | 'a}`, where `'a` is used both with and without `y`,
+  are accepted. Both the subsumption checker and the Lean subtyping relation
+  then answer conservatively. Kinds are needed in inference, in
+  `lib/subsume.ml`, and in `lean/SimpleSub/Sub.lean`.
 - Boolean-algebra types (negation, MLstruct), and rejecting uninhabited
   types such as `int ∧ bool`.

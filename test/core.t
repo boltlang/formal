@@ -178,3 +178,10 @@ Extensible records (rows, after Marques et al. 2024)
   $ simplesub -e 'fun r -> r with {y}'
   parse error: 1:19: expected '=' (at '}')
   [2]
+
+Raw output is contractive: a variable cycle without a constructor in between
+becomes the neutral element (here ⊤ in an intersection) instead of an
+unguarded recursive type like `('g ∧ 'h as 'g)`
+
+  $ simplesub --raw -e 'let rec count r = if r.done then r else count (r with {n = succ r.n}) in count'
+  - : 'a ∨ ('b ∧ {n: Abs | 'c ∧ {done: 'd ∧ bool | 'e}} ∧ {n: 'f ∧ int} ∧ 'g ∧ 'h ∧ 'i ∧ ⊤ ∧ {done: 'd ∧ bool} -> 'h ∨ {n: 'j ∨ int | 'c})
