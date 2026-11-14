@@ -59,6 +59,17 @@ Algebraic Subtyping for Extensible Records* (2024), in `papers/`:
   are merged only when every label missing from one of them is known there
   (its tail is `Abs`). Otherwise the field types live inside a row variable,
   and merging would change the type.
+- **Kinds** (Rémy). A row variable's kind is the set of labels it does
+  *not* represent, because the record it is the tail of lists them; a label
+  in the kind projects to `Abs` from the variable. `r with {L = …}` creates
+  a row variable of kind `L` (`r with {}` is just `r`). Expansion never
+  expands labels in the tail's kind, and gives `ρ'` the strictly larger
+  kind `kind ρ ∪ L`. `constrain` checks, whenever it installs a bound, that
+  both sides have the same kind; a failure would be a type-checker bug.
+  The simplifier only merges variables of equal kind. Subsumption infers
+  the kinds of variables in user-written types from their use as tails, so
+  `{| 'a} -> {y: int | 'a}` (where `'a` lacks `y`) is equivalent to
+  `{y: Abs | 'a} -> {y: int | 'a}`.
 - **Covered by the safety net:** subsumption supports rows, so
   `--self-check` checks every rows example, and `--expect`/`--compare`
   accept row syntax: `{x: int | 'r}`, `{| 'r}`, and `Abs` fields. Inside
@@ -98,8 +109,10 @@ expanded and memoized per label set. A few more rules apply:
   raw coalescing produces for variable cycles, is read as the neutral
   element of its context: `⊤` in an intersection, `⊥` in a union. This is
   the reading the simplifier uses when it drops such cycles.
-- Row kinds aren't checked, so ill-kinded types such as
-  `{| 'a} -> {y: int | 'a}` get conservative answers.
+- When rows that can't be merged meet on the left, they're compared field
+  by field against the right row, and its tail receives the *meet* of the
+  rows' remainders. Committing to a single left row could bind a flexible
+  tail too tightly and make a later, valid comparison fail.
 
 ## Deviations from the paper
 
@@ -276,11 +289,8 @@ proof, where they are needed.
 
 ## Not yet implemented
 
-- **Kinds for row variables** (Rémy): the set of labels a row variable is
-  guaranteed not to contain. Without them, ill-kinded types such as
-  `{| 'a} -> {y: int | 'a}`, where `'a` is used both with and without `y`,
-  are accepted. Both the subsumption checker and the Lean subtyping relation
-  then answer conservatively. Kinds are needed in inference, in
-  `lib/subsume.ml`, and in `lean/SimpleSub/Sub.lean`.
+- **Kinds in the Lean model** (issue #1): implemented in the OCaml checker,
+  not yet in `lean/`. There, they should discharge the `TailRanked`
+  assumption of the soundness theorem.
 - Boolean-algebra types (negation, MLstruct), and rejecting uninhabited
   types such as `int ∧ bool`.

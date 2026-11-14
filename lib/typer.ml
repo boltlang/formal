@@ -50,7 +50,7 @@ let rec extrude (ty : simple_type) (pol : bool) (lvl : int)
         match PolarTbl.find_opt c (vs.id, pol) with
         | Some nvs -> Variable nvs
         | None ->
-            let nvs = fresh_state lvl in
+            let nvs = fresh_state ~kind:vs.kind lvl in
             PolarTbl.add c (vs.id, pol) nvs;
             if pol then begin
               vs.upper_bounds <- Variable nvs :: vs.upper_bounds;
@@ -76,7 +76,15 @@ let rec extrude (ty : simple_type) (pol : bool) (lvl : int)
     [fs₁] mentions labels [L] missing from [fs₀], we constrain
     [ρ ≤ {L-fields of fs₁ | ρ'}] and then [{fs₀ ∖ fs₁ | ρ'} ≤ t₁]. The
     expansion variable [ρ'] is memoized per [(ρ, L)], so recursive types still
-    only produce finitely many distinct constraints. *)
+    only produce finitely many distinct constraints.
+
+    {b Kinds.} A row variable's kind is the set of labels it does not
+    represent, because the record it is the tail of lists them. A label in
+    the kind projects to [Abs] from the variable, so it is never expanded;
+    the expansion variable [ρ'] has kind [kind ρ ∪ L], strictly larger since
+    [L] avoids [kind ρ]. Every constraint relates rows of equal kind
+    ([row_kind]), which [constrain] checks whenever it installs a bound: a
+    failure would be a bug in the type checker, not in the program. *)
 
 (** Flatten nested rows: [{fs | {fs' | t}}] becomes [{fs, fs' | t}]. *)
 let rec row_view = function
@@ -94,10 +102,44 @@ let expansion (rho : simple_type) (labels : string list) : simple_type =
       match Hashtbl.find_opt expansions key with
       | Some r -> r
       | None ->
-          let r = fresh_var vs.level in
+          let kind = List.fold_left (fun k l -> SSet.add l k) vs.kind labels in
+          let r = fresh_var ~kind vs.level in
           Hashtbl.add expansions key r;
           r)
   | _ -> fresh_var (level rho)
+
+exception Kind_error of string
+
+(** The kind of a row expression: the labels it does not represent. [None]
+    for types that are not rows with a variable tail ([Abs] tails, functions,
+    primitives), whose kind is unconstrained. Raises [Kind_error] if a record
+    lists a label its tail variable does not lack. *)
+let rec row_kind = function
+  | Variable vs -> Some vs.kind
+  | Record (fs, t) -> (
+      match row_kind t with
+      | None -> None
+      | Some k ->
+          let labels = SSet.of_list (List.map fst fs) in
+          if not (SSet.subset labels k) then
+            raise
+              (Kind_error
+                 (Printf.sprintf "record lists %s, which its tail does not lack"
+                    (String.concat ", " (SSet.elements (SSet.diff labels k)))));
+          Some (SSet.diff k labels))
+  | _ -> None
+
+(** Check that a new bound of [v] has [v]'s kind. *)
+let check_kind (vs : var_state) (bound : simple_type) =
+  match row_kind bound with
+  | Some k when not (SSet.equal k vs.kind) ->
+      raise
+        (Kind_error
+           (Printf.sprintf "bound %s of α%d has kind {%s}, expected {%s}"
+              (show_simple bound) vs.id
+              (String.concat ", " (SSet.elements k))
+              (String.concat ", " (SSet.elements vs.kind))))
+  | _ -> ()
 
 (** {1 Constraining (Fig. 9)} *)
 
@@ -138,6 +180,19 @@ let constrain (lhs : simple_type) (rhs : simple_type) : unit =
               | Abs ->
                   List.iter (fun (n, f1) -> field lhs n Abs f1) missing;
                   Abs
+              | Variable vs ->
+                  (* labels in the tail's kind are not represented by it:
+                     they are absent; only the others are expanded *)
+                  let absent, present =
+                    List.partition (fun (n, _) -> SSet.mem n vs.kind) missing
+                  in
+                  List.iter (fun (n, f1) -> field lhs n Abs f1) absent;
+                  if present = [] then t0
+                  else begin
+                    let rho' = expansion t0 (List.map fst present) in
+                    go t0 (Record (present, rho'));
+                    rho'
+                  end
               | _ ->
                   let rho' = expansion t0 (List.map fst missing) in
                   go t0 (Record (missing, rho'));
@@ -147,10 +202,12 @@ let constrain (lhs : simple_type) (rhs : simple_type) : unit =
           let extra = List.filter (fun (n, _) -> not (List.mem_assoc n fs1)) fs0 in
           go (if extra = [] then t0 else Record (extra, t0)) t1
       | Variable lv, _ when level rhs <= lv.level ->
+          check_kind lv rhs;
           (* install the new bound *before* propagating (see Sec. 3.2.2) *)
           lv.upper_bounds <- rhs :: lv.upper_bounds;
           List.iter (fun lb -> go lb rhs) lv.lower_bounds
       | _, Variable rv when level lhs <= rv.level ->
+          check_kind rv lhs;
           rv.lower_bounds <- lhs :: rv.lower_bounds;
           List.iter (fun ub -> go lhs ub) rv.upper_bounds
       | Variable lv, _ ->
@@ -187,7 +244,7 @@ let freshen_above (lim : int) (ty : simple_type) (lvl : int) : simple_type =
           match Hashtbl.find_opt freshened vs.id with
           | Some v -> Variable v
           | None ->
-              let v = fresh_state lvl in
+              let v = fresh_state ~kind:vs.kind lvl in
               Hashtbl.add freshened vs.id v;
               v.lower_bounds <- List.map freshen vs.lower_bounds;
               v.upper_bounds <- List.map freshen vs.upper_bounds;
@@ -240,9 +297,13 @@ let rec type_term (ctx : ctx) (lvl : int) (trm : term) : simple_type =
         List.rev
           (List.fold_left (fun acc (n, t) -> (n, t) :: List.remove_assoc n acc) [] fs)
       in
-      let rho = fresh_var lvl in
-      constrain obj_ty (Record (List.map (fun (n, _) -> (n, Abs)) fs, rho));
-      Record (fs, rho)
+      if fs = [] then obj_ty (* [obj with {}] is just [obj] *)
+      else begin
+        (* [rho] stands for the other fields: it lacks the extended labels *)
+        let rho = fresh_var ~kind:(SSet.of_list (List.map fst fs)) lvl in
+        constrain obj_ty (Record (List.map (fun (n, _) -> (n, Abs)) fs, rho));
+        Record (fs, rho)
+      end
   | Let (isrec, name, rhs, body) ->
       let sch = type_let_rhs ctx lvl isrec name rhs in
       type_term (StringMap.add name sch ctx) lvl body

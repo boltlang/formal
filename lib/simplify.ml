@@ -47,7 +47,14 @@ and row = { fields : compact SMap.t; tail : compact }
     and printing follow this order rather than variable ids, which only
     reflect allocation order inside the type checker. This makes the output
     depend on the shape of the inferred type alone. *)
-type scheme = { term : compact; rec_vars : compact IMap.t; rank : int IMap.t }
+type scheme = {
+  term : compact;
+  rec_vars : compact IMap.t;
+  rank : int IMap.t;
+  kinds : Types.SSet.t IMap.t;
+      (** the kind of each (row) variable; merging variables of different
+          kinds would produce an ill-kinded type *)
+}
 
 let empty =
   { vars = ISet.empty; prims = SSet.empty; rows = []; fn = None; abs = false }
@@ -160,8 +167,10 @@ let compact_type (ty : simple_type) : scheme =
   let recursive : (int * bool, int) Hashtbl.t = Hashtbl.create 16 in
   let rec_vars = ref IMap.empty in
   let rank = ref IMap.empty in
-  let see v =
-    if not (IMap.mem v !rank) then rank := IMap.add v (IMap.cardinal !rank) !rank
+  let kinds = ref IMap.empty in
+  let see ?(kind = Types.SSet.empty) v =
+    if not (IMap.mem v !rank) then rank := IMap.add v (IMap.cardinal !rank) !rank;
+    if not (Types.SSet.is_empty kind) then kinds := IMap.add v kind !kinds
   in
   let rec go ty pol parents in_process =
     match ty with
@@ -179,7 +188,7 @@ let compact_type (ty : simple_type) : scheme =
         (* the tail continues the same row: no constructor in between *)
         { empty with rows = [ mk_row fields (go t pol parents in_process) ] }
     | Variable vs ->
-        see vs.id;
+        see ~kind:vs.kind vs.id;
         let key = (vs.id, pol) in
         if List.mem key in_process then
           if ISet.mem vs.id parents then empty
@@ -190,7 +199,7 @@ let compact_type (ty : simple_type) : scheme =
               | None ->
                   let v = fresh_id () in
                   Hashtbl.add recursive key v;
-                  see v;
+                  see ~kind:vs.kind v;
                   v
             in
             of_var v
@@ -210,7 +219,7 @@ let compact_type (ty : simple_type) : scheme =
            | None -> bound)
   in
   let term = go ty true ISet.empty [] in
-  { term; rec_vars = !rec_vars; rank = !rank }
+  { term; rec_vars = !rec_vars; rank = !rank; kinds = !kinds }
 
 let rank_of sch v = Option.value ~default:max_int (IMap.find_opt v sch.rank)
 
@@ -238,6 +247,7 @@ let atoms_of (t : compact) =
 let simplify (sch : scheme) : scheme =
   let rec_vars = ref sch.rec_vars in
   let is_rec v = IMap.mem v !rec_vars in
+  let kind_of v = Option.value ~default:Types.SSet.empty (IMap.find_opt v sch.kinds) in
   let all_vars = ref (ISet.of_seq (Seq.map fst (IMap.to_seq sch.rec_vars))) in
   (* (pol, v) -> atoms that occur alongside v in *every* pol occurrence *)
   let cooc : (bool * int, ASet.t) Hashtbl.t = Hashtbl.create 16 in
@@ -309,7 +319,9 @@ let simplify (sch : scheme) : scheme =
                        && (not (Hashtbl.mem subst w))
                        && is_rec v = is_rec w
                        (* do not merge recursive with non-recursive variables:
-                          the latter need not be strictly polar *) ->
+                          the latter need not be strictly polar *)
+                       && Types.SSet.equal (kind_of v) (kind_of w)
+                       (* nor variables of different kinds *) ->
                     let w_occs = Hashtbl.find_opt cooc (pol, w) in
                     if Option.fold ~none:true ~some:(ASet.mem (AVar v)) w_occs
                     then begin

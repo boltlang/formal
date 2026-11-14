@@ -6,6 +6,8 @@
 
 (** {1 Internal types (Fig. 6)} *)
 
+module SSet = Set.Make (String)
+
 type simple_type =
   | Variable of var_state
   | Primitive of string
@@ -22,6 +24,11 @@ type simple_type =
 and var_state = {
   id : int;  (** unique identity; variables are compared by [id] only *)
   level : int;
+  kind : SSet.t;
+      (** For a row variable: the labels it does *not* represent, because the
+          record it is the tail of lists them explicitly (Rémy's kinds). A
+          label in the kind projects to [Abs] from this variable. Empty for
+          ordinary type variables. *)
   mutable lower_bounds : simple_type list;
   mutable upper_bounds : simple_type list;
 }
@@ -37,10 +44,10 @@ let fresh_id () =
   incr counter;
   !counter
 
-let fresh_state lvl =
-  { id = fresh_id (); level = lvl; lower_bounds = []; upper_bounds = [] }
+let fresh_state ?(kind = SSet.empty) lvl =
+  { id = fresh_id (); level = lvl; kind; lower_bounds = []; upper_bounds = [] }
 
-let fresh_var lvl = Variable (fresh_state lvl)
+let fresh_var ?kind lvl = Variable (fresh_state ?kind lvl)
 
 (** Maximum level of any variable occurring (syntactically, not through
     bounds) in the type. The paper caches this in a [lazy val]; we recompute

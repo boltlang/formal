@@ -185,3 +185,14 @@ unguarded recursive type like `('g ∧ 'h as 'g)`
 
   $ simplesub --raw -e 'let rec count r = if r.done then r else count (r with {n = succ r.n}) in count'
   - : 'a ∨ ('b ∧ {n: Abs | 'c ∧ {done: 'd ∧ bool | 'e}} ∧ {n: 'f ∧ int} ∧ 'g ∧ 'h ∧ 'i ∧ ⊤ ∧ {done: 'd ∧ bool} -> 'h ∨ {n: 'j ∨ int | 'c})
+
+Kinds: the row variable of `r with {y = …}` lacks y; `r with {}` is just r
+
+  $ simplesub -e 'fun r -> r with {}'
+  - : 'a -> 'a
+  $ simplesub --self-check -e 'fun r -> (r with {a = 1}) with {b = 2}'
+  - : {a: Abs, b: Abs | 'a} -> {a: int, b: int | 'a}
+  $ simplesub --self-check -e 'fun r -> (r with {a = 1}) with {a = true}'
+  - : {a: Abs | 'a} -> {a: bool | 'a}
+  $ simplesub --self-check -e 'fun r -> (fun s -> s with {z = 3}) (r with {x = 1})'
+  - : {x: Abs, z: Abs | 'a} -> {x: int, z: int | 'a}

@@ -44,6 +44,7 @@ type node =
 
 and flex = {
   fid : int;
+  fkind : SSet.t;  (** row kind: labels this variable does not represent *)
   mutable lbs : node list;
   mutable ubs : node list;
 }
@@ -79,14 +80,58 @@ let attempt f =
 
 (** Convert a user-facing type into a graph. Free variables become [Flex]
     when [flexible], [Rigid] otherwise. *)
+(** {1 Kinds}
+
+    The kind of a row variable (the labels it does not represent) is not
+    written in types; it is inferred from how the variable is used: a
+    variable that is the tail of [{L | 'a}] lacks [L]. A label in a tail's
+    kind projects to [Abs] from that tail. *)
+
+module SSet = Types.SSet
+
+let kind_of tbl n = Option.value ~default:SSet.empty (Hashtbl.find_opt tbl n)
+
+(** Infer kinds from the tails of a type's records. *)
+let infer_kinds (t : typ) : (string, SSet.t) Hashtbl.t =
+  let tbl = Hashtbl.create 8 in
+  let add n labels = Hashtbl.replace tbl n (SSet.union labels (kind_of tbl n)) in
+  let rec tails labels = function
+    | TypeVariable n -> add n labels
+    | Types.Union (a, b) | Types.Inter (a, b) -> tails labels a; tails labels b
+    | RecordType (fs, t) -> tails (SSet.union labels (SSet.of_list (List.map fst fs))) t
+    | _ -> ()
+  in
+  let rec go = function
+    | Types.Union (a, b) | Types.Inter (a, b) | FunctionType (a, b) -> go a; go b
+    | RecordType (fs, t) ->
+        List.iter (fun (_, f) -> go f) fs;
+        tails (SSet.of_list (List.map fst fs)) t;
+        go t
+    | RecursiveType (_, b) -> go b
+    | _ -> ()
+  in
+  go t;
+  tbl
+
+(** Kinds of the rigid variables of the current check. Reset by {!subsumes}. *)
+let rigid_kinds : (string, SSet.t) Hashtbl.t = Hashtbl.create 8
+
+(** The kind of an atomic tail. *)
+let tail_kind = function
+  | Flex x -> x.fkind
+  | Rigid n -> kind_of rigid_kinds n
+  | _ -> SSet.empty
+
 let to_node ~flexible (t : typ) : node =
+  let kinds = infer_kinds t in
   let vars : (string, node) Hashtbl.t = Hashtbl.create 8 in
   let var n =
     match Hashtbl.find_opt vars n with
     | Some v -> v
     | None ->
         let v =
-          if flexible then Flex { fid = fresh_id (); lbs = []; ubs = [] }
+          if flexible then
+            Flex { fid = fresh_id (); fkind = kind_of kinds n; lbs = []; ubs = [] }
           else Rigid n
         in
         Hashtbl.add vars n v;
@@ -181,7 +226,8 @@ let expansion x labels =
   match Hashtbl.find_opt expansions key with
   | Some n -> n
   | None ->
-      let n = Flex { fid = fresh_id (); lbs = []; ubs = [] } in
+      let fkind = List.fold_left (fun k l -> SSet.add l k) x.fkind labels in
+      let n = Flex { fid = fresh_id (); fkind; lbs = []; ubs = [] } in
       Hashtbl.add expansions key n;
       n
 
@@ -320,33 +366,52 @@ let rec sub hyps pending a b =
                | _ -> false)
         || List.exists
              (fun r1 ->
-               List.exists (fun r0 -> attempt (fun () -> row_sub unlocked r0 r1)) lrows
-               || (List.length lrows > 1 && attempt (fun () -> row_meet_sub unlocked lrows r1)))
+               (* with several left rows, compare field by field first: it
+                  commits the weakest bounds; picking a single left row can
+                  commit a flexible tail to too much (see [row_meet_sub]) *)
+               (List.length lrows > 1 && attempt (fun () -> row_meet_sub unlocked lrows r1))
+               || List.exists (fun r0 -> attempt (fun () -> row_sub unlocked r0 r1)) lrows)
              rrows
 
-(** A meet of rows that could not be merged, against a row with an [Abs]
-    tail: compare field by field, intersecting the explicit types each left
-    row gives a label. Rows that would only provide the label through their
-    tail are left out of the intersection, which is sound (dropping
-    conjuncts on the left only makes the check harder). A label no left row
-    mentions is provided by expanding a flexible tail if there is one, by a
-    bottom tail, or else must be [Abs] on the right. *)
+(** A meet of rows that could not be merged, against a row: compare field
+    by field, intersecting the explicit types each left row gives a label.
+    Rows that would only provide the label through their tail are left out of
+    the intersection, which is sound (dropping conjuncts on the left only
+    makes the check harder). A label no left row mentions is provided by
+    expanding a flexible tail if there is one, by a bottom tail, or else must
+    be [Abs] on the right. The right tail then receives the *meet* of what is
+    left of every left row.
+
+    Choosing a single left row instead can commit a flexible right tail to
+    too much: [{a: Abs | ρ₁} ∧ {a: Abs, b: Abs | ρ₁'} ≤ {a: Abs, b: Abs | φ}]
+    holds through the first row with [φ ≥ ρ₁], which then conflicts with a
+    later [φ ≤ ρ₁']; the meet [φ ≥ ρ₁ ∧ ρ₁'] does not. What is left of a row
+    may still mention labels of the right row (through its tail), but there
+    the right row's explicit fields shadow its tail, so they do not matter. *)
 and row_meet_sub hyps rows (fs1, t1) =
-  t1 = Absn
-  && List.for_all
-       (fun (n, f1) ->
-         match List.filter_map (fun (fs, _) -> List.assoc_opt n fs) rows with
-         | [ f0 ] -> sub hyps [] f0 f1
-         | _ :: _ as fs0 -> sub hyps [] (Inter fs0) f1
-         | [] -> (
-             let tails = List.map snd rows in
-             if List.mem (Union []) tails then true
-             else
-               match List.find_opt (function Flex _ -> true | _ -> false) tails with
-               | Some (Flex x as t0) ->
-                   sub hyps [] t0 (Row ([ (n, f1) ], expansion x [ n ]))
-               | _ -> sub hyps [] Absn f1))
-       fs1
+  List.for_all
+    (fun (n, f1) ->
+      match List.filter_map (fun (fs, _) -> List.assoc_opt n fs) rows with
+      | [ f0 ] -> sub hyps [] f0 f1
+      | _ :: _ as fs0 -> sub hyps [] (Inter fs0) f1
+      | [] -> (
+          let tails = List.map snd rows in
+          if List.mem (Union []) tails then true
+          else
+            match List.find_opt (function Flex _ -> true | _ -> false) tails with
+            | Some (Flex x as t0) -> sub hyps [] t0 (Row ([ (n, f1) ], expansion x [ n ]))
+            | _ -> sub hyps [] Absn f1))
+    fs1
+  &&
+  (t1 = Absn
+  ||
+  let k1 = tail_kind t1 in
+  let rest (fs, t) =
+    match List.filter (fun (n, _) -> not (List.mem_assoc n fs1) && not (SSet.mem n k1)) fs with
+    | [] -> t
+    | extra -> Row (extra, t)
+  in
+  sub hyps [] (Inter (List.map rest rows)) t1)
 
 (** [{fs₀ | t₀} ≤ {fs₁ | t₁}] for atomic tails. Mirrors the type checker:
     labels on both sides are compared; a label only on the right must be
@@ -368,14 +433,24 @@ and row_sub hyps (fs0, t0) (fs1, t1) =
       | Absn | Rigid _ ->
           if List.for_all (fun (_, f1) -> sub hyps [] Absn f1) missing then Some t0 else None
       | Flex x ->
-          let x' = expansion x (List.map fst missing) in
-          if sub hyps [] t0 (Row (missing, x')) then Some x' else None
+          (* labels in the tail's kind are absent from it; expand the rest *)
+          let absent, present = List.partition (fun (n, _) -> SSet.mem n x.fkind) missing in
+          if not (List.for_all (fun (_, f1) -> sub hyps [] Absn f1) absent) then None
+          else if present = [] then Some t0
+          else
+            let x' = expansion x (List.map fst present) in
+            if sub hyps [] t0 (Row (present, x')) then Some x' else None
       | _ -> None
   in
   match t0' with
   | None -> false
   | Some t0' ->
-      let extra = List.filter (fun (n, _) -> not (List.mem_assoc n fs1)) fs0 in
+      (* fields only on the left must fit the right tail, unless the tail's
+         kind contains them: there the right row's field is [Abs] *)
+      let k1 = tail_kind t1 in
+      let extra =
+        List.filter (fun (n, _) -> not (List.mem_assoc n fs1) && not (SSet.mem n k1)) fs0
+      in
       sub hyps [] (if extra = [] then t0' else Row (extra, t0')) t1
 
 (** [subsumes s1 s2] decides [s1 ≤∀ s2] ([s1] is at least as general).
@@ -383,6 +458,8 @@ and row_sub hyps (fs0, t0) (fs1, t1) =
 let subsumes (s1 : typ) (s2 : typ) : bool =
   Hashtbl.reset expansions;
   trail := [];
+  Hashtbl.reset rigid_kinds;
+  Hashtbl.iter (Hashtbl.replace rigid_kinds) (infer_kinds s2);
   sub [] [] (to_node ~flexible:true s1) (to_node ~flexible:false s2)
 
 type relation = Equivalent | More_general | Less_general | Incomparable

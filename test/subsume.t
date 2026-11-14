@@ -92,14 +92,13 @@ field types use `∨`. `Abs` is the top field ("no guarantee").
 
   $ simplesub --compare "{y: Abs | 'a} -> {y: int | 'a}" "{x: int} -> {x: int, y: int}"
   {y: Abs | 'a} -> {y: int | 'a} is strictly more general than {x: int} -> {x: int, y: int}
-The next one is ill-kinded in Rémy's discipline ('a is used both as a whole
-row and as the rest of a row listing y); the checker does not check kinds and
-answers conservatively.
+Kinds are inferred from use: 'a is the tail of a row listing y, so 'a lacks
+y, and `{| 'a}` (in which nothing lists y) means `{y: Abs | 'a}`.
 
   $ simplesub --compare "{y: Abs | 'a} -> {y: int | 'a}" "{| 'a} -> {y: int | 'a}"
-  {y: Abs | 'a} -> {y: int | 'a} is strictly more general than {| 'a} -> {y: int | 'a}
+  {y: Abs | 'a} -> {y: int | 'a} is equivalent to {| 'a} -> {y: int | 'a}
   $ simplesub --compare "{y: Abs | 'a} -> {y: int | 'a}" "{y: Abs | 'a} -> {| 'a}"
-  {y: Abs | 'a} -> {y: int | 'a} is incomparable to {y: Abs | 'a} -> {| 'a}
+  {y: Abs | 'a} -> {y: int | 'a} is strictly more general than {y: Abs | 'a} -> {| 'a}
   $ simplesub --compare "{x: int | 'a}" "{x: int}"
   {x: int | 'a} is strictly more general than {x: int}
   $ simplesub --compare "{x: int, y: Abs}" "{x: int}"
@@ -129,8 +128,8 @@ is the neutral element of its context
   - : {x: int, y: int}
   $ simplesub -e 'fun r -> r with {y = 1}' --expect "{| 'r} -> {y: int | 'r}"
   - : {y: Abs | 'a} -> {y: int | 'a}
-    expected {| 'a} -> {y: int | 'a}, but inferred type is strictly more general
-  [1]
+  $ simplesub --compare "{x: int | 'a} -> {y: int | 'a}" "{x: int, y: Abs | 'a} -> {y: int | 'a}"
+  {x: int | 'a} -> {y: int | 'a} is equivalent to {x: int, y: Abs | 'a} -> {y: int | 'a}
   $ simplesub -e 'fun r -> r with {y = 1}' --expect "{x: int} -> {x: int, y: int}"
   - : {y: Abs | 'a} -> {y: int | 'a}
     expected {x: int} -> {x: int, y: int}, but inferred type is strictly more general

@@ -40,7 +40,12 @@ let infer_program (items : Syntax.item list) : result list =
         | Syntax.Expr t ->
             { name = None;
               outcome = Ok (Typer.type_term !ctx 0 t) }
-      with Typer.Type_error msg ->
-        let name = match item with Syntax.Decl (_, n, _) -> Some n | _ -> None in
-        { name; outcome = Error msg })
+      with
+      | Typer.Type_error msg ->
+          let name = match item with Syntax.Decl (_, n, _) -> Some n | _ -> None in
+          { name; outcome = Error msg }
+      | Typer.Kind_error msg ->
+          (* a violated kind invariant is a bug in the type checker *)
+          let name = match item with Syntax.Decl (_, n, _) -> Some n | _ -> None in
+          { name; outcome = Error ("internal error, ill-kinded row: " ^ msg) })
     items
