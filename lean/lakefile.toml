@@ -1,0 +1,6 @@
+name = "SimpleSub"
+version = "0.1.0"
+defaultTargets = ["SimpleSub"]
+
+[[lean_lib]]
+name = "SimpleSub"
