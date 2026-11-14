@@ -1,76 +1,75 @@
-Unsimplified (coalesced-only) types inferred by the core Simple-sub algorithm.
-Section 4 simplification is not implemented yet, so expect redundant
-variables (e.g. `'a -> int` instead of `⊤ -> int`).
+Types inferred by Simple-sub, simplified as in Section 4 of the paper.
+The final section shows the raw coalesced types (`--raw`) for comparison.
 
 Basics
 
   $ simplesub -e '42'
   - : int
   $ simplesub -e 'fun x -> 42'
-  - : 'a -> int
+  - : ⊤ -> int
   $ simplesub -e 'fun x -> x'
   - : 'a -> 'a
   $ simplesub -e 'fun x -> x 42'
-  - : 'a ∧ (int -> 'b) -> 'b
+  - : (int -> 'a) -> 'a
   $ simplesub -e '(fun x -> x) 42'
-  - : 'a ∨ int
+  - : int
   $ simplesub -e 'fun f -> fun x -> f (f x)'
-  - : 'a ∧ ('b -> 'c) ∧ ('d -> 'b) -> 'd -> 'c
+  - : ('a -> 'a ∧ 'b) -> 'a -> 'b
   $ simplesub -e 'let twice = fun f -> fun x -> f (f x) in twice'
-  - : 'a ∧ ('b -> 'c) ∧ ('d -> 'b) -> 'd -> 'c
+  - : ('a -> 'a ∧ 'b) -> 'a -> 'b
 
 Records (width/depth subtyping)
 
   $ simplesub -e 'fun x -> x.f'
-  - : 'a ∧ {f: 'b} -> 'b
+  - : {f: 'a} -> 'a
   $ simplesub -e '{a = 1; b = true}.a'
-  - : 'a ∨ int
+  - : int
   $ simplesub -e 'fun x -> {L = succ x.v; R = x}'
-  - : 'a ∧ {v: 'b ∧ int} -> {L: 'c ∨ int, R: 'a}
+  - : 'a ∧ {v: int} -> {L: int, R: 'a}
   $ simplesub -e '(fun r -> r.a) {a = 1; b = 2}'
-  - : 'a ∨ int
+  - : int
 
 if-then-else via the `if` combinator; joins of incompatible types are allowed
 when they are never eliminated
 
   $ simplesub -e 'fun x -> if x then 1 else 2'
-  - : 'a ∧ bool -> 'b ∨ int
+  - : bool -> int
   $ simplesub -e 'fun x -> if true then x else {a = x}'
-  - : 'a ∧ 'b ∧ 'c -> 'c ∨ {a: 'a}
+  - : 'a -> 'a ∨ {a: 'a}
 
 Let polymorphism (levels, freshenAbove)
 
   $ simplesub -e 'let id = fun x -> x in {a = id 1; b = id true}'
-  - : {a: 'a ∨ int, b: 'b ∨ bool}
+  - : {a: int, b: bool}
   $ simplesub -e 'fun y -> let f = fun x -> {v = x; w = y} in f'
   - : 'a -> 'b -> {v: 'b, w: 'a}
 
 Extrusion: a lambda-bound variable flowing into a let-bound definition
 
   $ simplesub -e 'fun x -> let y = fun z -> x z in y'
-  - : 'a ∧ ('b -> 'c) -> 'd ∧ 'b -> 'e ∨ 'c
+  - : ('a -> 'b) -> 'a -> 'b
   $ simplesub -e 'fun k -> let f = fun x -> k x in {a = f 1; b = f true}'
-  - : 'a ∧ ('b ∨ bool ∨ int -> 'c ∧ 'd ∧ 'e) -> {a: 'e, b: 'd}
+  - : (bool ∨ int -> 'a) -> {a: 'a, b: 'a}
 
 Recursion and recursive types (Sec. 3.4.1, 4.3.2)
 
   $ simplesub -e 'let rec f = fun x -> f in f'
-  - : ('b ∨ ('c -> 'a) as 'a)
+  - : (⊤ -> 'a as 'a)
   $ simplesub -e 'let rec f = fun x -> {L = x; R = f x} in f'
-  - : 'a ∨ ('b -> {L: 'b, R: ('d ∨ {L: 'b, R: 'c} as 'c)})
+  - : 'a -> ({L: 'a, R: 'b} as 'b)
   $ simplesub -e 'let rec x = (let y = x in (fun x -> y)) in x'
-  - : ('b ∨ ('c -> 'a) as 'a)
+  - : (⊤ -> 'a as 'a)
   $ simplesub -e 'let rec produce = fun arg -> {head = arg; tail = produce (succ arg)} in produce'
-  - : 'a ∨ ('b ∧ int -> {head: 'b ∨ int, tail: ('d ∨ {head: 'b ∨ int, tail: 'c} as 'c)})
+  - : int -> ({head: int, tail: 'a} as 'a)
   $ simplesub -e 'let rec consume = fun strm -> add strm.head (consume strm.tail) in consume'
-  - : 'a ∨ (('c ∧ {tail: 'd ∧ 'b} ∧ {head: 'e ∧ int} as 'b) -> 'f ∨ int)
+  - : ({head: int, tail: 'a} as 'a) -> int
 
 Self-application and the Y combinator
 
   $ simplesub -e 'fun x -> x x'
   - : 'a ∧ ('a -> 'b) -> 'b
   $ simplesub -e 'let y = fun f -> (fun x -> f (x x)) (fun x -> f (x x)) in y (fun f -> fun x -> f)'
-  - : 'a ∨ ('b -> ('d ∨ ('b -> 'c) as 'c))
+  - : (⊤ -> 'a as 'a)
 
 Top-level declarations are generalized and can be reused. A failing
 declaration is reported and skipped. `use` is rightly rejected: there is no
@@ -87,9 +86,9 @@ flow typing, so `length` demands a `tail` field even on the `isNil = true` node
   > SRC
   $ simplesub prog.sub
   let id : 'a -> 'a
-  let length : 'a ∨ (('c ∧ {tail: 'd ∧ 'b} ∧ {isNil: 'e ∧ bool} as 'b) -> 'f ∨ int)
-  let nils : ('b ∨ {isNil: bool, tail: 'a} as 'a)
-  let ok : {a: 'a ∨ int, b: 'b ∨ {c: bool}, n: 'c ∨ int}
+  let length : ({isNil: bool, tail: 'a} as 'a) -> int
+  let nils : ({isNil: bool, tail: 'a} as 'a)
+  let ok : {a: int, b: {c: bool}, n: int}
   let use : type error: missing field: tail in {isNil: bool}
   [1]
 
@@ -122,3 +121,35 @@ Parse errors
   $ simplesub -e 'fun -> 1'
   parse error: 1:5: expected parameter (at '->')
   [2]
+
+Raw (coalesced but unsimplified) output, Sec. 3.3, versus simplified output
+
+  $ simplesub --raw -e 'fun f -> fun x -> f (f x)'
+  - : 'a ∧ ('b -> 'c) ∧ ('d -> 'b) -> 'd -> 'c
+  $ simplesub -e 'fun f -> fun x -> f (f x)'
+  - : ('a -> 'a ∧ 'b) -> 'a -> 'b
+  $ simplesub --raw -e 'let rec f = fun x -> {L = x; R = f x} in f'
+  - : 'a ∨ ('b -> {L: 'b, R: ('d ∨ {L: 'b, R: 'c} as 'c)})
+  $ simplesub -e 'let rec f = fun x -> {L = x; R = f x} in f'
+  - : 'a -> ({L: 'a, R: 'b} as 'b)
+  $ simplesub --raw -e 'fun x -> {L = add x 1; R = if true then 0 else x}'
+  - : 'a ∧ 'b ∧ 'c ∧ int -> {L: 'd ∨ int, R: 'c ∨ int}
+  $ simplesub -e 'fun x -> {L = add x 1; R = if true then 0 else x}'
+  - : int -> {L: int, R: int}
+
+More cases from the paper (Secs. 2-4)
+
+  $ simplesub -e 'fun x -> x x x'
+  - : 'a ∧ ('a -> 'a -> 'b) -> 'b
+  $ simplesub -e '(fun x -> x x) (fun x -> x x)'
+  - : ⊥
+  $ simplesub -e 'fun x -> {l = x x; r = x}'
+  - : 'a ∧ ('a -> 'b) -> {l: 'b, r: 'a}
+  $ simplesub -e 'fun f -> (fun x -> f (x x)) (fun x -> f (x x))'
+  - : ('a -> 'a) -> 'a
+  $ simplesub -e 'let rec f = fun x -> f x.u in f'
+  - : ({u: 'a} as 'a) -> ⊥
+  $ simplesub -e 'fun x -> fun y -> fun z -> if x then y else z'
+  - : bool -> 'a -> 'a -> 'a
+  $ simplesub -e 'if true then {a = 1; b = true} else {b = false; c = 42}'
+  - : {b: bool}

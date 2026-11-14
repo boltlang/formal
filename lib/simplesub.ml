@@ -6,17 +6,22 @@ module Types = Types
 module Typer = Typer
 module Coalesce = Coalesce
 module Parser = Parser
+module Simplify = Simplify
 
-(** Infer and coalesce the type of a closed term in the built-in context. *)
-let infer_term (t : Syntax.term) : Types.typ =
-  let ty = Typer.type_term (Typer.builtins ()) 0 t in
-  Coalesce.coalesce_type ty
+(** Turn an inferred type into a user-facing one: simplified (Sec. 4) by
+    default, or merely coalesced (Sec. 3.3) with [~simplify:false]. *)
+let display ?(simplify = true) ty =
+  if simplify then Simplify.simplify_type ty else Coalesce.coalesce_type ty
+
+(** Infer the type of a closed term in the built-in context. *)
+let infer_term ?simplify (t : Syntax.term) : Types.typ =
+  display ?simplify (Typer.type_term (Typer.builtins ()) 0 t)
 
 type result = { name : string option; outcome : (Types.typ, string) Stdlib.result }
 
 (** Infer every item of a program. Top-level [let]s are generalized and added
     to the context; an item that fails to type-check is reported and skipped. *)
-let infer_program (items : Syntax.item list) : result list =
+let infer_program ?simplify (items : Syntax.item list) : result list =
   let ctx = ref (Typer.builtins ()) in
   List.map
     (fun item ->
@@ -26,10 +31,10 @@ let infer_program (items : Syntax.item list) : result list =
             let sch = Typer.type_let_rhs !ctx 0 isrec name rhs in
             ctx := Typer.StringMap.add name sch !ctx;
             { name = Some name;
-              outcome = Ok (Coalesce.coalesce_type (Typer.instantiate sch 0)) }
+              outcome = Ok (display ?simplify (Typer.instantiate sch 0)) }
         | Syntax.Expr t ->
             { name = None;
-              outcome = Ok (Coalesce.coalesce_type (Typer.type_term !ctx 0 t)) }
+              outcome = Ok (display ?simplify (Typer.type_term !ctx 0 t)) }
       with Typer.Type_error msg ->
         let name = match item with Syntax.Decl (_, n, _) -> Some n | _ -> None in
         { name; outcome = Error msg })
