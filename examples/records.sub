@@ -1,0 +1,18 @@
+// Structural records with width and depth subtyping.
+
+// Field selection constrains the argument to *some* record with that field.
+let get_x p = p.x
+let norm1 p = add p.x p.y
+
+// Extra fields are fine (width subtyping).
+let n = norm1 {x = 1; y = 2; label = true}
+
+// Records can be nested; selection chains propagate constraints.
+let origin_x shape = shape.origin.x
+let ox = origin_x {origin = {x = 0; y = 0}; radius = 5}
+
+// A function that both reads and returns its argument keeps the precise
+// input type in its output (no information is lost by subtyping).
+let tag p = {value = p; size = succ p.size}
+let tagged = tag {size = 3; name = 1}
+let inner = tagged.value.name

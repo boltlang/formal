@@ -1,0 +1,13 @@
+// Basic inference: functions, application, higher-order functions.
+
+let const = fun x -> fun y -> x
+let id = fun x -> x
+let apply f x = f x
+let compose f g x = f (g x)
+let twice f x = f (f x)
+let flip f x y = f y x
+
+// Using built-ins: succ, add, not
+let inc = add 1
+let plus2 = twice succ
+let negate_twice = twice not

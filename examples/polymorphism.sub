@@ -1,0 +1,17 @@
+// Let-polymorphism via levels: let-bound definitions are generalized.
+
+let id x = x
+
+// `id` is used at two unrelated types.
+let pair = {a = id 1; b = id true}
+
+// Local let-polymorphism.
+let local = let f = fun x -> {v = x} in {i = f 1; b = f false}
+
+// Extrusion: `f` closes over the lambda-bound `k`, so it cannot be fully
+// generalized. Both uses of `f` flow into `k`'s parameter, hence the union.
+let extruded k = let f = fun x -> k x in {a = f 1; b = f true}
+
+// A lambda-bound variable is NOT polymorphic: using `g` at two types
+// constrains its parameter with both.
+let mono g = {a = g 1; b = g true}
