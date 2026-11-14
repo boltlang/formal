@@ -87,6 +87,20 @@ theorem SFields.NAC.absOf : ∀ {fs : SFields}, (fs.absOf).NAC
   | .nil => trivial
   | .cons _ _ _ => ⟨trivial, SFields.NAC.absOf⟩
 
+theorem SFields.NAC.absentIn {K : List String} : ∀ {fs : SFields}, fs.NAC → (fs.absentIn K).NAC
+  | .nil, _ => trivial
+  | .cons n _ _, ⟨hf, hr⟩ => by
+    simp only [SFields.absentIn]; split
+    · exact ⟨hf, hr.absentIn⟩
+    · exact hr.absentIn
+
+theorem SFields.NAC.presentIn {K : List String} : ∀ {fs : SFields}, fs.NAC → (fs.presentIn K).NAC
+  | .nil, _ => trivial
+  | .cons n _ _, ⟨hf, hr⟩ => by
+    simp only [SFields.presentIn]; split
+    · exact hr.presentIn
+    · exact ⟨hf, hr.presentIn⟩
+
 theorem restRow_NAC {ex : SFields} {t : SType} (he : ex.NAC) (ht : t.NAC) : (restRow ex t).NAC := by
   cases ex with
   | nil => exact ht
@@ -166,9 +180,12 @@ theorem Expand.nac : Expand s t ms t' s' → Inv₂ s → t.NAC → ms.NAC → L
     LogNAC s' ∧ t'.NAC
   | .none, _, ht, _, h => ⟨h, ht⟩
   | .abs _ h', i, _, hms, h => ⟨h'.nac i hms.absPairs h, trivial⟩
-  | .memo _ _ h', i, _, hms, h => ⟨h'.nac i trivial ⟨hms, trivial⟩ h, trivial⟩
-  | .fresh _ _ h', i, _, hms, h =>
-    ⟨h'.nac (i.of_bounds rfl fun _ hp => hp) trivial ⟨hms, trivial⟩ h, trivial⟩
+  | .allAbsent _ _ h', i, ht, hms, h => ⟨h'.nac i hms.absentIn.absPairs h, ht⟩
+  | .memo _ _ h₁ _ h₂, i, _, hms, h =>
+    ⟨h₂.nac (h₁.inv₂ i) trivial ⟨hms.presentIn, trivial⟩ (h₁.nac i hms.absentIn.absPairs h), trivial⟩
+  | .fresh _ _ h₁ _ _ h₂, i, _, hms, h =>
+    ⟨h₂.nac ((h₁.inv₂ i).of_bounds rfl fun _ hp => hp) trivial ⟨hms.presentIn, trivial⟩
+      (h₁.nac i hms.absentIn.absPairs h), trivial⟩
 end
 
 theorem ConstrainTop.nac {s s' : State} (h : ConstrainTop s a b s') (i : Inv₂ s)
@@ -192,10 +209,10 @@ theorem TypeTerm.nac : TypeTerm Γ s t st s' → CtxNAC Γ → Inv₂ s → LogN
     LogNAC s' ∧ st.NAC ∧ st ≠ .abs
   | .lit, _, _, h => ⟨h, trivial, (fun h => nomatch h)⟩
   | .var hx, hΓ, _, h => ⟨h, (hΓ _ _ hx).1, (hΓ _ _ hx).2⟩
-  | .lam h', hΓ, i, h =>
+  | .lam _ h', hΓ, i, h =>
     have r := h'.nac (hΓ.cons trivial (fun h => nomatch h)) i.fresh h
     ⟨r.1, ⟨(fun h => nomatch h), r.2.2, trivial, r.2.1⟩, (fun h => nomatch h)⟩
-  | .app h₁ h₂ hc, hΓ, i, h =>
+  | .app _ h₁ h₂ hc, hΓ, i, h =>
     have r₁ := h₁.nac hΓ i.fresh h
     have i₁ := h₁.inv₂ i.fresh
     have r₂ := h₂.nac hΓ i₁ r₁.1
@@ -204,10 +221,11 @@ theorem TypeTerm.nac : TypeTerm Γ s t st s' → CtxNAC Γ → Inv₂ s → LogN
   | .rcd h', hΓ, i, h =>
     have r := h'.nac hΓ i h
     ⟨r.1, ⟨r.2, trivial⟩, (fun h => nomatch h)⟩
-  | .sel h' hc, hΓ, i, h =>
+  | .sel _ h' hc, hΓ, i, h =>
     have r := h'.nac hΓ i.fresh h
     ⟨hc.nac (h'.inv₂ i.fresh) r.2.1 ⟨⟨trivial, trivial⟩, trivial⟩ r.1, trivial, (fun h => nomatch h)⟩
-  | .ext h₁ h₂ hc, hΓ, i, h =>
+  | .extNil h', hΓ, i, h => h'.nac hΓ i h
+  | .ext _ h₁ h₂ _ hc, hΓ, i, h =>
     have r₁ := h₁.nac hΓ i h
     have i₁ := h₁.inv₂ i
     have r₂ := h₂.nac hΓ i₁ r₁.1
@@ -216,7 +234,7 @@ theorem TypeTerm.nac : TypeTerm Γ s t st s' → CtxNAC Γ → Inv₂ s → LogN
   | .letIn h₁ h₂, hΓ, i, h =>
     have r₁ := h₁.nac hΓ i h
     h₂.nac (hΓ.cons r₁.2.1 r₁.2.2) (h₁.inv₂ i) r₁.1
-  | .letRec h₁ hc h₂, hΓ, i, h =>
+  | .letRec _ h₁ hc h₂, hΓ, i, h =>
     have hΓ' := hΓ.cons (st := .var _) trivial (fun h => nomatch h)
     have r₁ := h₁.nac hΓ' i.fresh h
     have i₁ := h₁.inv₂ i.fresh
@@ -231,7 +249,7 @@ theorem TypeFields.nac : TypeFields Γ s fs F s' → CtxNAC Γ → Inv₂ s → 
     ⟨r₂.1, r₁.2.1, r₂.2⟩
 end
 
-theorem LogNAC.init : LogNAC State.init := fun _ h => nomatch h
+theorem LogNAC.init {K : Nat → List String} : LogNAC (State.initK K) := fun _ h => nomatch h
 
 theorem SCtx.lookup_mem {Γ : SCtx} (h : Γ.lookup x = some st) : (x, st) ∈ Γ := by
   simp only [SCtx.lookup, Option.map_eq_some_iff] at h

@@ -18,7 +18,7 @@ instantiation substitutes them simultaneously (`Ty.substM`).
 must be a record whose fields `lᵢ` may be anything (`Abs`) and whose other
 fields form some row `ρ`; the result has the new fields over the same `ρ`.
 Labels in a `with` are assumed distinct (the OCaml checker keeps the last
-binding of a repeated label).
+binding of a repeated label). `t with {}` is just `t`.
 -/
 
 namespace SimpleSub
@@ -108,6 +108,8 @@ inductive Typ (E : Defs) : Ctx → Term → Ty → Prop where
   | sel : Typ E Γ t (.record (.cons l τ .nil) .abs) → Typ E Γ (.sel t l) τ
   /-- `t with {fs}`: `t`'s fields `fs` may be anything, the rest is `ρ`. -/
   | ext : Typ E Γ t (.record F.absOf ρ) → TypFields E Γ fs F → Typ E Γ (.ext t fs) (.record F ρ)
+  /-- `t with {}` evaluates to `t`, whatever its type (as in `lib/typer.ml`). -/
+  | extNil : Typ E Γ t τ → Typ E Γ (.ext t []) τ
   | letIn : Typ E Γ s σ → Typ E ((x, .mono σ) :: Γ) t τ → Typ E Γ (.letIn false x s t) τ
   | letRec : Typ E ((x, .mono σ) :: Γ) s σ → Typ E ((x, .mono σ) :: Γ) t τ →
       Typ E Γ (.letIn true x s t) τ

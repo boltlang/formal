@@ -10,3 +10,4 @@ import SimpleSub.Solution
 import SimpleSub.Sorts
 import SimpleSub.SolutionRows
 import SimpleSub.Theorem1
+import SimpleSub.Kinds

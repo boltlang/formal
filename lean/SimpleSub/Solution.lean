@@ -135,8 +135,9 @@ theorem FieldsEach.inv₂ : FieldsEach s ps s' → Inv₂ s → Inv₂ s'
 theorem Expand.inv₂ : Expand s t ms t' s' → Inv₂ s → Inv₂ s'
   | .none, h => h
   | .abs _ h', h => h'.inv₂ h
-  | .memo _ _ h', h => h'.inv₂ h
-  | .fresh _ _ h', h => h'.inv₂ (h.of_bounds rfl fun _ hp => hp)
+  | .allAbsent _ _ h', h => h'.inv₂ h
+  | .memo _ _ h₁ _ h₂, h => h₂.inv₂ (h₁.inv₂ h)
+  | .fresh _ _ h₁ _ _ h₂, h => h₂.inv₂ ((h₁.inv₂ h).of_bounds rfl fun _ hp => hp)
 end
 
 theorem Inv₂.fresh {s : State} (h : Inv₂ s) : Inv₂ s.fresh := h.of_bounds rfl fun _ hp => hp
@@ -149,20 +150,21 @@ mutual
 theorem TypeTerm.inv₂ : TypeTerm Γ s t st s' → Inv₂ s → Inv₂ s'
   | .lit, h => h
   | .var _, h => h
-  | .lam h', h => h'.inv₂ h.fresh
-  | .app h₁ h₂ hc, h => hc.inv₂ (h₂.inv₂ (h₁.inv₂ h.fresh))
+  | .lam _ h', h => h'.inv₂ h.fresh
+  | .app _ h₁ h₂ hc, h => hc.inv₂ (h₂.inv₂ (h₁.inv₂ h.fresh))
   | .rcd h', h => h'.inv₂ h
-  | .sel h' hc, h => hc.inv₂ (h'.inv₂ h.fresh)
-  | .ext h₁ h₂ hc, h => hc.inv₂ (h₂.inv₂ (h₁.inv₂ h)).fresh
+  | .sel _ h' hc, h => hc.inv₂ (h'.inv₂ h.fresh)
+  | .ext _ h₁ h₂ _ hc, h => hc.inv₂ (h₂.inv₂ (h₁.inv₂ h)).fresh
+  | .extNil h', h => h'.inv₂ h
   | .letIn h₁ h₂, h => h₂.inv₂ (h₁.inv₂ h)
-  | .letRec h₁ hc h₂, h => h₂.inv₂ (hc.inv₂ (h₁.inv₂ h.fresh))
+  | .letRec _ h₁ hc h₂, h => h₂.inv₂ (hc.inv₂ (h₁.inv₂ h.fresh))
 
 theorem TypeFields.inv₂ : TypeFields Γ s fs F s' → Inv₂ s → Inv₂ s'
   | .nil, h => h
   | .cons h₁ h₂, h => h₂.inv₂ (h₁.inv₂ h)
 end
 
-theorem Inv₂.init : Inv₂ State.init :=
+theorem Inv₂.init {K : Nat → List String} : Inv₂ (State.initK K) :=
   ⟨⟨(fun _ _ h => nomatch h), (fun _ _ h => nomatch h)⟩, (fun _ _ h => nomatch h)⟩
 
 /-! ## Closing chains of variable bounds -/

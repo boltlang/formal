@@ -43,11 +43,18 @@ inductive FieldR (R : SType → SType → Prop) : SType → SType → Prop where
   | toAbs : FieldR R f .abs
   | pre : f₀ ≠ .abs → f₁ ≠ .abs → R f₀ f₁ → FieldR R f₀ f₁
 
-/-- How the left tail provides missing labels (mirrors `Expand`). -/
+/-- How the left tail provides missing labels (mirrors `Expand`). A row
+variable leaves the labels of *some* set `K` absent (in the algorithm, its
+kind) and is expanded for the others. The kind itself plays no role in
+soundness: an absent field is checked against `Abs`, the top field. -/
 inductive ExpandG (R : SType → SType → Prop) : SType → SFields → SType → Prop where
   | none : ExpandG R t .nil t
   | abs : ms ≠ .nil → (∀ p ∈ ms.absPairs, FieldR R p.1 p.2) → ExpandG R .abs ms .abs
-  | var : ms ≠ .nil → R (.var v) (.record ms (.var r)) → ExpandG R (.var v) ms (.var r)
+  | varAbsent (K : List String) : (∀ p ∈ (ms.absentIn K).absPairs, FieldR R p.1 p.2) →
+      ms.presentIn K = .nil → ExpandG R (.var v) ms (.var v)
+  | var (K : List String) : ms ≠ .nil → (∀ p ∈ (ms.absentIn K).absPairs, FieldR R p.1 p.2) →
+      ms.presentIn K ≠ .nil → R (.var v) (.record (ms.presentIn K) (.var r)) →
+      ExpandG R (.var v) ms (.var r)
 
 /-- One decomposition step of a constraint, as the algorithm performs it,
 relative to the bounds `σ` and the accepted constraints `R`. -/
@@ -156,8 +163,9 @@ theorem FieldsEach.grows : FieldsEach s ps s' → Grows s s'
 theorem Expand.grows : Expand s t ms t' s' → Grows s s'
   | .none => .refl
   | .abs _ h => h.grows
-  | .memo _ _ h => h.grows
-  | .fresh _ _ h => Grows.expand.trans h.grows
+  | .allAbsent _ _ h => h.grows
+  | .memo _ _ h₁ _ h₂ => h₁.grows.trans h₂.grows
+  | .fresh _ _ h₁ _ _ h₂ => h₁.grows.trans (Grows.expand.trans h₂.grows)
 end
 
 /-! ## Monotonicity of the justification -/
@@ -173,7 +181,8 @@ theorem FieldR.mono (hR : ∀ x y, R x y → R' x y) : FieldR R a b → FieldR R
 theorem ExpandG.mono (hR : ∀ x y, R x y → R' x y) : ExpandG R t ms t' → ExpandG R' t ms t'
   | .none => .none
   | .abs hm h => .abs hm (fun p hp => (h p hp).mono hR)
-  | .var hm h => .var hm (hR _ _ h)
+  | .varAbsent K h hp => .varAbsent K (fun p q => (h p q).mono hR) hp
+  | .var K hm h hp h' => .var K hm (fun p q => (h p q).mono hR) hp (hR _ _ h')
 
 theorem GStep.mono (g : Grows s s') :
     GStep s.bounds (Logged s) a b → GStep s'.bounds (Logged s') a b
@@ -261,8 +270,17 @@ theorem Expand.logged :
     Expand s t ms t' s' → CacheInLog s → CacheInLog s' ∧ ExpandG (Logged s') t ms t'
   | .none, hc => ⟨hc, .none⟩
   | .abs hm h, hc => have r := h.logged hc; ⟨r.1, .abs hm r.2⟩
-  | .memo hm _ h, hc => have r := h.logged hc; ⟨r.1, .var hm r.2⟩
-  | .fresh hm _ h, hc => have r := h.logged hc; ⟨r.1, .var hm r.2⟩
+  | .allAbsent (s := s₀) (v := v) _ hp h, hc =>
+    have r := h.logged hc; ⟨r.1, .varAbsent (s₀.kind v) r.2 hp⟩
+  | .memo (s := s₀) (v := v) hm hp h₁ _ h₂, hc =>
+    have r₁ := h₁.logged hc
+    have r₂ := h₂.logged r₁.1
+    ⟨r₂.1, .var (s₀.kind v) hm (fun p q => (r₁.2 p q).mono fun _ _ => Logged.mono h₂.grows) hp r₂.2⟩
+  | .fresh (s := s₀) (v := v) hm hp h₁ _ _ h₂, hc =>
+    have r₁ := h₁.logged hc
+    have r₂ := h₂.logged r₁.1
+    ⟨r₂.1, .var (s₀.kind v) hm
+      (fun p q => (r₁.2 p q).mono fun _ _ => Logged.mono (Grows.expand.trans h₂.grows)) hp r₂.2⟩
 end
 
 /-! ## Justification -/
@@ -344,8 +362,10 @@ theorem FieldsEach.just :
 theorem Expand.just : Expand s t ms t' s' → CacheInLog s → JustExcept s P → JustExcept s' P
   | .none, _, h => h
   | .abs _ h, hc, hj => h.just hc hj
-  | .memo _ _ h, hc, hj => h.just hc hj
-  | .fresh _ _ h, hc, hj => h.just hc (hj.grow .expand fun _ hp => hp)
+  | .allAbsent _ _ h, hc, hj => h.just hc hj
+  | .memo _ _ h₁ _ h₂, hc, hj => h₂.just (h₁.logged hc).1 (h₁.just hc hj)
+  | .fresh _ _ h₁ _ _ h₂, hc, hj =>
+    h₂.just (h₁.logged hc).1 ((h₁.just hc hj).grow .expand fun _ hp => hp)
 end
 
 /-! ## Consistency -/
@@ -363,7 +383,8 @@ theorem ConsExcept.weaken (h : ConsExcept s P) (hP : ∀ p, p ∈ P → p ∈ P'
 theorem ConsExcept.remember (h : ConsExcept s P) : ConsExcept (s.remember a b) P :=
   fun v l u hl hu => (h v l u hl hu).imp (Logged.mono .remember) id
 
-theorem ConsExcept.expand (h : ConsExcept s P) : ConsExcept { s with next := n, exps := e } P := h
+theorem ConsExcept.expand (h : ConsExcept s P) :
+    ConsExcept { s with next := n, exps := e } P := h
 
 /-- Installing an upper bound `b` on `v` makes `(l, b)` pending for every
 lower bound `l` of `v`. -/
@@ -428,8 +449,9 @@ theorem Expand.consist :
     Expand s t ms t' s' → CacheInLog s → ConsExcept s P → ConsExcept s' P
   | .none, _, h => h
   | .abs _ h, hc, hs => h.consist hc hs
-  | .memo _ _ h, hc, hs => h.consist hc hs
-  | .fresh _ _ h, hc, hs => h.consist hc hs.expand
+  | .allAbsent _ _ h, hc, hs => h.consist hc hs
+  | .memo _ _ h₁ _ h₂, hc, hs => h₂.consist (h₁.logged hc).1 (h₁.consist hc hs)
+  | .fresh _ _ h₁ _ _ h₂, hc, hs => h₂.consist (h₁.logged hc).1 (h₁.consist hc hs).expand
 end
 
 /-! ## Lemma 2, at the level of the bound graph -/
@@ -455,24 +477,25 @@ mutual
 theorem TypeTerm.inv : TypeTerm Γ s t st s' → Inv s → Inv s'
   | .lit, h => h
   | .var _, h => h
-  | .lam h, hi => h.inv hi.fresh
-  | .app h₁ h₂ hc, hi => (hc.sound (h₂.inv (h₁.inv hi.fresh))).1
+  | .lam _ h, hi => h.inv hi.fresh
+  | .app _ h₁ h₂ hc, hi => (hc.sound (h₂.inv (h₁.inv hi.fresh))).1
   | .rcd h, hi => h.inv hi
-  | .sel h hc, hi => (hc.sound (h.inv hi.fresh)).1
-  | .ext h₁ h₂ hc, hi => (hc.sound (h₂.inv (h₁.inv hi)).fresh).1
+  | .sel _ h hc, hi => (hc.sound (h.inv hi.fresh)).1
+  | .ext _ h₁ h₂ _ hc, hi => (hc.sound (h₂.inv (h₁.inv hi)).fresh).1
+  | .extNil h, hi => h.inv hi
   | .letIn h₁ h₂, hi => h₂.inv (h₁.inv hi)
-  | .letRec h₁ hc h₂, hi => h₂.inv (hc.sound (h₁.inv hi.fresh)).1
+  | .letRec _ h₁ hc h₂, hi => h₂.inv (hc.sound (h₁.inv hi.fresh)).1
 
 theorem TypeFields.inv : TypeFields Γ s fs F s' → Inv s → Inv s'
   | .nil, h => h
   | .cons h₁ h₂, hi => h₂.inv (h₁.inv hi)
 end
 
-theorem Inv.init : Inv State.init :=
+theorem Inv.init {K : Nat → List String} : Inv (State.initK K) :=
   ⟨(fun _ h => nomatch h), (fun _ _ _ h _ => nomatch h)⟩
 
 /-- Every state reached by typing a term from scratch satisfies the
 invariant. -/
-theorem TypeTerm.inv_init (h : TypeTerm Γ State.init t st s') : Inv s' := h.inv .init
+theorem TypeTerm.inv_init {K : Nat → List String} (h : TypeTerm Γ (State.initK K) t st s') : Inv s' := h.inv .init
 
 end SimpleSub.Alg

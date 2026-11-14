@@ -25,9 +25,9 @@ When the right side of a field pair is a row variable `ρ`, the proof has
 to look at each of `ρ`'s upper bounds, and recurses through *their* tails
 without passing a type constructor. This terminates if chains of row
 variables through upper bounds' tails are acyclic, which the theorem takes
-as a hypothesis (`TailRanked`). Kinds for row variables would make it hold
-by construction: each expansion step adds labels the new row variable lacks
-(see issue #1).
+as a hypothesis (`TailRanked`). Kinds for row variables make it hold
+(`Kinds.lean`): each step along such a chain adds labels the new row
+variable lacks.
 -/
 
 namespace SimpleSub.Alg
@@ -131,6 +131,24 @@ theorem SFields.absPairs_mem {l : String} {f : SType} : ∀ fs : SFields,
     · cases h; exact List.mem_cons_self ..
     · exact List.mem_cons_of_mem _ (SFields.absPairs_mem rest h)
 
+theorem SFields.absentIn_lookup (K : List String) (l : String) : ∀ fs : SFields,
+    (fs.absentIn K).lookup l = if l ∈ K then fs.lookup l else none
+  | .nil => by simp [SFields.absentIn, SFields.lookup]
+  | .cons n g rest => by
+    have ih := SFields.absentIn_lookup K l rest
+    by_cases hn : n = l
+    · subst hn; by_cases hk : n ∈ K <;> simp [SFields.absentIn, SFields.lookup, hk, ih]
+    · by_cases hk : n ∈ K <;> simp [SFields.absentIn, SFields.lookup, hk, hn, ih]
+
+theorem SFields.presentIn_lookup (K : List String) (l : String) : ∀ fs : SFields,
+    (fs.presentIn K).lookup l = if l ∈ K then none else fs.lookup l
+  | .nil => by simp [SFields.presentIn, SFields.lookup]
+  | .cons n g rest => by
+    have ih := SFields.presentIn_lookup K l rest
+    by_cases hn : n = l
+    · subst hn; by_cases hk : n ∈ K <;> simp [SFields.presentIn, SFields.lookup, hk, ih]
+    · by_cases hk : n ∈ K <;> simp [SFields.presentIn, SFields.lookup, hk, hn, ih]
+
 /-! ## Flattened tails -/
 
 theorem rowView_tail_ne_record : ∀ x : SType, ∀ fs t, (rowView x).2 ≠ .record fs t
@@ -166,7 +184,7 @@ def tailRank (rank : Nat → Nat) (b : SType) : Nat :=
 
 /-- Chains of row variables through the tails of upper bounds are acyclic:
 the tail variable of every (reachable) upper bound of `v` ranks below `v`.
-Kinds would guarantee this (issue #1). -/
+Kinds guarantee this (`kinds_tailRanked` in `Kinds.lean`). -/
 def TailRanked (s : State) (rank : Nat → Nat) : Prop :=
   ∀ v u ρ, Clo s.bounds v u → (rowView u).2 = .var ρ → rank ρ < rank v
 
@@ -328,10 +346,29 @@ theorem stepFieldCore (hi : Inv s) (h₂ : Inv₂ s) (hn : LogNAC s) {rank : Nat
             cases hab _ (SFields.absPairs_mem _ hmiss) with
             | toAbs => exact .abs
             | pre h₀' => exact absurd rfl h₀'
-          | var _ hv =>
-            refine .projDefL ⟨_, .here (expansion_bound hi hv) (fun _ h => nomatch h), rfl⟩ ?_
-            rw [field_record, hmiss]
-            exact stepRefl f₁
+          | varAbsent K hab hp =>
+            -- `l` is not present, so it is absent: checked against `Abs`
+            have hk : l ∈ K := by
+              by_cases hk : l ∈ K
+              · exact hk
+              · have := SFields.presentIn_lookup K l ms
+                rw [hp, hmiss] at this; simp [hk, SFields.lookup] at this
+            have hal : (ms.absentIn K).lookup l = some f₁ := by
+              rw [SFields.absentIn_lookup]; simp [hk, hmiss]
+            cases hab _ (SFields.absPairs_mem _ hal) with
+            | toAbs => exact .abs
+            | pre h₀' => exact absurd rfl h₀'
+          | var K _ hab _ hv =>
+            by_cases hk : l ∈ K
+            · have hal : (ms.absentIn K).lookup l = some f₁ := by
+                rw [SFields.absentIn_lookup]; simp [hk, hmiss]
+              cases hab _ (SFields.absPairs_mem _ hal) with
+              | toAbs => exact .abs
+              | pre h₀' => exact absurd rfl h₀'
+            · refine .projDefL ⟨_, .here (expansion_bound hi hv) (fun _ h => nomatch h), rfl⟩ ?_
+              rw [field_record, SFields.presentIn_lookup]
+              simp only [hk, hmiss, ite_false]
+              exact stepRefl f₁
       | none =>
         simp only [h₁, Option.isSome, Bool.false_eq_true, ite_false] at hrest_field
         cases h₀ : fs₀.lookup l with
@@ -349,10 +386,11 @@ theorem stepFieldCore (hi : Inv s) (h₂ : Inv₂ s) (hn : LogNAC s) {rank : Nat
           cases hexp with
           | none => rw [← hrest_field]; exact hrec
           | abs => rw [← hrest_field]; exact hrec
-          | var _ hv =>
+          | varAbsent => rw [← hrest_field]; exact hrec
+          | var K _ _ _ hv =>
             refine .projDefL ⟨_, .here (expansion_bound hi hv) (fun _ h => nomatch h), rfl⟩ ?_
-            rw [field_record, hmiss]
-            dsimp only
+            rw [field_record, SFields.presentIn_lookup]
+            simp only [hmiss, ite_self]
             rw [← hrest_field]
             exact hrec
     | @varL v _ hub =>

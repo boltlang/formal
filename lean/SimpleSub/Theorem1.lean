@@ -61,13 +61,14 @@ mutual
 theorem TypeTerm.log_grows : TypeTerm Γ s t st s' → ∀ p, p ∈ s.log → p ∈ s'.log
   | .lit => fun _ h => h
   | .var _ => fun _ h => h
-  | .lam h => h.log_grows
-  | .app h₁ h₂ hc => fun p hp => hc.log_grows p (h₂.log_grows p (h₁.log_grows p hp))
+  | .lam _ h => h.log_grows
+  | .app _ h₁ h₂ hc => fun p hp => hc.log_grows p (h₂.log_grows p (h₁.log_grows p hp))
   | .rcd h => h.log_grows
-  | .sel h hc => fun p hp => hc.log_grows p (h.log_grows p hp)
-  | .ext h₁ h₂ hc => fun p hp => hc.log_grows p (h₂.log_grows p (h₁.log_grows p hp))
+  | .sel _ h hc => fun p hp => hc.log_grows p (h.log_grows p hp)
+  | .ext _ h₁ h₂ _ hc => fun p hp => hc.log_grows p (h₂.log_grows p (h₁.log_grows p hp))
+  | .extNil h => h.log_grows
   | .letIn h₁ h₂ => fun p hp => h₂.log_grows p (h₁.log_grows p hp)
-  | .letRec h₁ hc h₂ => fun p hp => h₂.log_grows p (hc.log_grows p (h₁.log_grows p hp))
+  | .letRec _ h₁ hc h₂ => fun p hp => h₂.log_grows p (hc.log_grows p (h₁.log_grows p hp))
 
 theorem TypeFields.log_grows : TypeFields Γ s fs F s' → ∀ p, p ∈ s.log → p ∈ s'.log
   | .nil => fun _ h => h
@@ -106,9 +107,9 @@ theorem TypeTerm.sound {rank : Nat → Nat} {sf : State} (hf : Final sf rank) :
     (∀ p, p ∈ s'.log → p ∈ sf.log) → Typ (defsOf sf) Γ.toCtx t st.toTy
   | .lit, _, _, _, _ => .lit
   | .var hx, _, _, _, _ => Typ.var_mono (SCtx.lookup_toCtx hx)
-  | .lam h, hΓ, i, n, hlog =>
+  | .lam _ h, hΓ, i, n, hlog =>
     .lam (h.sound hf (hΓ.cons trivial (fun h => nomatch h)) i.fresh n hlog)
-  | .app h₁ h₂ hc, hΓ, i, n, hlog => by
+  | .app _ h₁ h₂ hc, hΓ, i, n, hlog => by
     have i₁ := h₁.inv₂ i.fresh
     have r₁ := h₁.nac hΓ i.fresh n
     have r₂ := h₂.nac hΓ i₁ r₁.1
@@ -117,11 +118,12 @@ theorem TypeTerm.sound {rank : Nat → Nat} {sf : State} (hf : Final sf rank) :
     exact .app (.sub (h₁.sound hf hΓ i.fresh n hlog₁) (hf.sub hc.logged hlog r₁.2.2))
       (h₂.sound hf hΓ i₁ r₁.1 hlog₂)
   | .rcd h, hΓ, i, n, hlog => .rcd (h.sound hf hΓ i n hlog)
-  | .sel h hc, hΓ, i, n, hlog => by
+  | .sel _ h hc, hΓ, i, n, hlog => by
     have r := h.nac hΓ i.fresh n
     exact .sel (.sub (h.sound hf hΓ i.fresh n fun p hp => hlog p (hc.log_grows p hp))
       (hf.sub hc.logged hlog r.2.2))
-  | .ext h₁ h₂ hc, hΓ, i, n, hlog => by
+  | .extNil h, hΓ, i, n, hlog => .extNil (h.sound hf hΓ i n hlog)
+  | .ext _ h₁ h₂ _ hc, hΓ, i, n, hlog => by
     have i₁ := h₁.inv₂ i
     have r₁ := h₁.nac hΓ i n
     have r₂ := h₂.nac hΓ i₁ r₁.1
@@ -134,7 +136,7 @@ theorem TypeTerm.sound {rank : Nat → Nat} {sf : State} (hf : Final sf rank) :
     have r₁ := h₁.nac hΓ i n
     exact .letIn (h₁.sound hf hΓ i n fun p hp => hlog p (h₂.log_grows p hp))
       (h₂.sound hf (hΓ.cons r₁.2.1 r₁.2.2) (h₁.inv₂ i) r₁.1 hlog)
-  | .letRec h₁ hc h₂, hΓ, i, n, hlog => by
+  | .letRec _ h₁ hc h₂, hΓ, i, n, hlog => by
     have r₁ := h₁.nac (hΓ.cons trivial (fun h => nomatch h)) i.fresh n
     have i₁ := h₁.inv₂ i.fresh
     have hlog₂ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog p (h₂.log_grows p hp)
@@ -158,8 +160,10 @@ end
 /-- **Theorem 1, from scratch**: if the algorithm types `t` with `st` in the
 built-in context, ending in state `s'`, and the row-variable tails of `s'`
 are acyclic, then `t : θ(st)` in the declarative system, where `θ` is the
-solution of `s'`. -/
-theorem soundness {rank : Nat → Nat} (h : TypeTerm builtins State.init t st s')
+solution of `s'`. The acyclicity assumption is discharged by kinds:
+see `theorem1` in `Kinds.lean`. -/
+theorem soundness {K : Nat → List String} {rank : Nat → Nat}
+    (h : TypeTerm builtins (State.initK K) t st s')
     (hr : TailRanked s' rank) : Typ (defsOf s') builtins.toCtx t st.toTy := by
   have hn := h.nac builtins_NAC Inv₂.init LogNAC.init
   exact h.sound ⟨h.inv_init, h.inv₂ Inv₂.init, hn.1, hr⟩ builtins_NAC Inv₂.init LogNAC.init

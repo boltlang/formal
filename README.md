@@ -255,13 +255,25 @@ in `lean/`. Everything below is proved; there are no `sorry`s.
   the algorithm's record case: common fields, labels supplied by row
   expansion, extra fields flowing into the right tail. It assumes chains of
   row-variable tails through upper bounds are acyclic (`TailRanked`), which
-  kinds would guarantee (issue #1).
+  kinds guarantee (`Kinds.lean`).
 - `SimpleSub/Theorem1.lean`: **soundness of type inference** (the paper's
   Theorem 1, for our model). If the algorithm types `t` with `st` from the
   built-in context, then `t : θ(st)` in the declarative system, where `θ`
   is the solution of the final state (`soundness`). Every constraint the
-  algorithm solved becomes a subsumption step. The only assumption is that
-  row-variable tails are acyclic (`TailRanked`, see issue #1).
+  algorithm solved becomes a subsumption step. It assumes that
+  row-variable tails are acyclic (`TailRanked`).
+- `SimpleSub/Kinds.lean`: **kinds** discharge that assumption, giving
+  Theorem 1 with no assumptions (`theorem1`). The model's state carries
+  each variable's kind (the labels it lacks), and expansion leaves labels
+  in the tail's kind absent, as in `lib/typer.ml`. The kind map is fixed
+  for a run, and the rules that allocate a variable require it to have
+  the right kind: every OCaml run is a model run for the kinds it ended up
+  allocating. The invariant: every accepted constraint is well-kinded (a
+  record over a row variable lists at least one label, all lacked by the
+  variable) and relates rows lacking the same labels, which is what
+  `check_kind` checks at run time. So an upper bound `{fs | ρ}` of `v`
+  has `kind ρ = kind v ⊎ fs`, strictly larger, and the number of logged
+  labels outside a variable's kind ranks the tails.
 - `SimpleSub/Sorts.lean`: `Abs` never occurs as a parameter or result of a
   function type in accepted constraints or inferred types. `Abs` is the top
   of `Sub`, so `Abs ≤ {…}` must stay false at the level of types. Row
@@ -279,18 +291,15 @@ proof, where they are needed.
    (Theorem 1), including row expansion.
    - 3a, the graph level: done (`Soundness.lean`).
    - 3b, from the invariant to `Sub`: done (`Solution.lean`,
-     `SolutionRows.lean`). It assumes acyclic row-variable tails
-     (`TailRanked`); kinds should discharge that.
-   - 3c, Theorem 1: done (`Theorem1.lean`). It assumes `TailRanked`;
-     kinds should discharge that.
+     `SolutionRows.lean`), assuming acyclic row-variable tails
+     (`TailRanked`).
+   - 3c, Theorem 1: done (`Theorem1.lean`, and `Kinds.lean`, where kinds
+     discharge `TailRanked`).
 4. Let-polymorphism (levels and extrusion).
 5. The MLsub equations and the simplifier, sequent-style (see
    `Lattice.lean`).
 
 ## Not yet implemented
 
-- **Kinds in the Lean model** (issue #1): implemented in the OCaml checker,
-  not yet in `lean/`. There, they should discharge the `TailRanked`
-  assumption of the soundness theorem.
 - Boolean-algebra types (negation, MLstruct), and rejecting uninhabited
   types such as `int ∧ bool`.
