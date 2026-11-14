@@ -243,6 +243,12 @@ in `lean/`. Everything below is proved; there are no `sorry`s.
   expansion, extra fields flowing into the right tail. It assumes chains of
   row-variable tails through upper bounds are acyclic (`TailRanked`), which
   kinds would guarantee (issue #1).
+- `SimpleSub/Theorem1.lean`: **soundness of type inference** (the paper's
+  Theorem 1, for our model). If the algorithm types `t` with `st` from the
+  built-in context, then `t : θ(st)` in the declarative system, where `θ`
+  is the solution of the final state (`soundness`). Every constraint the
+  algorithm solved becomes a subsumption step. The only assumption is that
+  row-variable tails are acyclic (`TailRanked`, see issue #1).
 - `SimpleSub/Sorts.lean`: `Abs` never occurs as a parameter or result of a
   function type in accepted constraints or inferred types. `Abs` is the top
   of `Sub`, so `Abs ≤ {…}` must stay false at the level of types. Row
@@ -262,7 +268,8 @@ proof, where they are needed.
    - 3b, from the invariant to `Sub`: done (`Solution.lean`,
      `SolutionRows.lean`). It assumes acyclic row-variable tails
      (`TailRanked`); kinds should discharge that.
-   - 3c: Theorem 1, assembling the typing derivation from `TypeTerm`.
+   - 3c, Theorem 1: done (`Theorem1.lean`). It assumes `TailRanked`;
+     kinds should discharge that.
 4. Let-polymorphism (levels and extrusion).
 5. The MLsub equations and the simplifier, sequent-style (see
    `Lattice.lean`).

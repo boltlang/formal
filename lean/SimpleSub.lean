@@ -9,3 +9,4 @@ import SimpleSub.Soundness
 import SimpleSub.Solution
 import SimpleSub.Sorts
 import SimpleSub.SolutionRows
+import SimpleSub.Theorem1
