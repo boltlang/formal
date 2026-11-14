@@ -17,13 +17,27 @@ module SMap = Map.Make (String)
 (** {1 Compact types (Sec. 4.4)} *)
 
 (** A normalized type: a union (positive) or intersection (negative) of type
-    variables, primitives, at most one record and at most one function. *)
+    variables, primitives, records, at most one function, and possibly [Abs].
+
+    The same representation is used at field sort ([abs] = the absent field)
+    and at row sort (in a row tail: [vars] are row variables, [rows] nested
+    rows, and [abs] the top row). Following Simple-sub's conventions, an empty
+    compact type means ⊥ in positive and ⊤ in negative position; at row
+    sort, ⊤ is [Abs].
+
+    [rows] is a list because two rows can only be merged without losing
+    equivalence when every label missing from one row is known in it, which
+    holds when that row ends in [Abs] (the label is then [Abs]). In
+    [{x: τ | ρ₀} ∨ { | ρ₁}], the type of [x] on the right is inside [ρ₁]. *)
 type compact = {
   vars : ISet.t;
   prims : SSet.t;
-  rcd : compact SMap.t option;
+  rows : row list;
   fn : (compact * compact) option;
+  abs : bool;
 }
+
+and row = { fields : compact SMap.t; tail : compact }
 
 (** [rec_vars] holds the bounds of recursive variables, which cannot be
     inlined since they are cyclic.
@@ -35,8 +49,38 @@ type compact = {
     depend on the shape of the inferred type alone. *)
 type scheme = { term : compact; rec_vars : compact IMap.t; rank : int IMap.t }
 
-let empty = { vars = ISet.empty; prims = SSet.empty; rcd = None; fn = None }
+let empty =
+  { vars = ISet.empty; prims = SSet.empty; rows = []; fn = None; abs = false }
+
 let of_var v = { empty with vars = ISet.singleton v }
+let abs_c = { empty with abs = true }
+
+let is_empty c =
+  ISet.is_empty c.vars && SSet.is_empty c.prims && c.rows = [] && c.fn = None
+  && not c.abs
+
+let is_abs_only c = c.abs && is_empty { c with abs = false }
+
+(** [Abs] is absorbing in unions and neutral in (non-empty) intersections. *)
+let normalize pol c =
+  if not c.abs then c
+  else if pol then abs_c
+  else
+    let c' = { c with abs = false } in
+    if is_empty c' then c else c'
+
+(** Build a row, flattening a tail that is itself a single row, and dropping
+    [Abs] fields when the tail is [Abs] (they say nothing more). *)
+let rec mk_row fields tail =
+  match tail with
+  | { rows = [ r ]; _ } when is_empty { tail with rows = [] } ->
+      mk_row (SMap.union (fun _ outer _ -> Some outer) fields r.fields) r.tail
+  | _ ->
+      let fields =
+        if is_abs_only tail then SMap.filter (fun _ f -> not (is_abs_only f)) fields
+        else fields
+      in
+      { fields; tail }
 
 (* Sets and maps are balanced trees, so polymorphic [compare] is unreliable
    on them; compare canonically instead. *)
@@ -47,14 +91,21 @@ let rec compare_compact a b =
     let c = SSet.compare a.prims b.prims in
     if c <> 0 then c
     else
-      let c = Option.compare (SMap.compare compare_compact) a.rcd b.rcd in
+      let c = List.compare compare_row a.rows b.rows in
       if c <> 0 then c
       else
-        Option.compare
-          (fun (l0, r0) (l1, r1) ->
-            let c = compare_compact l0 l1 in
-            if c <> 0 then c else compare_compact r0 r1)
-          a.fn b.fn
+        let c = Bool.compare a.abs b.abs in
+        if c <> 0 then c
+        else
+          Option.compare
+            (fun (l0, r0) (l1, r1) ->
+              let c = compare_compact l0 l1 in
+              if c <> 0 then c else compare_compact r0 r1)
+            a.fn b.fn
+
+and compare_row a b =
+  let c = SMap.compare compare_compact a.fields b.fields in
+  if c <> 0 then c else compare_compact a.tail b.tail
 
 let merge_opt f a b =
   match (a, b) with
@@ -63,30 +114,41 @@ let merge_opt f a b =
   | None, _ -> b
 
 (** Union ([pol = true]) or intersection ([pol = false]) of compact types.
-    A union of records keeps the common fields; an intersection keeps all.
-    Function types merge contravariantly in the parameter:
-    [(a -> b) ∨ (c -> d) = (a ∧ c) -> (b ∨ d)]. *)
+    Rows merge field by field (a label missing from a row ending in [Abs] is
+    [Abs]); since [Abs] is the top field, a union of records keeps the common
+    fields and an intersection keeps all, as before. Function types merge
+    contravariantly in the parameter: [(a -> b) ∨ (c -> d) = (a ∧ c) -> (b ∨ d)]. *)
 let rec merge pol a b =
-  {
-    vars = ISet.union a.vars b.vars;
-    prims = SSet.union a.prims b.prims;
-    rcd =
-      merge_opt
-        (fun f0 f1 ->
-          if pol then
-            SMap.merge
-              (fun _ x y ->
-                match (x, y) with
-                | Some x, Some y -> Some (merge pol x y)
-                | _ -> None)
-              f0 f1
-          else SMap.union (fun _ x y -> Some (merge pol x y)) f0 f1)
-        a.rcd b.rcd;
-    fn =
-      merge_opt
-        (fun (l0, r0) (l1, r1) -> (merge (not pol) l0 l1, merge pol r0 r1))
-        a.fn b.fn;
-  }
+  normalize pol
+    {
+      vars = ISet.union a.vars b.vars;
+      prims = SSet.union a.prims b.prims;
+      rows = List.fold_left (add_row pol) a.rows b.rows;
+      fn =
+        merge_opt
+          (fun (l0, r0) (l1, r1) -> (merge (not pol) l0 l1, merge pol r0 r1))
+          a.fn b.fn;
+      abs = a.abs || b.abs;
+    }
+
+and add_row pol rows r =
+  let labels r = List.map fst (SMap.bindings r.fields) in
+  let covers a b =
+    (* every label of [b] is known in [a] *)
+    is_abs_only a.tail || List.for_all (fun n -> SMap.mem n a.fields) (labels b)
+  in
+  let mergeable r0 = covers r0 r && covers r r0 in
+  match List.find_opt mergeable rows with
+  | Some r0 ->
+      (* merge into the first compatible row, keeping the others in place *)
+      let field r n = Option.value ~default:abs_c (SMap.find_opt n r.fields) in
+      let names = SSet.of_list (labels r0 @ labels r) in
+      let fields =
+        SSet.fold (fun n m -> SMap.add n (merge pol (field r0 n) (field r n)) m) names SMap.empty
+      in
+      let merged = mk_row fields (merge pol r0.tail r.tail) in
+      List.map (fun x -> if x == r0 then merged else x) rows
+  | None -> rows @ [ r ]
 
 (** {1 SimpleType -> CompactTypeScheme}
 
@@ -107,13 +169,15 @@ let compact_type (ty : simple_type) : scheme =
     | Function (l, r) ->
         let l = go l (not pol) ISet.empty in_process in
         { empty with fn = Some (l, go r pol ISet.empty in_process) }
-    | Record fs ->
+    | Abs -> abs_c
+    | Record (fs, t) ->
         let fields =
           List.fold_left
-            (fun m (n, t) -> SMap.add n (go t pol ISet.empty in_process) m)
+            (fun m (n, f) -> SMap.add n (go f pol ISet.empty in_process) m)
             SMap.empty fs
         in
-        { empty with rcd = Some fields }
+        (* the tail continues the same row: no constructor in between *)
+        { empty with rows = [ mk_row fields (go t pol parents in_process) ] }
     | Variable vs ->
         see vs.id;
         let key = (vs.id, pol) in
@@ -191,7 +255,11 @@ let simplify (sch : scheme) : scheme =
           Option.iter (analyze pol) (IMap.find_opt v !rec_vars)
         end)
       t.vars;
-    Option.iter (SMap.iter (fun _ f -> analyze pol f)) t.rcd;
+    List.iter
+      (fun r ->
+        SMap.iter (fun _ f -> analyze pol f) r.fields;
+        analyze pol r.tail)
+      t.rows;
     Option.iter
       (fun (l, r) ->
         analyze (not pol) l;
@@ -287,8 +355,9 @@ let simplify (sch : scheme) : scheme =
     {
       vars = ISet.filter_map resolve t.vars;
       prims = t.prims;
-      rcd = Option.map (SMap.map go) t.rcd;
+      rows = List.map (fun r -> mk_row (SMap.map go r.fields) (go r.tail)) t.rows;
       fn = Option.map (fun (l, r) -> (go l, go r)) t.fn;
+      abs = t.abs;
     }
   in
   { sch with term = go sch.term; rec_vars = IMap.map go !rec_vars }
@@ -339,21 +408,28 @@ let coalesce_compact (sch : scheme) : typ =
         let parts =
           List.map (fun v -> go_var v pol ip) (ordered sch t.vars)
           @ List.map (fun p -> PrimitiveType p) (SSet.elements t.prims)
-          @ (match t.rcd with
-             | Some fs ->
-                 [ RecordType (List.map (fun (n, f) -> (n, go f pol ip)) (SMap.bindings fs)) ]
+          @ List.map
+              (fun r ->
+                let fs = List.map (fun (n, f) -> (n, go f pol ip)) (SMap.bindings r.fields) in
+                let tail = go_tail r.tail pol ip in
+                (* without a row tail, an Abs field says nothing *)
+                let fs = if tail = Absent then List.filter (fun (_, f) -> f <> Absent) fs else fs in
+                RecordType (fs, tail))
+              t.rows
+          @ (match t.fn with
+             | Some (l, r) ->
+                 let l = go l (not pol) ip in
+                 [ FunctionType (l, go r pol ip) ]
              | None -> [])
-          @
-          match t.fn with
-          | Some (l, r) ->
-              let l = go l (not pol) ip in
-              [ FunctionType (l, go r pol ip) ]
-          | None -> []
+          @ if t.abs then [ Absent ] else []
         in
         match parts with
         | [] -> if pol then Bot else Top
         | p :: ps ->
             List.fold_left (fun a b -> if pol then Union (a, b) else Inter (a, b)) p ps)
+  (* row tails: an empty negative tail is the top row, i.e. no row at all *)
+  and go_tail t pol ip =
+    if is_abs_only t || ((not pol) && is_empty t) then Absent else go t pol ip
   in
   go sch.term true KeyMap.empty
 

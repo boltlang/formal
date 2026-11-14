@@ -42,7 +42,10 @@ let rec extrude (ty : simple_type) (pol : bool) (lvl : int)
     | Function (l, r) ->
         let l = extrude l (not pol) lvl c in
         Function (l, extrude r pol lvl c)
-    | Record fs -> Record (List.map (fun (n, t) -> (n, extrude t pol lvl c)) fs)
+    | Record (fs, t) ->
+        let fs = List.map (fun (n, f) -> (n, extrude f pol lvl c)) fs in
+        Record (fs, extrude t pol lvl c)
+    | Abs -> Abs
     | Variable vs -> (
         match PolarTbl.find_opt c (vs.id, pol) with
         | Some nvs -> Variable nvs
@@ -61,6 +64,41 @@ let rec extrude (ty : simple_type) (pol : bool) (lvl : int)
             end;
             Variable nvs)
 
+(** {1 Rows}
+
+    Following Marques et al. (2024), rows are [Record (fields, tail)] where
+    each field is [Abs] (top: no guarantee) or a type [τ] ([Pre τ]), and the
+    tail is [Abs] or a row variable. A row variable used as the tail of a row
+    never "contains" that row's labels; constraining maintains this.
+
+    The paper expands a row variable by substituting into it. We instead
+    expand through constraints: to compare [{fs₀ | ρ} ≤ {fs₁ | t₁}] where
+    [fs₁] mentions labels [L] missing from [fs₀], we constrain
+    [ρ ≤ {L-fields of fs₁ | ρ'}] and then [{fs₀ ∖ fs₁ | ρ'} ≤ t₁]. The
+    expansion variable [ρ'] is memoized per [(ρ, L)], so recursive types still
+    only produce finitely many distinct constraints. *)
+
+(** Flatten nested rows: [{fs | {fs' | t}}] becomes [{fs, fs' | t}]. *)
+let rec row_view = function
+  | Record (fs, t) ->
+      let fs', t' = row_view t in
+      (fs @ fs', t')
+  | t -> ([], t)
+
+let expansions : (int * string list, simple_type) Hashtbl.t = Hashtbl.create 16
+
+let expansion (rho : simple_type) (labels : string list) : simple_type =
+  match rho with
+  | Variable vs -> (
+      let key = (vs.id, List.sort_uniq String.compare labels) in
+      match Hashtbl.find_opt expansions key with
+      | Some r -> r
+      | None ->
+          let r = fresh_var vs.level in
+          Hashtbl.add expansions key r;
+          r)
+  | _ -> fresh_var (level rho)
+
 (** {1 Constraining (Fig. 9)} *)
 
 let constrain (lhs : simple_type) (rhs : simple_type) : unit =
@@ -77,16 +115,37 @@ let constrain (lhs : simple_type) (rhs : simple_type) : unit =
       | Function (l0, r0), Function (l1, r1) ->
           go l1 l0;
           go r0 r1
-      | Record fs0, Record fs1 ->
+      | _, Abs -> () (* Abs is the top field and the top row *)
+      | Abs, Record (fs1, t1) ->
+          (* the top row is below a row only if that row guarantees nothing *)
+          List.iter (fun (n, f1) -> field lhs n Abs f1) fs1;
+          go Abs t1
+      | Record _, Record _ ->
+          let fs0, t0 = row_view lhs and fs1, t1 = row_view rhs in
+          (* fields mentioned on both sides *)
           List.iter
-            (fun (n1, t1) ->
-              match List.assoc_opt n1 fs0 with
-              | None ->
-                  err
-                    (Printf.sprintf "missing field: %s in %s" n1
-                       (show_simple lhs))
-              | Some t0 -> go t0 t1)
-            fs1
+            (fun (n, f1) ->
+              match List.assoc_opt n fs0 with
+              | Some f0 -> field lhs n f0 f1
+              | None -> ())
+            fs1;
+          (* fields required on the right but only available from t0 *)
+          let missing = List.filter (fun (n, _) -> not (List.mem_assoc n fs0)) fs1 in
+          let t0 =
+            if missing = [] then t0
+            else
+              match t0 with
+              | Abs ->
+                  List.iter (fun (n, f1) -> field lhs n Abs f1) missing;
+                  Abs
+              | _ ->
+                  let rho' = expansion t0 (List.map fst missing) in
+                  go t0 (Record (missing, rho'));
+                  rho'
+          in
+          (* what is left of the left row flows into the right tail *)
+          let extra = List.filter (fun (n, _) -> not (List.mem_assoc n fs1)) fs0 in
+          go (if extra = [] then t0 else Record (extra, t0)) t1
       | Variable lv, _ when level rhs <= lv.level ->
           (* install the new bound *before* propagating (see Sec. 3.2.2) *)
           lv.upper_bounds <- rhs :: lv.upper_bounds;
@@ -105,6 +164,12 @@ let constrain (lhs : simple_type) (rhs : simple_type) : unit =
             (Printf.sprintf "cannot constrain %s <: %s" (show_simple lhs)
                (show_simple rhs))
     end
+  (* field types: Abs is the top; an absent field cannot satisfy a present one *)
+  and field record n f0 f1 =
+    match (f0, f1) with
+    | _, Abs -> ()
+    | Abs, _ -> err (Printf.sprintf "missing field: %s in %s" n (show_simple record))
+    | _ -> go f0 f1
   in
   go lhs rhs
 
@@ -130,8 +195,10 @@ let freshen_above (lim : int) (ty : simple_type) (lvl : int) : simple_type =
       | Function (l, r) ->
           let l = freshen l in
           Function (l, freshen r)
-      | Record fs -> Record (List.map (fun (n, t) -> (n, freshen t)) fs)
-      | Primitive _ -> ty
+      | Record (fs, t) ->
+          let fs = List.map (fun (n, f) -> (n, freshen f)) fs in
+          Record (fs, freshen t)
+      | Primitive _ | Abs -> ty
   in
   freshen ty
 
@@ -149,7 +216,7 @@ let rec type_term (ctx : ctx) (lvl : int) (trm : term) : simple_type =
       match StringMap.find_opt name ctx with
       | Some sch -> instantiate sch lvl
       | None -> err ("identifier not found: " ^ name))
-  | Rcd fs -> Record (List.map (fun (n, t) -> (n, type_term ctx lvl t)) fs)
+  | Rcd fs -> Record (List.map (fun (n, t) -> (n, type_term ctx lvl t)) fs, Abs)
   | Lam (name, body) ->
       let param = fresh_var lvl in
       Function (param, type_term (StringMap.add name (Simple param) ctx) lvl body)
@@ -161,8 +228,21 @@ let rec type_term (ctx : ctx) (lvl : int) (trm : term) : simple_type =
       res
   | Sel (obj, name) ->
       let res = fresh_var lvl in
-      constrain (type_term ctx lvl obj) (Record [ (name, res) ]);
+      constrain (type_term ctx lvl obj) (Record ([ (name, res) ], Abs));
       res
+  | Ext (obj, fs) ->
+      (* [obj with {l = e, ...}] overwrites or adds the fields: [obj] may have
+         anything at the labels, and its other fields are carried by [rho] *)
+      let obj_ty = type_term ctx lvl obj in
+      let fs = List.map (fun (n, t) -> (n, type_term ctx lvl t)) fs in
+      let fs =
+        (* a later binding of the same label wins *)
+        List.rev
+          (List.fold_left (fun acc (n, t) -> (n, t) :: List.remove_assoc n acc) [] fs)
+      in
+      let rho = fresh_var lvl in
+      constrain obj_ty (Record (List.map (fun (n, _) -> (n, Abs)) fs, rho));
+      Record (fs, rho)
   | Let (isrec, name, rhs, body) ->
       let sch = type_let_rhs ctx lvl isrec name rhs in
       type_term (StringMap.add name sch ctx) lvl body

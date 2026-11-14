@@ -7,6 +7,8 @@ type term =
   | App of term * term  (** [s t] *)
   | Rcd of (string * term) list  (** [{a = 0; b = true}] *)
   | Sel of term * string  (** [t.a] *)
+  | Ext of term * (string * term) list
+      (** [t with {a = s; b = u}]: extend or update fields *)
   | Let of bool * string * term * term  (** [let rec? x = s in t] *)
 
 (** A top-level program item. *)
@@ -24,6 +26,10 @@ let rec show = function
       ^ String.concat "; " (List.map (fun (n, t) -> n ^ " = " ^ show t) fs)
       ^ "}"
   | Sel (t, n) -> show t ^ "." ^ n
+  | Ext (t, fs) ->
+      show t ^ " with {"
+      ^ String.concat "; " (List.map (fun (n, t) -> n ^ " = " ^ show t) fs)
+      ^ "}"
   | Let (r, x, s, t) ->
       Printf.sprintf "(let %s%s = %s in %s)"
         (if r then "rec " else "")

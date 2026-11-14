@@ -15,8 +15,8 @@ dune exec -- simplesub --compare "⊤ -> int" "'a -> int" # relate two type sche
 dune test                                # cram snapshots in test/*.t
 ```
 
-`examples/` has commented sample programs: basics, records, unions,
-polymorphism, recursion and errors. Their output is snapshotted in
+`examples/` has commented sample programs: basics, records, rows (record
+extension and update), unions, polymorphism, recursion and errors. Their output is snapshotted in
 `test/examples.t`, so a change in inferred types shows up as a test diff.
 
 ## Map to the paper
@@ -37,6 +37,33 @@ polymorphism, recursion and errors. Their output is snapshotted in
 | subsumption `≤∀` (outside the paper's scope) | `lib/subsume.ml` (`subsumes`, `relate`) |
 | type syntax | `lib/parser.ml` (`parse_type`) |
 
+## Extensible records
+
+`r with {l = e}` adds field `l`, or overwrites it if present, possibly
+changing its type. This follows Marques, Florido & Vasconcelos, *Towards
+Algebraic Subtyping for Extensible Records* (2024), in `papers/`:
+
+- A row is `Record (fields, tail)`. Each field is `Abs` or a type `τ`
+  (Rémy's `Pre τ`), and the tail is `Abs` or a row variable. `Abs` is the
+  *top* field (`Pre τ ≤ Abs`): it means "no guarantee", not "known
+  absent". Plain records `{x: τ}` are rows with tail `Abs`, so width
+  subtyping is unchanged.
+- `r with {l = e}` constrains `r ≤ {l: Abs | ρ}` and has type
+  `{l: τ | ρ}`. Overwrite semantics means no "lacks" constraint is needed.
+- **Deviation from the paper:** the paper expands a row variable by
+  substituting into it. We expand through constraints instead. For
+  `{fs₀ | ρ} ≤ {fs₁ | t₁}`, where `fs₁` has labels `L` that `fs₀`
+  doesn't, we add `ρ ≤ {L-fields | ρ'}` and `{fs₀ ∖ fs₁ | ρ'} ≤ t₁`.
+  `ρ'` is memoized per `(ρ, L)`, so recursive types terminate.
+- **Simplification of rows:** compact types keep a list of rows. Two rows
+  are merged only when every label missing from one of them is known there
+  (its tail is `Abs`). Otherwise the field types live inside a row variable,
+  and merging would change the type.
+- **Covered by the safety net:** subsumption supports rows, so
+  `--self-check` checks every rows example, and `--expect`/`--compare`
+  accept row syntax: `{x: int | 'r}`, `{| 'r}`, and `Abs` fields. Inside
+  braces `|` starts the tail, so unions in field types use `∨`.
+
 ## Subsumption
 
 `Subsume.subsumes s1 s2` decides `s1 ≤∀ s2`: `s1` is at least as general as
@@ -55,7 +82,24 @@ for MLsub's full algebra, but it agrees with every case in
 `test/subsume.t`.
 
 `--self-check` uses it to verify that simplification preserves meaning. A
-deliberately broken simplifier was caught on every affected example.
+deliberately broken simplifier was caught on every affected example. That
+includes, for rows, a simplifier that merges rows unconditionally.
+
+Rows follow the type checker's expansion rule, with flexible row variables
+expanded and memoized per label set. A few more rules apply:
+
+- Rows distribute over non-empty unions and intersections of tails.
+- When rows that can't be merged meet on the left against a closed row on
+  the right, they're compared field by field.
+- Otherwise, the check tries each pair of left and right rows. Bounds
+  recorded by a failed attempt are rolled back through an undo trail, so a
+  failed attempt can't cause spurious failures later.
+- An *unguarded* recursive occurrence, such as `('g ∧ int as 'g)`, which
+  raw coalescing produces for variable cycles, is read as the neutral
+  element of its context: `⊤` in an intersection, `⊥` in a union. This is
+  the reading the simplifier uses when it drops such cycles.
+- Row kinds aren't checked, so ill-kinded types such as
+  `{| 'a} -> {y: int | 'a}` get conservative answers.
 
 ## Deviations from the paper
 

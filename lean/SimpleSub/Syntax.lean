@@ -14,6 +14,8 @@ inductive Term where
   | app : Term → Term → Term
   | rcd : List (String × Term) → Term
   | sel : Term → String → Term
+  /-- `t with {l = e; ...}`: extend or update fields. -/
+  | ext : Term → List (String × Term) → Term
   | letIn : (isRec : Bool) → String → Term → Term → Term
   deriving Repr, Inhabited
 

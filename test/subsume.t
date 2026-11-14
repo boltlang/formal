@@ -4,9 +4,9 @@ Subsumption: `--compare T1 T2` decides T1 ≤∀ T2 and T2 ≤∀ T1.
 Instantiation and rigid variables
 
   $ simplesub --compare "'a -> 'a" "int -> int"
-  'a -> 'a is more general than int -> int
+  'a -> 'a is strictly more general than int -> int
   $ simplesub --compare "'a -> 'a" "'b -> 'c"
-  'a -> 'a is less general than 'a -> 'b
+  'a -> 'a is strictly less general than 'a -> 'b
   $ simplesub --compare "int -> int" "bool -> bool"
   int -> int is incomparable to bool -> bool
 
@@ -17,14 +17,14 @@ Polar variables, sandwiches (Sec. 4.3.1)
   $ simplesub --compare "'a ∧ int -> 'a ∨ int" "int -> int"
   'a ∧ int -> 'a ∨ int is equivalent to int -> int
   $ simplesub --compare "'a ∧ int -> 'a" "int -> int"
-  'a ∧ int -> 'a is more general than int -> int
+  'a ∧ int -> 'a is strictly more general than int -> int
 
 Unions, intersections, records
 
   $ simplesub --compare "int" "int ∨ bool"
-  int is more general than int ∨ bool
+  int is strictly more general than int ∨ bool
   $ simplesub --compare "{x: int, y: int}" "{x: int}"
-  {x: int, y: int} is more general than {x: int}
+  {x: int, y: int} is strictly more general than {x: int}
   $ simplesub --compare "bool -> 'a -> 'a -> 'a" "bool -> 'a -> 'b -> 'a ∨ 'b"
   bool -> 'a -> 'a -> 'a is equivalent to bool -> 'a -> 'b -> 'a ∨ 'b
   $ simplesub --compare "(int -> int) ∧ (bool -> bool) -> ⊤" "(int ∨ bool -> int ∧ bool) -> ⊤"
@@ -37,7 +37,7 @@ The two simplified forms of `twice` are equivalent (see README)
   $ simplesub --compare "('a ∨ 'b -> 'a) -> 'b -> 'a" "('a -> 'a ∧ 'b) -> 'a -> 'b"
   ('a ∨ 'b -> 'a) -> 'b -> 'a is equivalent to ('a -> 'a ∧ 'b) -> 'a -> 'b
   $ simplesub --compare "('a ∨ 'b -> 'a) -> 'b -> 'a" "('a -> 'a) -> 'a -> 'a"
-  ('a ∨ 'b -> 'a) -> 'b -> 'a is more general than ('a -> 'a) -> 'a -> 'a
+  ('a ∨ 'b -> 'a) -> 'b -> 'a is strictly more general than ('a -> 'a) -> 'a -> 'a
 
 Recursive types: unrolling preserves meaning
 
@@ -46,7 +46,7 @@ Recursive types: unrolling preserves meaning
   $ simplesub --compare "({head: int, tail: 'a} as 'a) -> int" "{head: int, tail: {head: int, tail: ({head: int, tail: 'a} as 'a)}} -> int"
   ({head: int, tail: 'a} as 'a) -> int is equivalent to {head: int, tail: {head: int, tail: ({head: int, tail: 'a} as 'a)}} -> int
   $ simplesub --compare "({head: int, tail: 'a} as 'a) -> int" "{head: int} -> int"
-  ({head: int, tail: 'a} as 'a) -> int is less general than {head: int} -> int
+  ({head: int, tail: 'a} as 'a) -> int is strictly less general than {head: int} -> int
   $ simplesub --compare "(int -> 'a as 'a)" "(int -> int -> 'b as 'b)"
   (int -> 'a as 'a) is equivalent to (int -> int -> 'a as 'a)
 
@@ -85,4 +85,53 @@ A mismatch is reported with the direction of the difference
   $ simplesub -e 'fun x -> x' --expect "⊤ -> ⊥"
   - : 'a -> 'a
     expected ⊤ -> ⊥, but inferred type is strictly less general
+  [1]
+
+Rows: `{fields | tail}`; inside braces `|` starts the row tail, so unions in
+field types use `∨`. `Abs` is the top field ("no guarantee").
+
+  $ simplesub --compare "{y: Abs | 'a} -> {y: int | 'a}" "{x: int} -> {x: int, y: int}"
+  {y: Abs | 'a} -> {y: int | 'a} is strictly more general than {x: int} -> {x: int, y: int}
+The next one is ill-kinded in Rémy's discipline ('a is used both as a whole
+row and as the rest of a row listing y); the checker does not check kinds and
+answers conservatively.
+
+  $ simplesub --compare "{y: Abs | 'a} -> {y: int | 'a}" "{| 'a} -> {y: int | 'a}"
+  {y: Abs | 'a} -> {y: int | 'a} is strictly more general than {| 'a} -> {y: int | 'a}
+  $ simplesub --compare "{y: Abs | 'a} -> {y: int | 'a}" "{y: Abs | 'a} -> {| 'a}"
+  {y: Abs | 'a} -> {y: int | 'a} is incomparable to {y: Abs | 'a} -> {| 'a}
+  $ simplesub --compare "{x: int | 'a}" "{x: int}"
+  {x: int | 'a} is strictly more general than {x: int}
+  $ simplesub --compare "{x: int, y: Abs}" "{x: int}"
+  {x: int, y: Abs} is equivalent to {x: int}
+  $ simplesub --compare "{x: Abs}" "{}"
+  {x: Abs} is equivalent to {}
+  $ simplesub --compare "{x: int} -> ⊤" "{x: int | 'a} -> ⊤"
+  {x: int} -> ⊤ is equivalent to {x: int | 'a} -> ⊤
+  $ simplesub --compare "{x: int ∨ bool}" "{x: int | 'a}"
+  {x: int ∨ bool} is strictly less general than {x: int | 'a}
+  $ simplesub --compare "{n: int | 'b ∧ {done: bool}} -> ⊤" "{n: int, done: bool} -> ⊤"
+  {n: int | 'a ∧ {done: bool}} -> ⊤ is equivalent to {n: int, done: bool} -> ⊤
+
+The meaning of unguarded recursion (from raw coalescing of variable cycles)
+is the neutral element of its context
+
+  $ simplesub --compare "('g ∧ int as 'g) -> ⊤" "int -> ⊤"
+  ('a ∧ int as 'a) -> ⊤ is equivalent to int -> ⊤
+  $ simplesub --compare "⊤ -> ('g ∨ int as 'g)" "⊤ -> int"
+  ⊤ -> ('a ∨ int as 'a) is equivalent to ⊤ -> int
+
+`--expect` on rows, against Marques et al.'s type for record extension
+
+  $ simplesub -e 'fun r -> r with {y = 1}' --expect "{y: Abs | 'r} -> {y: int | 'r}"
+  - : {y: Abs | 'a} -> {y: int | 'a}
+  $ simplesub -e '(fun r -> r with {y = 1}) {x = 1}' --expect "{x: int, y: int}"
+  - : {x: int, y: int}
+  $ simplesub -e 'fun r -> r with {y = 1}' --expect "{| 'r} -> {y: int | 'r}"
+  - : {y: Abs | 'a} -> {y: int | 'a}
+    expected {| 'a} -> {y: int | 'a}, but inferred type is strictly more general
+  [1]
+  $ simplesub -e 'fun r -> r with {y = 1}' --expect "{x: int} -> {x: int, y: int}"
+  - : {y: Abs | 'a} -> {y: int | 'a}
+    expected {x: int} -> {x: int, y: int}, but inferred type is strictly more general
   [1]

@@ -153,3 +153,28 @@ More cases from the paper (Secs. 2-4)
   - : bool -> 'a -> 'a -> 'a
   $ simplesub -e 'if true then {a = 1; b = true} else {b = false; c = 42}'
   - : {b: bool}
+
+Extensible records (rows, after Marques et al. 2024)
+
+  $ simplesub -e 'fun r -> r with {y = 1}'
+  - : {y: Abs | 'a} -> {y: int | 'a}
+  $ simplesub -e '((fun r -> r with {y = 2}) {x = 1}).x'
+  - : int
+  $ simplesub -e '{x = 1} with {x = true}'
+  - : {x: bool}
+  $ simplesub -e 'fun r -> (r with {y = 1}).x'
+  - : {x: 'a} -> 'a
+  $ simplesub --self-check -e 'fun r -> r with {a = r.a; b = 2}'
+  - : {a: 'a, b: Abs | 'b} -> {a: 'a, b: int | 'b}
+  $ simplesub --raw -e 'fun r -> r with {a = r.a; b = 2}'
+  - : 'a ∧ {a: Abs, b: Abs | 'b} ∧ {a: 'c} -> {a: 'c, b: int | 'b}
+  $ simplesub -e 'let rec f r = f (r with {n = succ r.n}) in f'
+  - : {n: int} -> ⊥
+  $ simplesub -e 'fun r -> fun s -> if true then r with {y = 1} else s with {z = 2}'
+  - : {y: Abs | 'a} -> {z: Abs | 'b} -> {y: int | 'a} ∨ {z: int | 'b}
+  $ simplesub -e '({x = 1} with {y = 2}).z'
+  - : type error: missing field: z in {x: int}
+  [1]
+  $ simplesub -e 'fun r -> r with {y}'
+  parse error: 1:19: expected '=' (at '}')
+  [2]

@@ -27,10 +27,13 @@ let parse_type_or_exit s =
     exit 2
 
 let relate_or_exit t1 t2 =
-  try Subsume.relate t1 t2
-  with Subsume.Not_polar msg ->
-    prerr_endline ("error: not a polar type: " ^ msg);
-    exit 2
+  try Subsume.relate t1 t2 with
+  | Subsume.Not_polar msg ->
+      prerr_endline ("error: not a polar type: " ^ msg);
+      exit 2
+  | Subsume.Unsupported what ->
+      prerr_endline ("error: subsumption does not support " ^ what ^ " yet");
+      exit 2
 
 let run ~simplify ~expect ~self_check src =
   match Parser.parse_program src with
@@ -59,12 +62,16 @@ let run ~simplify ~expect ~self_check src =
               if self_check then
                 let raw = display ~simplify:false st
                 and simp = display ~simplify:true st in
-                match relate_or_exit simp raw with
+                match Subsume.relate simp raw with
                 | Subsume.Equivalent -> ()
                 | r ->
-                    fail "  self-check failed: simplified %s is %s than raw %s\n"
-                      (Types.show_typ simp) (Subsume.show_relation r)
-                      (Types.show_typ raw))
+                    fail "  self-check failed: simplified %s is %s raw %s\n"
+                      (Types.show_typ simp) (Subsume.show_relation_to r)
+                      (Types.show_typ raw)
+                | exception Subsume.Unsupported what ->
+                    Printf.printf "  (self-check skipped: %s)\n" what
+                | exception Subsume.Not_polar msg ->
+                    fail "  self-check failed: not a polar type: %s\n" msg)
         (infer_program items);
       if !failed then exit 1
 
@@ -85,11 +92,7 @@ let () =
   | [ "--compare"; t1; t2 ] ->
       let t1 = parse_type_or_exit t1 and t2 = parse_type_or_exit t2 in
       Printf.printf "%s is %s %s\n" (Types.show_typ t1)
-        (match relate_or_exit t1 t2 with
-         | Subsume.Equivalent -> "equivalent to"
-         | Subsume.More_general -> "more general than"
-         | Subsume.Less_general -> "less general than"
-         | Subsume.Incomparable -> "incomparable to")
+        (Subsume.show_relation_to (relate_or_exit t1 t2))
         (Types.show_typ t2)
   | args ->
       let simplify, expect, self_check, src = parse (true, None, false, None) args in

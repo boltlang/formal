@@ -23,7 +23,10 @@ let coalesce_type (ty : simple_type) : typ =
     | Function (l, r) ->
         let l = go l (not polar) in_process in
         FunctionType (l, go r polar in_process)
-    | Record fs -> RecordType (List.map (fun (n, t) -> (n, go t polar in_process)) fs)
+    | Record (fs, t) ->
+        let fs = List.map (fun (n, f) -> (n, go f polar in_process)) fs in
+        RecordType (fs, go t polar in_process)
+    | Abs -> Absent
     | Variable vs -> (
         let vs_pol = (vs.id, polar) in
         if PolarSet.mem vs_pol in_process then

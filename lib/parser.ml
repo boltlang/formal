@@ -9,7 +9,7 @@
               | 'if' expr 'then' expr 'else' expr
               | app
     app     ::= sel { sel } [ fun-or-if-expr ]
-    sel     ::= atom { '.' ident }
+    sel     ::= atom { '.' ident | 'with' '{' [ field { ';' field } [';'] ] '}' }
     atom    ::= int | ident | '(' expr ')' | '{' [ field { ';' field } [';'] ] '}'
     field   ::= ident '=' expr
     v}
@@ -24,7 +24,7 @@ exception Parse_error of string
 type token =
   | INT of int
   | IDENT of string
-  | FUN | LET | REC | IN | IF | THEN | ELSE
+  | FUN | LET | REC | IN | IF | THEN | ELSE | WITH
   | ARROW | EQ | SEMI | DOT
   | LPAREN | RPAREN | LBRACE | RBRACE
   | EOF
@@ -33,7 +33,7 @@ let show_token = function
   | INT n -> string_of_int n
   | IDENT s -> s
   | FUN -> "fun" | LET -> "let" | REC -> "rec" | IN -> "in"
-  | IF -> "if" | THEN -> "then" | ELSE -> "else"
+  | IF -> "if" | THEN -> "then" | ELSE -> "else" | WITH -> "with"
   | ARROW -> "->" | EQ -> "=" | SEMI -> ";" | DOT -> "."
   | LPAREN -> "(" | RPAREN -> ")" | LBRACE -> "{" | RBRACE -> "}"
   | EOF -> "end of input"
@@ -41,7 +41,7 @@ let show_token = function
 let keyword = function
   | "fun" -> Some FUN | "let" -> Some LET | "rec" -> Some REC
   | "in" -> Some IN | "if" -> Some IF | "then" -> Some THEN
-  | "else" -> Some ELSE | _ -> None
+  | "else" -> Some ELSE | "with" -> Some WITH | _ -> None
 
 (** Tokens paired with their (line, column). *)
 let tokenize (src : string) : (token * (int * int)) array =
@@ -142,7 +142,17 @@ let parse_program (src : string) : item list =
     !f
   and sel () =
     let t = ref (atom ()) in
-    while peek () = DOT do advance (); t := Sel (!t, ident ()) done;
+    let continue = ref true in
+    while !continue do
+      match peek () with
+      | DOT -> advance (); t := Sel (!t, ident ())
+      | WITH ->
+          advance ();
+          (match atom () with
+           | Rcd fs -> t := Ext (!t, fs)
+           | _ -> fail "expected '{' after 'with'")
+      | _ -> continue := false
+    done;
     !t
   and atom () =
     match peek () with
@@ -188,23 +198,27 @@ let parse_program (src : string) : item list =
     arrow ::= union [ '->' arrow ]
     union ::= inter { ('∨' | '|') inter }
     inter ::= atom { ('∧' | '&') atom }
-    atom  ::= tyvar | ident | '⊤' | 'top' | '⊥' | 'bot' | '(' ty ')'
-            | '{' [ ident ':' ty { ',' ident ':' ty } ] '}'
+    atom  ::= tyvar | ident | 'Abs' | '⊤' | 'top' | '⊥' | 'bot' | '(' ty ')'
+            | '{' [ field { ',' field } ] [ '|' ty ] '}'
+    field ::= ident ':' ty
     v}
 
-    Type variables are written ['a], ['b1], ... *)
+    Type variables are written ['a], ['b1], ... Inside braces, ['|'] starts
+    the row tail, so a union in a field type must use ['∨'] or parentheses;
+    elsewhere ['|'] is an ASCII spelling of ['∨']. [Abs] is the absent field
+    (or the top row in tail position). *)
 
 type ty_token =
   | T_VAR of string
   | T_IDENT of string
-  | T_ARROW | T_OR | T_AND | T_TOP | T_BOT | T_AS
+  | T_ARROW | T_OR | T_BAR | T_AND | T_TOP | T_BOT | T_AS
   | T_LPAREN | T_RPAREN | T_LBRACE | T_RBRACE | T_COLON | T_COMMA
   | T_EOF
 
 let show_ty_token = function
   | T_VAR v -> v
   | T_IDENT s -> s
-  | T_ARROW -> "->" | T_OR -> "∨" | T_AND -> "∧" | T_TOP -> "⊤" | T_BOT -> "⊥"
+  | T_ARROW -> "->" | T_OR -> "∨" | T_BAR -> "|" | T_AND -> "∧" | T_TOP -> "⊤" | T_BOT -> "⊥"
   | T_AS -> "as" | T_LPAREN -> "(" | T_RPAREN -> ")" | T_LBRACE -> "{"
   | T_RBRACE -> "}" | T_COLON -> ":" | T_COMMA -> "," | T_EOF -> "end of input"
 
@@ -222,7 +236,7 @@ let tokenize_type (src : string) : (ty_token * int) array =
       match src.[i] with
       | ' ' | '\t' | '\n' | '\r' -> loop (i + 1)
       | '-' when has i "->" -> emit T_ARROW 2
-      | '|' -> emit T_OR 1
+      | '|' -> emit T_BAR 1
       | '&' -> emit T_AND 1
       | '(' -> emit T_LPAREN 1
       | ')' -> emit T_RPAREN 1
@@ -259,8 +273,9 @@ let parse_type (src : string) : Types.typ =
     raise (Parse_error (Printf.sprintf "type, offset %d: %s (at '%s')" (snd toks.(!p)) msg (show_ty_token (peek ()))))
   in
   let expect t = if peek () = t then advance () else fail ("expected '" ^ show_ty_token t ^ "'") in
-  let rec ty () =
-    let t = arrow () in
+  (* [bar]: whether ASCII '|' means union here (not directly inside braces) *)
+  let rec ty ?(bar = true) () =
+    let t = arrow bar in
     match peek () with
     | T_AS -> (
         advance ();
@@ -268,12 +283,12 @@ let parse_type (src : string) : Types.typ =
         | T_VAR v -> advance (); RecursiveType (v, t)
         | _ -> fail "expected type variable after 'as'")
     | _ -> t
-  and arrow () =
-    let l = union () in
-    match peek () with T_ARROW -> advance (); FunctionType (l, arrow ()) | _ -> l
-  and union () =
+  and arrow bar =
+    let l = union bar in
+    match peek () with T_ARROW -> advance (); FunctionType (l, arrow bar) | _ -> l
+  and union bar =
     let t = ref (inter ()) in
-    while peek () = T_OR do advance (); t := Union (!t, inter ()) done;
+    while peek () = T_OR || (bar && peek () = T_BAR) do advance (); t := Union (!t, inter ()) done;
     !t
   and inter () =
     let t = ref (atom ()) in
@@ -282,24 +297,26 @@ let parse_type (src : string) : Types.typ =
   and atom () =
     match peek () with
     | T_VAR v -> advance (); TypeVariable v
+    | T_IDENT "Abs" -> advance (); Absent
     | T_IDENT s -> advance (); PrimitiveType s
     | T_TOP -> advance (); Top
     | T_BOT -> advance (); Bot
     | T_LPAREN -> advance (); let t = ty () in expect T_RPAREN; t
     | T_LBRACE ->
         advance ();
-        if peek () = T_RBRACE then (advance (); RecordType [])
-        else
-          let rec fields () =
-            let n = match peek () with T_IDENT s -> advance (); s | _ -> fail "expected field name" in
-            expect T_COLON;
-            let t = ty () in
-            match peek () with
-            | T_COMMA -> advance (); (n, t) :: fields ()
-            | T_RBRACE -> advance (); [ (n, t) ]
-            | _ -> fail "expected ',' or '}'"
-          in
-          RecordType (fields ())
+        let rec fields () =
+          match peek () with
+          | T_IDENT n ->
+              advance ();
+              expect T_COLON;
+              let t = ty ~bar:false () in
+              if peek () = T_COMMA then (advance (); (n, t) :: fields ()) else [ (n, t) ]
+          | _ -> []
+        in
+        let fs = fields () in
+        let tail = if peek () = T_BAR then (advance (); ty ()) else Absent in
+        expect T_RBRACE;
+        RecordType (fs, tail)
     | _ -> fail "expected type"
   in
   let t = ty () in

@@ -10,7 +10,14 @@ type simple_type =
   | Variable of var_state
   | Primitive of string
   | Function of simple_type * simple_type
-  | Record of (string * simple_type) list
+  | Record of (string * simple_type) list * simple_type
+      (** [Record (fields, tail)]: a record type, or a row when in tail
+          position. Each field is [Abs] or a type [τ] (Rémy's [Pre τ]); the
+          tail is [Abs], a row variable, or (transiently) another row. *)
+  | Abs
+      (** The top field type ("no guarantee", [Pre τ ≤ Abs]) and, in tail
+          position, the top row (all remaining fields [Abs]). Plain open
+          records [{x: τ}] are [Record ([x, τ], Abs)]. *)
 
 and var_state = {
   id : int;  (** unique identity; variables are compared by [id] only *)
@@ -42,7 +49,8 @@ let rec level = function
   | Variable vs -> vs.level
   | Primitive _ -> 0
   | Function (l, r) -> max (level l) (level r)
-  | Record fs -> List.fold_left (fun acc (_, t) -> max acc (level t)) 0 fs
+  | Record (fs, t) -> List.fold_left (fun acc (_, f) -> max acc (level f)) (level t) fs
+  | Abs -> 0
 
 (** Structural equality where variables are compared by identity. This is the
     equality the constraint cache relies on (Scala's case-class equality with
@@ -53,16 +61,20 @@ let rec equal a b =
   | Variable v, Variable w -> v.id = w.id
   | Primitive n, Primitive m -> String.equal n m
   | Function (a1, b1), Function (a2, b2) -> equal a1 a2 && equal b1 b2
-  | Record fs, Record gs ->
+  | Record (fs, t), Record (gs, u) ->
       List.equal (fun (n, t) (m, u) -> String.equal n m && equal t u) fs gs
+      && equal t u
+  | Abs, Abs -> true
   | _ -> false
 
 let rec hash = function
   | Variable v -> Hashtbl.hash (0, v.id)
   | Primitive n -> Hashtbl.hash (1, n)
   | Function (l, r) -> Hashtbl.hash (2, hash l, hash r)
-  | Record fs ->
-      Hashtbl.hash (3, List.map (fun (n, t) -> Hashtbl.hash (n, hash t)) fs)
+  | Record (fs, t) ->
+      Hashtbl.hash
+        (3, List.map (fun (n, t) -> Hashtbl.hash (n, hash t)) fs, hash t)
+  | Abs -> Hashtbl.hash 4
 
 (** Debug rendering of internal types. Bounds are not shown. *)
 let rec show_simple = function
@@ -70,11 +82,13 @@ let rec show_simple = function
   | Primitive n -> n
   | Function (l, r) ->
       Printf.sprintf "(%s -> %s)" (show_simple l) (show_simple r)
-  | Record fs ->
+  | Record (fs, t) ->
       "{"
       ^ String.concat ", "
           (List.map (fun (n, t) -> n ^ ": " ^ show_simple t) fs)
+      ^ (match t with Abs -> "" | t -> " | " ^ show_simple t)
       ^ "}"
+  | Abs -> "Abs"
 
 (** Debug rendering of a variable together with its bounds. *)
 let show_var_state vs =
@@ -91,7 +105,9 @@ type typ =
   | Union of typ * typ
   | Inter of typ * typ
   | FunctionType of typ * typ
-  | RecordType of (string * typ) list
+  | RecordType of (string * typ) list * typ
+      (** fields (possibly [Absent]) and row tail ([Absent] = no row) *)
+  | Absent  (** absent field / top row *)
   | RecursiveType of string * typ
   | TypeVariable of string
   | PrimitiveType of string
@@ -135,9 +151,15 @@ let show_typ (t : typ) : string =
         let l = go 25 l in
         let r = go 25 r in
         paren (outer > 25) (l ^ " ∧ " ^ r)
-    | RecordType fs ->
-        "{"
-        ^ String.concat ", " (List.map (fun (n, t) -> n ^ ": " ^ go 0 t) fs)
+    | Absent -> "Abs"
+    | RecordType (fs, tail) ->
+        let fields = List.map (fun (n, t) -> n ^ ": " ^ go 0 t) fs in
+        let tail = match tail with Absent -> [] | t -> [ go 0 t ] in
+        "{" ^ String.concat ", " fields
+        ^ (match (fields, tail) with
+           | _, [] -> ""
+           | [], [ t ] -> "| " ^ t
+           | _, t -> " | " ^ String.concat "" t)
         ^ "}"
     | RecursiveType (v, body) ->
         (* name the binder first so it gets the earliest letter *)
