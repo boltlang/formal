@@ -2,3 +2,7 @@ import SimpleSub.Syntax
 import SimpleSub.Types
 import SimpleSub.Rows
 import SimpleSub.Sub
+import SimpleSub.Lattice
+import SimpleSub.Typing
+import SimpleSub.Algorithm
+import SimpleSub.Soundness

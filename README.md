@@ -193,7 +193,53 @@ in `lean/`. Everything below is proved; there are no `sorry`s.
   - `flatten`: nested rows flatten to appended fields (`mk_row`,
     `row_view`, `norm_row`).
 
+- `SimpleSub/Lattice.lean`: the MLsub lattice equations. `not_fun_merge`
+  proves that function merging isn't derivable from the minimal rules. The
+  file header records the sequent-style plan for adding the equations.
+- `SimpleSub/Typing.lean`: declarative typing over the minimal subtyping
+  rules. `let` is monomorphic for now, but contexts hold schemes, so
+  built-ins like `if` instantiate. It includes record extension, and the
+  examples `typ_twice`, `typ_if` and `typ_ext` (the extension example of
+  Marques et al.).
+- `SimpleSub/Algorithm.lean`: a model of `lib/typer.ml` and
+  `lib/coalesce.ml`, without levels. Bounds live in an explicit `State`.
+  `Constrain`, including row expansion, and `TypeTerm` are big-step
+  relations: "succeeds from state `s` with state `s'`". A type error is the
+  absence of a derivation. Rules only apply where the OCaml `match` would
+  reach them, so the relations are as deterministic as the code.
+  Coalescing is a function, contractive like `lib/coalesce.ml`. Sanity
+  checks: `fun x -> x`, `1 2` is rejected, and in `(fun x -> x) 42`
+  propagation gives the result variable the lower bound `int`. The state
+  has a ghost `log` of every accepted constraint, which exists only for
+  the proofs.
+- `SimpleSub/Soundness.lean`: soundness of constraining at the level of the
+  bound graph (the first half of the paper's Lemma 2). Two invariants hold
+  of every state the algorithm reaches:
+  - **Justified:** every logged constraint is justified by one
+    decomposition step (`GStep`), so the log is a self-justifying set of
+    constraints, and cache hits are uses of the coinductive hypothesis.
+  - **Consistent:** every lower bound of a variable is logged below each of
+    its upper bounds.
+
+  The proofs track *pending* pairs, since consistency is temporarily broken
+  while a new bound propagates. `ConstrainTop.sound`: a successful
+  `constrain` call preserves the invariant and accepts its constraint.
+  `TypeTerm.inv_init`: the invariant holds after typing any term.
+
 These are proofs about a model of the code, not the OCaml itself.
+
+**Roadmap ("option C").** Inference is proved against the minimal subtyping
+rules. The MLsub equations are deferred to the simplifier's correctness
+proof, where they are needed.
+1. Declarative typing. Done for monomorphic `let`.
+2. A model of the algorithm. Done: `Algorithm.lean`.
+3. Soundness of constraining (the paper's Lemma 2), then of inference
+   (Theorem 1), including row expansion.
+   - 3a, the graph level: done (`Soundness.lean`).
+   - 3b: from the invariant to `Sub` between coalesced types.
+4. Let-polymorphism (levels and extrusion).
+5. The MLsub equations and the simplifier, sequent-style (see
+   `Lattice.lean`).
 
 ## Not yet implemented
 

@@ -362,7 +362,7 @@ theorem Sub.fold (hc : Contractive (.mu a)) (hlc : LC 0 (.mu a)) :
 `μα₀. τ → τ → α₀ ≤ μα₁. τ → α₁`: these types never unfold to the same
 syntax, so the proof needs a genuine coinductive hypothesis. -/
 
-section PaperExample
+namespace PaperExample
 
 def τ : Ty := .prim "t"
 def A : Ty := .mu (.arrow τ (.arrow τ (.bvar 0)))
@@ -453,7 +453,7 @@ infinitely many unfoldings without passing a constructor, which the
 inductive `Step` cannot do. The simplifier, however, treats such a cycle as
 `int`. Hence `lib/coalesce.ml` only emits contractive types. -/
 
-section NonContractive
+namespace NonContractive
 
 def M : Ty := .mu (.inter (.prim "int") (.bvar 0))
 
