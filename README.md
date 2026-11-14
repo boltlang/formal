@@ -150,9 +150,12 @@ in `lean/`. Everything below is proved; there are no `sorry`s.
   type or record field. Unfolding a contractive μ strictly decreases it
   (`ug_open`).
 - `SimpleSub/Sub.lean`: declarative subtyping with equi-recursive types.
-  `Step R` is one layer of subtyping. It's inductive and uses the
+  `Step E R` is one layer of subtyping. It's inductive and uses the
   coinductive hypothesis `R` only under a function type or record field,
-  which is the paper's ▷/◁ discipline. `Sub` is the greatest fixed point
+  which is the paper's ▷/◁ discipline. `E` gives *graph variables*
+  (`gvar`) their meaning as intersections of sets of upper bounds: named,
+  possibly mutually recursive definitions without binders, used to express
+  solutions. `Sub` is the greatest fixed point
   (Knaster–Tarski), with a coinduction principle `Sub.coind`. Proved so far:
   - `Sub.refl`: every closed contractive type is a subtype of itself.
   - `Sub.trans`: transitivity, with no side conditions (not even
@@ -225,6 +228,14 @@ in `lean/`. Everything below is proved; there are no `sorry`s.
   while a new bound propagates. `ConstrainTop.sound`: a successful
   `constrain` call preserves the invariant and accepts its constraint.
   `TypeTerm.inv_init`: the invariant holds after typing any term.
+- `SimpleSub/Solution.lean`: from the invariant to `Sub` (the paper's
+  unifying coalescing), proved for the record-free fragment. Each type
+  variable `v` becomes a *graph variable* `gvar v`, defined as the
+  intersection of the non-variable upper bounds reachable from `v` through
+  variable-to-variable bounds (`Clo`, an inductive predicate, so cycles
+  need no special treatment). `clo_logged` closes chains of variable
+  bounds. `solution`: every accepted constraint `a ≤ b` gives
+  `θ(a) ≤ θ(b)`.
 
 These are proofs about a model of the code, not the OCaml itself.
 
@@ -236,7 +247,10 @@ proof, where they are needed.
 3. Soundness of constraining (the paper's Lemma 2), then of inference
    (Theorem 1), including row expansion.
    - 3a, the graph level: done (`Soundness.lean`).
-   - 3b: from the invariant to `Sub` between coalesced types.
+   - 3b, from the invariant to `Sub`: done for the record-free fragment
+     (`Solution.lean`). Rows still to do: field projections and row
+     expansion.
+   - 3c: Theorem 1, assembling the typing derivation from `TypeTerm`.
 4. Let-polymorphism (levels and extrusion).
 5. The MLsub equations and the simplifier, sequent-style (see
    `Lattice.lean`).

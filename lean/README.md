@@ -16,6 +16,7 @@ lake build
 | `SimpleSub/Typing.lean` | declarative typing (monomorphic `let`, schemes for built-ins, record extension) with examples |
 | `SimpleSub/Algorithm.lean` | model of `lib/typer.ml`/`lib/coalesce.ml` (no levels): state, `Constrain`/`TypeTerm` as big-step relations, contractive coalescing |
 | `SimpleSub/Soundness.lean` | soundness of constraining on the bound graph: justification and consistency invariants, preserved by `constrain` and `typeTerm` |
+| `SimpleSub/Solution.lean` | a solution of the inferred constraints (unifying coalescing via graph variables); record-free fragment |
 | `SimpleSub/Sub.lean` | guarded coinductive subtyping, rows compared as label maps; reflexivity, transitivity (cut elimination), S-Rec, the paper's §5.1.3 example, row examples, non-contractive counterexample |
 | `SimpleSub/Rows.lean` | row algebra; exactness of the row rewrites in `lib/simplify.ml` and `lib/subsume.ml` |
 

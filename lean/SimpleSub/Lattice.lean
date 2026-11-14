@@ -47,6 +47,8 @@ namespace SimpleSub
 
 section Gap
 
+variable {E : Defs}
+
 private def P : Ty := .prim "p"
 private def Q : Ty := .prim "q"
 private def R' : Ty := .prim "r"
@@ -54,7 +56,7 @@ private def S : Ty := .prim "s"
 
 /-- Different primitive types are unrelated, at any layer. -/
 private theorem step_prim_prim {R : Ty → Ty → Prop} {a b : String} (h : a ≠ b) :
-    ¬ Step R (.prim a) (.prim b) := by
+    ¬ Step E R (.prim a) (.prim b) := by
   intro hs
   cases hs
   exact h rfl
@@ -63,7 +65,7 @@ private theorem step_prim_prim {R : Ty → Ty → Prop} {a b : String} (h : a �
 current rules, although MLsub (and the simplifier) treat both sides as
 equal. -/
 theorem not_fun_merge :
-    ¬ Sub (.inter (.arrow P Q) (.arrow R' S)) (.arrow (.union P R') (.inter Q S)) := by
+    ¬ Sub E (.inter (.arrow P Q) (.arrow R' S)) (.arrow (.union P R') (.inter Q S)) := by
   rintro ⟨R, hR, h⟩
   cases hR _ _ h with
   | interL₁ h₁ =>

@@ -40,6 +40,7 @@ def Ty.substM : Ty → (String → Option Ty) → Ty
   | .record fs t, m => .record (fs.substM m) (t.substM m)
   | .mu a, m => .mu (a.substM m)
   | .proj l t, m => .proj l (t.substM m)
+  | .gvar n, _ => .gvar n
 
 def Fields.substM : Fields → (String → Option Ty) → Fields
   | .nil, _ => .nil
@@ -48,7 +49,7 @@ end
 
 mutual
 theorem Ty.substM_none : ∀ t : Ty, t.substM (fun _ => none) = t
-  | .fvar _ | .top | .bot | .abs | .prim _ | .bvar _ => rfl
+  | .fvar _ | .top | .bot | .abs | .prim _ | .bvar _ | .gvar _ => rfl
   | .union a b | .inter a b | .arrow a b => by
     simp only [Ty.substM, Ty.substM_none a, Ty.substM_none b]
   | .record fs t => by simp only [Ty.substM, Fields.substM_none fs, Ty.substM_none t]
@@ -84,7 +85,13 @@ abbrev Ctx := List (String × Scheme)
 def Ctx.lookup (Γ : Ctx) (x : String) : Option Scheme :=
   (Γ.find? (·.1 = x)).map (·.2)
 
-/-! ## Typing rules -/
+/-! ## Typing rules
+
+Typing is relative to definitions `E` of type variables (see `Sub.lean`):
+types may refer to defined variables, which is how inferred solutions are
+expressed. -/
+
+variable {E : Defs}
 
 /-- The same labels, all with the absent field. -/
 def Fields.absOf : Fields → Fields
@@ -92,25 +99,25 @@ def Fields.absOf : Fields → Fields
   | .cons l _ fs => .cons l .abs fs.absOf
 
 mutual
-inductive Typ : Ctx → Term → Ty → Prop where
-  | lit : Typ Γ (.lit n) (.prim "int")
-  | var : Γ.lookup x = some σ → σ.Instance τ → Typ Γ (.var x) τ
-  | lam : Typ ((x, .mono τ₁) :: Γ) t τ₂ → Typ Γ (.lam x t) (.arrow τ₁ τ₂)
-  | app : Typ Γ f (.arrow τ₁ τ₂) → Typ Γ a τ₁ → Typ Γ (.app f a) τ₂
-  | rcd : TypFields Γ fs F → Typ Γ (.rcd fs) (.record F .abs)
-  | sel : Typ Γ t (.record (.cons l τ .nil) .abs) → Typ Γ (.sel t l) τ
+inductive Typ (E : Defs) : Ctx → Term → Ty → Prop where
+  | lit : Typ E Γ (.lit n) (.prim "int")
+  | var : Γ.lookup x = some σ → σ.Instance τ → Typ E Γ (.var x) τ
+  | lam : Typ E ((x, .mono τ₁) :: Γ) t τ₂ → Typ E Γ (.lam x t) (.arrow τ₁ τ₂)
+  | app : Typ E Γ f (.arrow τ₁ τ₂) → Typ E Γ a τ₁ → Typ E Γ (.app f a) τ₂
+  | rcd : TypFields E Γ fs F → Typ E Γ (.rcd fs) (.record F .abs)
+  | sel : Typ E Γ t (.record (.cons l τ .nil) .abs) → Typ E Γ (.sel t l) τ
   /-- `t with {fs}`: `t`'s fields `fs` may be anything, the rest is `ρ`. -/
-  | ext : Typ Γ t (.record F.absOf ρ) → TypFields Γ fs F → Typ Γ (.ext t fs) (.record F ρ)
-  | letIn : Typ Γ s σ → Typ ((x, .mono σ) :: Γ) t τ → Typ Γ (.letIn false x s t) τ
-  | letRec : Typ ((x, .mono σ) :: Γ) s σ → Typ ((x, .mono σ) :: Γ) t τ →
-      Typ Γ (.letIn true x s t) τ
+  | ext : Typ E Γ t (.record F.absOf ρ) → TypFields E Γ fs F → Typ E Γ (.ext t fs) (.record F ρ)
+  | letIn : Typ E Γ s σ → Typ E ((x, .mono σ) :: Γ) t τ → Typ E Γ (.letIn false x s t) τ
+  | letRec : Typ E ((x, .mono σ) :: Γ) s σ → Typ E ((x, .mono σ) :: Γ) t τ →
+      Typ E Γ (.letIn true x s t) τ
   /-- Subsumption. -/
-  | sub : Typ Γ t τ → Sub τ τ' → Typ Γ t τ'
+  | sub : Typ E Γ t τ → Sub E τ τ' → Typ E Γ t τ'
 
 /-- Field terms and their types, label by label. -/
-inductive TypFields : Ctx → List (String × Term) → Fields → Prop where
-  | nil : TypFields Γ [] .nil
-  | cons : Typ Γ t τ → TypFields Γ fs F → TypFields Γ ((l, t) :: fs) (.cons l τ F)
+inductive TypFields (E : Defs) : Ctx → List (String × Term) → Fields → Prop where
+  | nil : TypFields E Γ [] .nil
+  | cons : Typ E Γ t τ → TypFields E Γ fs F → TypFields E Γ ((l, t) :: fs) (.cons l τ F)
 end
 
 /-! ## Built-ins (as in `lib/typer.ml`) -/
@@ -132,18 +139,18 @@ def builtins : Ctx :=
 section Examples
 
 /-- A variable bound by a lambda (or a monomorphic `let`) has its type. -/
-theorem Typ.var_mono (h : Γ.lookup x = some (.mono τ)) : Typ Γ (.var x) τ :=
+theorem Typ.var_mono {Γ : Ctx} {x : String} {τ : Ty} (h : Γ.lookup x = some (.mono τ)) : Typ E Γ (.var x) τ :=
   .var h (Scheme.instance_mono τ)
 
 /-- `twice = fun f -> fun x -> f (f x)` has type `(τ → τ) → τ → τ`, for any `τ`. -/
 theorem typ_twice (τ : Ty) :
-    Typ builtins
+    Typ E builtins
       (.lam "f" (.lam "x" (.app (.var "f") (.app (.var "f") (.var "x")))))
       (.arrow (.arrow τ τ) (.arrow τ τ)) :=
   .lam (.lam (.app (.var_mono rfl) (.app (.var_mono rfl) (.var_mono rfl))))
 
 /-- `if true then 1 else 2 : int`, instantiating `if` at `int`. -/
-theorem typ_if : Typ builtins
+theorem typ_if : Typ E builtins
     (.app (.app (.app (.var "if") (.var "true")) (.lit 1)) (.lit 2)) int := by
   have hif : (builtins.lookup "if").isSome := rfl
   refine .app (.app (.app (.var rfl ⟨fun x => if x = "a" then some int else none, ?_, ?_⟩)
@@ -159,29 +166,29 @@ theorem typ_if : Typ builtins
 `ρ = {x: int}`: its argument `{x = 1}` fits `{y: Abs | {x: int}}`, and
 the result `{y: int | {x: int}}` has field `x`. -/
 theorem typ_ext :
-    Typ builtins
+    Typ E builtins
       (.sel (.app (.lam "r" (.ext (.var "r") [("y", .lit 2)])) (.rcd [("x", .lit 1)])) "x")
       int := by
   -- the row the function is used at
   let ρ : Ty := .record (.cons "x" int .nil) .abs
-  have hfun : Typ builtins (.lam "r" (.ext (.var "r") [("y", .lit 2)]))
+  have hfun : Typ E builtins (.lam "r" (.ext (.var "r") [("y", .lit 2)]))
       (.arrow (.record (.cons "y" .abs .nil) ρ) (.record (.cons "y" int .nil) ρ)) :=
     .lam (.ext (F := .cons "y" int .nil) (.var_mono rfl) (.cons .lit .nil))
   -- {x: int} ≤ {y: Abs | {x: int}}
-  have harg : Sub (.record (.cons "x" int .nil) .abs) (.record (.cons "y" .abs .nil) ρ) := by
+  have harg : Sub E (.record (.cons "x" int .nil) .abs) (.record (.cons "y" .abs .nil) ρ) := by
     refine Sub.of_step (.record fun l => ?_)
     by_cases hx : l = "x"
-    · subst hx; exact Sub.of_step (show Step Sub int int from .prim)
+    · subst hx; exact Sub.of_step (show Step E (Sub E) int int from .prim)
     · have hx' : ¬ "x" = l := fun e => hx e.symm
       by_cases hy : l = "y"
       · subst hy; simp only [Ty.field, Fields.lookup, hx', ite_true]; exact Sub.abs
       · have hy' : ¬ "y" = l := fun e => hy e.symm
         simp only [ρ, Ty.field, Fields.lookup, hx', hy', ite_false]; exact Sub.abs
   -- {y: int | {x: int}} ≤ {x: int}
-  have hres : Sub (.record (.cons "y" int .nil) ρ) (.record (.cons "x" int .nil) .abs) := by
+  have hres : Sub E (.record (.cons "y" int .nil) ρ) (.record (.cons "x" int .nil) .abs) := by
     refine Sub.of_step (.record fun l => ?_)
     by_cases hx : l = "x"
-    · subst hx; exact Sub.of_step (show Step Sub int int from .prim)
+    · subst hx; exact Sub.of_step (show Step E (Sub E) int int from .prim)
     · have hx' : ¬ "x" = l := fun e => hx e.symm
       simp only [Ty.field, Fields.lookup, hx', ite_false]
       exact Sub.abs

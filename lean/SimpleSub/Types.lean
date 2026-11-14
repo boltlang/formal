@@ -42,6 +42,11 @@ inductive Ty where
   | mu : Ty → Ty
   /-- Field `l` of an opaque row, such as a row variable: `ρ.l`. -/
   | proj : String → Ty → Ty
+  /-- A *graph variable*: a type variable of the algorithm's state, whose
+  meaning is given by definitions (`Defs` in `Sub.lean`) rather than being
+  rigid like `fvar`. Solutions of constraint systems are expressed with
+  these. -/
+  | gvar : Nat → Ty
 
 inductive Fields where
   | nil
@@ -74,6 +79,7 @@ def Ty.openRec : Ty → Nat → Ty → Ty
   | .record fs t, k, u => .record (fs.openRec k u) (t.openRec k u)
   | .mu a, k, u => .mu (a.openRec (k + 1) u)
   | .proj l t, k, u => .proj l (t.openRec k u)
+  | .gvar n, _, _ => .gvar n
 
 def Fields.openRec : Fields → Nat → Ty → Fields
   | .nil, _, _ => .nil
@@ -100,6 +106,7 @@ inductive LC : Nat → Ty → Prop where
   | record : LCF n fs → LC n t → LC n (.record fs t)
   | mu : LC (n + 1) a → LC n (.mu a)
   | proj : LC n t → LC n (.proj l t)
+  | gvar : LC n (.gvar m)
 
 inductive LCF : Nat → Fields → Prop where
   | nil : LCF n .nil
@@ -138,6 +145,7 @@ inductive Contractive : Ty → Prop where
   | record : ContractiveF fs → Contractive t → Contractive (.record fs t)
   | mu : Contractive a → ¬ Unguarded 0 a → Contractive (.mu a)
   | proj : Contractive t → Contractive (.proj l t)
+  | gvar : Contractive (.gvar n)
 
 inductive ContractiveF : Fields → Prop where
   | nil : ContractiveF .nil
@@ -204,6 +212,7 @@ theorem unguarded_openRec (u : Ty) (hu : LC 0 u) :
   | .fvar _, _, _, _, h => by cases h
   | .arrow _ _, _, _, _, h => by cases h
   | .proj _ _, _, _, _, h => by cases h
+  | .gvar _, _, _, _, h => by cases h
   | .bvar i, k, j, _, h => by
     simp only [Ty.openRec] at h
     split at h
@@ -231,6 +240,7 @@ theorem ug_openRec (u : Ty) :
   | .top, _, _ | .bot, _, _ | .abs, _, _ | .prim _, _, _ | .fvar _, _, _ => rfl
   | .arrow _ _, _, _ => rfl
   | .proj _ _, _, _ => rfl
+  | .gvar _, _, _ => rfl
   | .bvar i, k, h => by
     simp only [Ty.openRec]
     split
@@ -267,6 +277,7 @@ theorem LC.weaken : LC n t → n ≤ m → LC m t
   | .record fs t, hm => .record (fs.weaken hm) (t.weaken hm)
   | .mu a, hm => .mu (a.weaken (by omega))
   | .proj t, hm => .proj (t.weaken hm)
+  | .gvar, _ => .gvar
 
 theorem LCF.weaken : LCF n fs → n ≤ m → LCF m fs
   | .nil, _ => .nil
@@ -291,6 +302,7 @@ theorem LC.openRec : LC (k + 1) t → LC 0 u → LC k (t.openRec k u)
   | .record fs t, hu => .record (fs.openRec hu) (t.openRec hu)
   | .mu a, hu => .mu (a.openRec hu)
   | .proj t, hu => .proj (t.openRec hu)
+  | .gvar, _ => .gvar
 
 theorem LCF.openRec : LCF (k + 1) fs → LC 0 u → LCF k (fs.openRec k u)
   | .nil, _ => .nil
@@ -320,6 +332,7 @@ theorem Contractive.openRec :
   | .mu (a := a) ha hg, hu, hcu =>
     .mu (ha.openRec hu hcu) (fun h => hg (unguarded_openRec u hu a (k + 1) 0 (by omega) h))
   | .proj t, hu, hcu => .proj (t.openRec hu hcu)
+  | .gvar, _, _ => .gvar
 
 theorem ContractiveF.openRec :
     ContractiveF fs → LC 0 u → Contractive u → ContractiveF (fs.openRec k u)
@@ -384,6 +397,7 @@ theorem Contractive.field : Contractive t → Contractive (t.field l)
   | .arrow a b => .proj (.arrow a b)
   | .mu a hg => .proj (.mu a hg)
   | .proj t => .proj (.proj t)
+  | .gvar => .proj .gvar
 
 theorem LC.field : LC n t → LC n (t.field l)
   | .record (fs := fs) (t := t) hfs ht => by
@@ -402,5 +416,6 @@ theorem LC.field : LC n t → LC n (t.field l)
   | .arrow a b => .proj (.arrow a b)
   | .mu a => .proj (.mu a)
   | .proj t => .proj (.proj t)
+  | .gvar => .proj .gvar
 
 end SimpleSub

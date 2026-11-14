@@ -6,3 +6,4 @@ import SimpleSub.Lattice
 import SimpleSub.Typing
 import SimpleSub.Algorithm
 import SimpleSub.Soundness
+import SimpleSub.Solution
