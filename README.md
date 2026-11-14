@@ -296,6 +296,32 @@ proof, where they are needed.
    - 3c, Theorem 1: done (`Theorem1.lean`, and `Kinds.lean`, where kinds
      discharge `TailRanked`).
 4. Let-polymorphism (levels and extrusion).
+   - 4a, declarative: done (`Typing.lean`, `letPoly`/`letRecPoly`). `let`
+     binds `x` to a set of instances, all of which the right-hand side
+     has. This is let-polymorphism as let-inlining, without substitution.
+   - 4b, renaming: done (`TypeTerm.soundR` in `Theorem1.lean`). The
+     soundness proof holds for any renaming `f` of type variables, given
+     that the accepted constraints hold renamed by `f` (`RenSound`).
+     Instantiation (`freshen_above`) copies the generalized variables, so
+     each use of a let-bound variable is typed by `soundR` at a renaming.
+   - 4c, levels: to do. A fixed level map, like the kinds. `constrain`
+     follows `lib/typer.ml`: a bound is installed only on the variable of
+     higher level, otherwise the other side is extruded. Invariant: a
+     variable's bounds mention only variables of level at most its own.
+     Two changes reach the solution proof. First, a variable can now be a
+     *lower* bound (`v ≤ w` with `v` of lower level), so `LbNonVar`
+     goes, and the solution must reach upper bounds through lower-bound
+     edges too. Second, extrusion installs bounds without propagating. The
+     model should log each type against its extrusion (justified by the
+     variable-to-variable bounds extrusion installs), and justify `v ≤ b`
+     by an upper bound `b'` of `v` with `b' ≤ b` logged. How consistency
+     generalizes to such chains is the main open question.
+   - 4d, instantiation: to do. Copy the variables above the `let`'s level
+     (renaming `ρ`), with their bounds, and log the renamed constraints.
+     Under the level invariant, `ρ` fixes every bound of the variables it
+     fixes, so the renamed log is justified. `RenSound` for `f` then gives
+     it for `f ∘ ρ`, and `soundR` types each use of the variable at
+     `ρ(st)`, an instance in `letPoly`'s `P`.
 5. The MLsub equations and the simplifier, sequent-style (see
    `Lattice.lean`).
 

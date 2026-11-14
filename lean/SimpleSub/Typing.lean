@@ -6,13 +6,24 @@ import SimpleSub.Sub
 
 The type system that inferred types are meant to be correct for (the
 paper's Fig. 2, extended with integer literals and record extension), over
-the minimal subtyping relation of `Sub.lean`. As in the paper's proof
-(Sec. 5), `let` is monomorphic for now; the context nevertheless holds type
+the minimal subtyping relation of `Sub.lean`. The context holds type
 *schemes*, so that built-ins such as `if : ∀α. bool → α → α → α` can be
-instantiated, and let-polymorphism later only changes the `let` rules.
+instantiated, and let-bound variables can be polymorphic (below). The
+algorithm model is still monomorphic in `let`, as in the paper's proof
+(Sec. 5).
 
 Quantified variables are free type variables (`fvar`) listed in the scheme;
 instantiation substitutes them simultaneously (`Ty.substM`).
+
+**Let-polymorphism** (`letPoly`, `letRecPoly`) binds `x` to a *set of
+instances* `P`: every use of `x` may pick any type in `P`, and the
+right-hand side must have every type in `P` (and at least one, since it is
+evaluated). This is let-polymorphism as let-inlining: it types exactly what
+typing `t[x := s]` would, without substitution (and so without capture).
+It is more permissive than ML's `∀`-schemes, which is fine for a
+soundness theorem: the rule is itself sound for strict evaluation, since
+the value of `s` has every type in `P`. The monomorphic `letIn`/`letRec`
+rules are kept; they are the case of a single instance.
 
 `t with {l₁ = e₁, …}` is typed like the OCaml type checker types it: `t`
 must be a record whose fields `lᵢ` may be anything (`Abs`) and whose other
@@ -63,18 +74,21 @@ end
 
 /-! ## Schemes and contexts -/
 
-/-- `∀ vars. body`. -/
-structure Scheme where
-  vars : List String
-  body : Ty
+inductive Scheme where
+  /-- `∀ vars. body`. -/
+  | poly (vars : List String) (body : Ty)
+  /-- The types satisfying `P` (let-polymorphism). -/
+  | insts (P : Ty → Prop)
 
 /-- A monomorphic scheme. -/
-def Scheme.mono (t : Ty) : Scheme := ⟨[], t⟩
+def Scheme.mono (t : Ty) : Scheme := .poly [] t
 
 /-- `τ` is an instance of `σ`: substitute types for (some of) its
-quantified variables. -/
-def Scheme.Instance (σ : Scheme) (τ : Ty) : Prop :=
-  ∃ m : String → Option Ty, (∀ x, (m x).isSome → x ∈ σ.vars) ∧ τ = σ.body.substM m
+quantified variables, or pick one of its instances. -/
+def Scheme.Instance : Scheme → Ty → Prop
+  | .poly vars body, τ =>
+    ∃ m : String → Option Ty, (∀ x, (m x).isSome → x ∈ vars) ∧ τ = body.substM m
+  | .insts P, τ => P τ
 
 theorem Scheme.instance_mono (t : Ty) : (Scheme.mono t).Instance t :=
   ⟨fun _ => none, by simp, (Ty.substM_none t).symm⟩
@@ -113,6 +127,13 @@ inductive Typ (E : Defs) : Ctx → Term → Ty → Prop where
   | letIn : Typ E Γ s σ → Typ E ((x, .mono σ) :: Γ) t τ → Typ E Γ (.letIn false x s t) τ
   | letRec : Typ E ((x, .mono σ) :: Γ) s σ → Typ E ((x, .mono σ) :: Γ) t τ →
       Typ E Γ (.letIn true x s t) τ
+  /-- Polymorphic `let`: `s` has every type in `P`, at least one. -/
+  | letPoly : (∀ σ, P σ → Typ E Γ s σ) → P σ₀ → Typ E ((x, .insts P) :: Γ) t τ →
+      Typ E Γ (.letIn false x s t) τ
+  /-- Polymorphic `let rec`: for every `σ` in `P`, `s : σ` assuming
+  `x : σ` (recursion is monomorphic). -/
+  | letRecPoly : (∀ σ, P σ → Typ E ((x, .mono σ) :: Γ) s σ) → P σ₀ →
+      Typ E ((x, .insts P) :: Γ) t τ → Typ E Γ (.letIn true x s t) τ
   /-- Subsumption. -/
   | sub : Typ E Γ t τ → Sub E τ τ' → Typ E Γ t τ'
 
@@ -134,7 +155,7 @@ def builtins : Ctx :=
     ("not", .mono (.arrow bool bool)),
     ("succ", .mono (.arrow int int)),
     ("add", .mono (.arrow int (.arrow int int))),
-    ("if", ⟨["a"], .arrow bool (.arrow (.fvar "a") (.arrow (.fvar "a") (.fvar "a")))⟩) ]
+    ("if", .poly ["a"] (.arrow bool (.arrow (.fvar "a") (.arrow (.fvar "a") (.fvar "a"))))) ]
 
 /-! ## Examples -/
 
@@ -195,6 +216,18 @@ theorem typ_ext :
       simp only [Ty.field, Fields.lookup, hx', ite_false]
       exact Sub.abs
   exact .sel (.sub (.app hfun (.sub (.rcd (.cons .lit .nil)) harg)) hres)
+
+/-- Let-polymorphism: `let id = fun x -> x in {a = id 1; b = id true}`,
+using `id` at `int → int` and at `bool → bool`. -/
+theorem typ_letPoly :
+    Typ E builtins
+      (.letIn false "id" (.lam "x" (.var "x"))
+        (.rcd [("a", .app (.var "id") (.lit 1)), ("b", .app (.var "id") (.var "true"))]))
+      (.record (.cons "a" int (.cons "b" bool .nil)) .abs) :=
+  .letPoly (P := fun τ => ∃ T, τ = .arrow T T) (σ₀ := .arrow int int)
+    (fun _ ⟨_, h⟩ => h ▸ .lam (.var_mono rfl)) ⟨int, rfl⟩
+    (.rcd (.cons (.app (.var rfl ⟨int, rfl⟩) .lit)
+      (.cons (.app (.var rfl ⟨bool, rfl⟩) (.var_mono rfl)) .nil)))
 
 end Examples
 
