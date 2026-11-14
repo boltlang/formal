@@ -365,9 +365,11 @@ theorem LCF.lookup : LCF n fs → fs.lookup l = some g → LC n g
 
 /-- The field a row gives the label `l`: an explicit field wins over the
 tail; the top row (`Abs`, also `⊤`) gives the absent field, the bottom row
-gives `⊥`; unions and intersections of rows are pointwise; any other row
-(a row variable, a recursive row) gives the opaque `proj l t`. This is the
-`Row.at` of `Rows.lean`, on syntax. -/
+gives `⊥`; unions and intersections of rows are pointwise; a function or
+primitive type, viewed as a row, guarantees no field (`Abs`, as width
+subtyping would have it); any other row (a row variable, a recursive row)
+gives the opaque `proj l t`. This is the `Row.at` of `Rows.lean`, on
+syntax. -/
 def Ty.field (l : String) : Ty → Ty
   | .record fs t =>
     match fs.lookup l with
@@ -378,6 +380,8 @@ def Ty.field (l : String) : Ty → Ty
   | .bot => .bot
   | .union a b => .union (Ty.field l a) (Ty.field l b)
   | .inter a b => .inter (Ty.field l a) (Ty.field l b)
+  | .prim _ => .abs
+  | .arrow _ _ => .abs
   | t => .proj l t
 
 theorem Contractive.field : Contractive t → Contractive (t.field l)
@@ -391,10 +395,10 @@ theorem Contractive.field : Contractive t → Contractive (t.field l)
   | .bot => .bot
   | .union a b => .union a.field b.field
   | .inter a b => .inter a.field b.field
-  | .prim => .proj .prim
+  | .prim => .abs
   | .fvar => .proj .fvar
   | .bvar => .proj .bvar
-  | .arrow a b => .proj (.arrow a b)
+  | .arrow _ _ => .abs
   | .mu a hg => .proj (.mu a hg)
   | .proj t => .proj (.proj t)
   | .gvar => .proj .gvar
@@ -410,10 +414,10 @@ theorem LC.field : LC n t → LC n (t.field l)
   | .bot => .bot
   | .union a b => .union a.field b.field
   | .inter a b => .inter a.field b.field
-  | .prim => .proj .prim
+  | .prim => .abs
   | .fvar => .proj .fvar
   | .bvar h => .proj (.bvar h)
-  | .arrow a b => .proj (.arrow a b)
+  | .arrow _ _ => .abs
   | .mu a => .proj (.mu a)
   | .proj t => .proj (.proj t)
   | .gvar => .proj .gvar

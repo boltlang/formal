@@ -17,6 +17,8 @@ lake build
 | `SimpleSub/Algorithm.lean` | model of `lib/typer.ml`/`lib/coalesce.ml` (no levels): state, `Constrain`/`TypeTerm` as big-step relations, contractive coalescing |
 | `SimpleSub/Soundness.lean` | soundness of constraining on the bound graph: justification and consistency invariants, preserved by `constrain` and `typeTerm` |
 | `SimpleSub/Solution.lean` | a solution of the inferred constraints (unifying coalescing via graph variables); record-free fragment |
+| `SimpleSub/Sorts.lean` | `Abs` is never a function parameter or result (`NAC`), preserved by `constrain` and `typeTerm` |
+| `SimpleSub/SolutionRows.lean` | the solution theorem for all simple types, rows included (assuming acyclic row-variable tails) |
 | `SimpleSub/Sub.lean` | guarded coinductive subtyping, rows compared as label maps; reflexivity, transitivity (cut elimination), S-Rec, the paper's §5.1.3 example, row examples, non-contractive counterexample |
 | `SimpleSub/Rows.lean` | row algebra; exactness of the row rewrites in `lib/simplify.ml` and `lib/subsume.ml` |
 

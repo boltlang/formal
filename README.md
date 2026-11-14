@@ -236,6 +236,18 @@ in `lean/`. Everything below is proved; there are no `sorry`s.
   need no special treatment). `clo_logged` closes chains of variable
   bounds. `solution`: every accepted constraint `a ≤ b` gives
   `θ(a) ≤ θ(b)`.
+- `SimpleSub/SolutionRows.lean`: the same for all simple types, rows
+  included (`solution_rows`). The coinductive relation also holds the
+  *field projections* of accepted constraints. Proving a field pair follows
+  the algorithm's record case: common fields, labels supplied by row
+  expansion, extra fields flowing into the right tail. It assumes chains of
+  row-variable tails through upper bounds are acyclic (`TailRanked`), which
+  kinds would guarantee (issue #1).
+- `SimpleSub/Sorts.lean`: `Abs` never occurs as a parameter or result of a
+  function type in accepted constraints or inferred types. `Abs` is the top
+  of `Sub`, so `Abs ≤ {…}` must stay false at the level of types. Row
+  constraints with `Abs` on the left are only ever compared field by
+  field.
 
 These are proofs about a model of the code, not the OCaml itself.
 
@@ -247,9 +259,9 @@ proof, where they are needed.
 3. Soundness of constraining (the paper's Lemma 2), then of inference
    (Theorem 1), including row expansion.
    - 3a, the graph level: done (`Soundness.lean`).
-   - 3b, from the invariant to `Sub`: done for the record-free fragment
-     (`Solution.lean`). Rows still to do: field projections and row
-     expansion.
+   - 3b, from the invariant to `Sub`: done (`Solution.lean`,
+     `SolutionRows.lean`). It assumes acyclic row-variable tails
+     (`TailRanked`); kinds should discharge that.
    - 3c: Theorem 1, assembling the typing derivation from `TypeTerm`.
 4. Let-polymorphism (levels and extrusion).
 5. The MLsub equations and the simplifier, sequent-style (see
