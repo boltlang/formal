@@ -285,7 +285,7 @@ These are proofs about a model of the code, not the OCaml itself.
 **Roadmap ("option C").** Inference is proved against the minimal subtyping
 rules. The MLsub equations are deferred to the simplifier's correctness
 proof, where they are needed.
-1. Declarative typing. Done for monomorphic `let`.
+1. Declarative typing. Done, including let-polymorphism (4a).
 2. A model of the algorithm. Done: `Algorithm.lean`.
 3. Soundness of constraining (the paper's Lemma 2), then of inference
    (Theorem 1), including row expansion.
@@ -295,35 +295,39 @@ proof, where they are needed.
      (`TailRanked`).
    - 3c, Theorem 1: done (`Theorem1.lean`, and `Kinds.lean`, where kinds
      discharge `TailRanked`).
-4. Let-polymorphism (levels and extrusion).
-   - 4a, declarative: done (`Typing.lean`, `letPoly`/`letRecPoly`). `let`
-     binds `x` to a set of instances, all of which the right-hand side
-     has. This is let-polymorphism as let-inlining, without substitution.
+4. Let-polymorphism.
+   - 4a, declarative: done (`Typing.lean`). ML-style `∀`-schemes: `let`
+     generalizes variables that are free neither in the context nor in
+     the definitions of graph variables (`Gen`). The monomorphic `let` is
+     the case of no variables. No value restriction (no mutable state).
    - 4b, renaming: done (`TypeTerm.soundR` in `Theorem1.lean`). The
-     soundness proof holds for any renaming `f` of type variables, given
+     soundness proof holds for any renaming `f` of graph variables, given
      that the accepted constraints hold renamed by `f` (`RenSound`).
-     Instantiation (`freshen_above`) copies the generalized variables, so
-     each use of a let-bound variable is typed by `soundR` at a renaming.
-   - 4c, levels: to do. A fixed level map, like the kinds. `constrain`
-     follows `lib/typer.ml`: a bound is installed only on the variable of
-     higher level, otherwise the other side is extruded. Invariant: a
-     variable's bounds mention only variables of level at most its own.
-     Two changes reach the solution proof. First, a variable can now be a
-     *lower* bound (`v ≤ w` with `v` of lower level), so `LbNonVar`
-     goes, and the solution must reach upper bounds through lower-bound
-     edges too. Second, extrusion installs bounds without propagating. The
-     model should log each type against its extrusion (justified by the
-     variable-to-variable bounds extrusion installs), and justify `v ≤ b`
-     by an upper bound `b'` of `v` with `b' ≤ b` logged. How consistency
-     generalizes to such chains is the main open question.
-   - 4d, instantiation: to do. Copy the variables above the `let`'s level
-     (renaming `ρ`), with their bounds, and log the renamed constraints.
-     Under the level invariant, `ρ` fixes every bound of the variables it
-     fixes, so the renamed log is justified. `RenSound` for `f` then gives
-     it for `f ∘ ρ`, and `soundR` types each use of the variable at
-     `ρ(st)`, an instance in `letPoly`'s `P`.
+   - 4c, generalization: to do. A scheme quantifies over *free* type
+     variables, while the solution expresses inferred types with graph
+     variables, whose bounds are global definitions. To generalize a
+     let-bound type, its generalizable variables must become free
+     variables, with their bounds folded into the type: coalescing.
+     So this step relates the graph solution to coalesced types (the
+     paper's Lemma relating constraints and coalescing). That is also
+     what makes the theorem speak about the types the checker prints.
+   - 4d, instantiation and extrusion, as certificates: to do. Levels and
+     extrusion are how the inferencer keeps generalization correct; the
+     checker does not need them as an algorithm. A certificate records
+     each instantiation, and the checker validates it. Justification
+     gains the constraint shapes extrusion produces: variables as lower
+     bounds, and `v ≤ b` justified by an upper bound `b'` of `v` with
+     `b' ≤ b` accepted.
 5. The MLsub equations and the simplifier, sequent-style (see
    `Lattice.lean`).
+6. A certificate checker. The inferencer (`lib/typer.ml` now, Bolt's
+   compiler later) emits its result: the type of each node, and the final
+   bounds and accepted constraints. A Lean checker decides the invariants
+   the soundness proofs rely on (justification, consistency, kinds, `Abs`
+   only in rows), so Theorem 1 applies to every accepted certificate. The
+   proofs come first: Theorem 1 restated for certificates, with the
+   invariants as decidable predicates. The executable checker and the
+   certificate output come later.
 
 ## Not yet implemented
 

@@ -13,7 +13,7 @@ lake build
 | `SimpleSub/Syntax.lean` | term syntax (mirrors `lib/syntax.ml`) |
 | `SimpleSub/Types.lean` | types with rows, locally nameless μ, closedness, contractiveness, unguarded size |
 | `SimpleSub/Lattice.lean` | the MLsub lattice equations: what the minimal rules cannot derive, and the sequent-style plan |
-| `SimpleSub/Typing.lean` | declarative typing (schemes for built-ins, let-polymorphism as sets of instances, record extension) with examples |
+| `SimpleSub/Typing.lean` | declarative typing (schemes for built-ins, ML-style let-polymorphism with `∀`-schemes, record extension) with examples |
 | `SimpleSub/Algorithm.lean` | model of `lib/typer.ml`/`lib/coalesce.ml` (no levels): state, `Constrain`/`TypeTerm` as big-step relations, contractive coalescing |
 | `SimpleSub/Soundness.lean` | soundness of constraining on the bound graph: justification and consistency invariants, preserved by `constrain` and `typeTerm` |
 | `SimpleSub/Solution.lean` | a solution of the inferred constraints (unifying coalescing via graph variables); record-free fragment |
