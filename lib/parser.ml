@@ -178,3 +178,130 @@ let parse_program (src : string) : item list =
     | _ -> let e = expr () in Expr e :: items ()
   in
   items ()
+
+(** {1 Type syntax}
+
+    Parses user-facing types in the notation printed by {!Types.show_typ}:
+
+    {v
+    ty    ::= arrow [ 'as' tyvar ]
+    arrow ::= union [ '->' arrow ]
+    union ::= inter { ('∨' | '|') inter }
+    inter ::= atom { ('∧' | '&') atom }
+    atom  ::= tyvar | ident | '⊤' | 'top' | '⊥' | 'bot' | '(' ty ')'
+            | '{' [ ident ':' ty { ',' ident ':' ty } ] '}'
+    v}
+
+    Type variables are written ['a], ['b1], ... *)
+
+type ty_token =
+  | T_VAR of string
+  | T_IDENT of string
+  | T_ARROW | T_OR | T_AND | T_TOP | T_BOT | T_AS
+  | T_LPAREN | T_RPAREN | T_LBRACE | T_RBRACE | T_COLON | T_COMMA
+  | T_EOF
+
+let show_ty_token = function
+  | T_VAR v -> v
+  | T_IDENT s -> s
+  | T_ARROW -> "->" | T_OR -> "∨" | T_AND -> "∧" | T_TOP -> "⊤" | T_BOT -> "⊥"
+  | T_AS -> "as" | T_LPAREN -> "(" | T_RPAREN -> ")" | T_LBRACE -> "{"
+  | T_RBRACE -> "}" | T_COLON -> ":" | T_COMMA -> "," | T_EOF -> "end of input"
+
+let tokenize_type (src : string) : (ty_token * int) array =
+  let n = String.length src in
+  let toks = ref [] in
+  let is_id_start c = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c = '_' in
+  let is_id c = is_id_start c || (c >= '0' && c <= '9') || c = '\'' in
+  let has i s = i + String.length s <= n && String.sub src i (String.length s) = s in
+  let rec loop i =
+    if i >= n then toks := (T_EOF, i) :: !toks
+    else
+      let emit t len = toks := (t, i) :: !toks; loop (i + len) in
+      let ident_end j = let j = ref j in while !j < n && is_id src.[!j] do incr j done; !j in
+      match src.[i] with
+      | ' ' | '\t' | '\n' | '\r' -> loop (i + 1)
+      | '-' when has i "->" -> emit T_ARROW 2
+      | '|' -> emit T_OR 1
+      | '&' -> emit T_AND 1
+      | '(' -> emit T_LPAREN 1
+      | ')' -> emit T_RPAREN 1
+      | '{' -> emit T_LBRACE 1
+      | '}' -> emit T_RBRACE 1
+      | ':' -> emit T_COLON 1
+      | ',' -> emit T_COMMA 1
+      | _ when has i "∨" -> emit T_OR (String.length "∨")
+      | _ when has i "∧" -> emit T_AND (String.length "∧")
+      | _ when has i "⊤" -> emit T_TOP (String.length "⊤")
+      | _ when has i "⊥" -> emit T_BOT (String.length "⊥")
+      | '\'' when i + 1 < n && is_id_start src.[i + 1] ->
+          let j = ident_end (i + 1) in
+          emit (T_VAR (String.sub src i (j - i))) (j - i)
+      | c when is_id_start c -> (
+          let j = ident_end i in
+          match String.sub src i (j - i) with
+          | "as" -> emit T_AS 2
+          | "top" -> emit T_TOP 3
+          | "bot" -> emit T_BOT 3
+          | s -> emit (T_IDENT s) (j - i))
+      | c -> raise (Parse_error (Printf.sprintf "type, offset %d: unexpected character '%c'" i c))
+  in
+  loop 0;
+  Array.of_list (List.rev !toks)
+
+let parse_type (src : string) : Types.typ =
+  let open Types in
+  let toks = tokenize_type src in
+  let p = ref 0 in
+  let peek () = fst toks.(!p) in
+  let advance () = if !p < Array.length toks - 1 then incr p in
+  let fail msg =
+    raise (Parse_error (Printf.sprintf "type, offset %d: %s (at '%s')" (snd toks.(!p)) msg (show_ty_token (peek ()))))
+  in
+  let expect t = if peek () = t then advance () else fail ("expected '" ^ show_ty_token t ^ "'") in
+  let rec ty () =
+    let t = arrow () in
+    match peek () with
+    | T_AS -> (
+        advance ();
+        match peek () with
+        | T_VAR v -> advance (); RecursiveType (v, t)
+        | _ -> fail "expected type variable after 'as'")
+    | _ -> t
+  and arrow () =
+    let l = union () in
+    match peek () with T_ARROW -> advance (); FunctionType (l, arrow ()) | _ -> l
+  and union () =
+    let t = ref (inter ()) in
+    while peek () = T_OR do advance (); t := Union (!t, inter ()) done;
+    !t
+  and inter () =
+    let t = ref (atom ()) in
+    while peek () = T_AND do advance (); t := Inter (!t, atom ()) done;
+    !t
+  and atom () =
+    match peek () with
+    | T_VAR v -> advance (); TypeVariable v
+    | T_IDENT s -> advance (); PrimitiveType s
+    | T_TOP -> advance (); Top
+    | T_BOT -> advance (); Bot
+    | T_LPAREN -> advance (); let t = ty () in expect T_RPAREN; t
+    | T_LBRACE ->
+        advance ();
+        if peek () = T_RBRACE then (advance (); RecordType [])
+        else
+          let rec fields () =
+            let n = match peek () with T_IDENT s -> advance (); s | _ -> fail "expected field name" in
+            expect T_COLON;
+            let t = ty () in
+            match peek () with
+            | T_COMMA -> advance (); (n, t) :: fields ()
+            | T_RBRACE -> advance (); [ (n, t) ]
+            | _ -> fail "expected ',' or '}'"
+          in
+          RecordType (fields ())
+    | _ -> fail "expected type"
+  in
+  let t = ty () in
+  if peek () <> T_EOF then fail "unexpected input after type";
+  t

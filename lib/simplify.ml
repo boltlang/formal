@@ -26,8 +26,14 @@ type compact = {
 }
 
 (** [rec_vars] holds the bounds of recursive variables, which cannot be
-    inlined since they are cyclic. *)
-type scheme = { term : compact; rec_vars : compact IMap.t }
+    inlined since they are cyclic.
+
+    [rank] orders variables by first appearance in a left-to-right walk of
+    the inferred type and its bounds (see {!compact_type}). Simplification
+    and printing follow this order rather than variable ids, which only
+    reflect allocation order inside the type checker. This makes the output
+    depend on the shape of the inferred type alone. *)
+type scheme = { term : compact; rec_vars : compact IMap.t; rank : int IMap.t }
 
 let empty = { vars = ISet.empty; prims = SSet.empty; rcd = None; fn = None }
 let of_var v = { empty with vars = ISet.singleton v }
@@ -91,6 +97,10 @@ let rec merge pol a b =
 let compact_type (ty : simple_type) : scheme =
   let recursive : (int * bool, int) Hashtbl.t = Hashtbl.create 16 in
   let rec_vars = ref IMap.empty in
+  let rank = ref IMap.empty in
+  let see v =
+    if not (IMap.mem v !rank) then rank := IMap.add v (IMap.cardinal !rank) !rank
+  in
   let rec go ty pol parents in_process =
     match ty with
     | Primitive n -> { empty with prims = SSet.singleton n }
@@ -105,6 +115,7 @@ let compact_type (ty : simple_type) : scheme =
         in
         { empty with rcd = Some fields }
     | Variable vs ->
+        see vs.id;
         let key = (vs.id, pol) in
         if List.mem key in_process then
           if ISet.mem vs.id parents then empty
@@ -115,6 +126,7 @@ let compact_type (ty : simple_type) : scheme =
               | None ->
                   let v = fresh_id () in
                   Hashtbl.add recursive key v;
+                  see v;
                   v
             in
             of_var v
@@ -134,7 +146,15 @@ let compact_type (ty : simple_type) : scheme =
            | None -> bound)
   in
   let term = go ty true ISet.empty [] in
-  { term; rec_vars = !rec_vars }
+  { term; rec_vars = !rec_vars; rank = !rank }
+
+let rank_of sch v = Option.value ~default:max_int (IMap.find_opt v sch.rank)
+
+(** Variables of [s] in canonical order. *)
+let ordered sch (s : ISet.t) =
+  List.stable_sort
+    (fun a b -> Int.compare (rank_of sch a) (rank_of sch b))
+    (ISet.elements s)
 
 (** {1 Simplification (Sec. 4.3.1)} *)
 
@@ -181,23 +201,38 @@ let simplify (sch : scheme) : scheme =
   analyze true sch.term;
   (* v -> Some w: replace v with w; v -> None: remove v *)
   let subst : (int, int option) Hashtbl.t = Hashtbl.create 16 in
+  let vars_in_order = ordered sch !all_vars in
+  (* candidates in canonical order: variables by rank, then primitives *)
+  let ordered_atoms occs =
+    let vs = ASet.fold (fun a acc -> match a with AVar v -> ISet.add v acc | APrim _ -> acc) occs ISet.empty in
+    List.map (fun v -> AVar v) (ordered sch vs)
+    @ List.filter (function APrim _ -> true | AVar _ -> false) (ASet.elements occs)
+  in
   (* 1. Remove non-recursive variables occurring in only one polarity. *)
-  ISet.iter
+  List.iter
     (fun v ->
       if not (is_rec v) then
         match (Hashtbl.mem cooc (true, v), Hashtbl.mem cooc (false, v)) with
         | true, false | false, true -> Hashtbl.replace subst v None
         | _ -> ())
-    !all_vars;
-  (* 2. Unify indistinguishable variables, and 3. flatten sandwiches. *)
-  ISet.iter
-    (fun v ->
+    vars_in_order;
+  (* 2. Unify indistinguishable variables, and 3. flatten sandwiches.
+
+     These rewrites do not commute: merging two variables changes the
+     co-occurrences of the survivor, which can block another merge (e.g. in
+     [twice], merging the positive pair blocks the negative one and vice
+     versa). We fix a canonical order: one pass over all variables for
+     negative co-occurrences, then one for positive ones, each in rank
+     order. Negative-first reproduces the paper's choice for [twice],
+     [(β ∨ γ → γ) → β → γ] (Sec. 3.4.2). *)
+  List.iter
+    (fun pol ->
       List.iter
-        (fun pol ->
+        (fun v ->
           let occs =
             Option.value ~default:ASet.empty (Hashtbl.find_opt cooc (pol, v))
           in
-          ASet.iter
+          List.iter
             (fun a ->
               if not (Hashtbl.mem subst v) then
                 match a with
@@ -239,9 +274,9 @@ let simplify (sch : scheme) : scheme =
                     (* v is sandwiched: a ≤ v ≤ a, so v ≡ a *)
                     Hashtbl.replace subst v None
                 | _ -> ())
-            occs)
-        [ true; false ])
-    !all_vars;
+            (ordered_atoms occs))
+        vars_in_order)
+    [ false; true ];
   let rec resolve v =
     match Hashtbl.find_opt subst v with
     | None -> Some v
@@ -256,7 +291,7 @@ let simplify (sch : scheme) : scheme =
       fn = Option.map (fun (l, r) -> (go l, go r)) t.fn;
     }
   in
-  { term = go sch.term; rec_vars = IMap.map go !rec_vars }
+  { sch with term = go sch.term; rec_vars = IMap.map go !rec_vars }
 
 (** {1 CompactTypeScheme -> Type, with hash consing (Sec. 4.3.2)}
 
@@ -302,7 +337,7 @@ let coalesce_compact (sch : scheme) : typ =
   and go t pol in_process =
     enter (KType t) pol in_process (fun ip ->
         let parts =
-          List.map (fun v -> go_var v pol ip) (ISet.elements t.vars)
+          List.map (fun v -> go_var v pol ip) (ordered sch t.vars)
           @ List.map (fun p -> PrimitiveType p) (SSet.elements t.prims)
           @ (match t.rcd with
              | Some fs ->

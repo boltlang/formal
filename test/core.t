@@ -14,9 +14,9 @@ Basics
   $ simplesub -e '(fun x -> x) 42'
   - : int
   $ simplesub -e 'fun f -> fun x -> f (f x)'
-  - : ('a -> 'a ∧ 'b) -> 'a -> 'b
+  - : ('a ∨ 'b -> 'a) -> 'b -> 'a
   $ simplesub -e 'let twice = fun f -> fun x -> f (f x) in twice'
-  - : ('a -> 'a ∧ 'b) -> 'a -> 'b
+  - : ('a ∨ 'b -> 'a) -> 'b -> 'a
 
 Records (width/depth subtyping)
 
@@ -127,7 +127,7 @@ Raw (coalesced but unsimplified) output, Sec. 3.3, versus simplified output
   $ simplesub --raw -e 'fun f -> fun x -> f (f x)'
   - : 'a ∧ ('b -> 'c) ∧ ('d -> 'b) -> 'd -> 'c
   $ simplesub -e 'fun f -> fun x -> f (f x)'
-  - : ('a -> 'a ∧ 'b) -> 'a -> 'b
+  - : ('a ∨ 'b -> 'a) -> 'b -> 'a
   $ simplesub --raw -e 'let rec f = fun x -> {L = x; R = f x} in f'
   - : 'a ∨ ('b -> {L: 'b, R: ('d ∨ {L: 'b, R: 'c} as 'c)})
   $ simplesub -e 'let rec f = fun x -> {L = x; R = f x} in f'
