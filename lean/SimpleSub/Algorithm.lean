@@ -4,9 +4,10 @@ import SimpleSub.Types
 /-!
 # A model of the inference algorithm
 
-The OCaml type checker (`lib/typer.ml`) and raw coalescing
-(`lib/coalesce.ml`), without levels (that is, without let-polymorphism, as
-in the paper's proof, Sec. 5). Following the paper (Sec. 5.2), the only
+The OCaml type checker (`lib/typer.ml`), without levels (that is, without
+let-polymorphism, as in the paper's proof, Sec. 5). Coalescing
+(`lib/coalesce.ml`) only affects how types are printed and is left for the
+presentation of types (roadmap, step 5). Following the paper (Sec. 5.2), the only
 mutable state of the algorithm, the bounds of type variables, becomes an
 explicit `State`, and the algorithm's functions become big-step relations:
 
@@ -162,6 +163,35 @@ end State
 
 open State
 
+/-! ## No structural recursive types
+
+Unlike the OCaml code, the model rejects structural recursive types, as an
+occurs check would: no variable may reach itself through a type
+constructor. This is witnessed by a *ranking* of the variables (decidable
+for a finite graph, and checkable when given): the variables of a
+non-variable bound rank strictly below the bounded variable, and a
+variable bound ranks at most as high. Cycles of variable bounds such as
+`α ≤ β ≤ α` stay allowed: they equate variables without building an
+infinite type. -/
+
+mutual
+/-- The variables occurring in a type. -/
+def SType.vars : SType → List Nat
+  | .var v => [v]
+  | .prim _ | .abs => []
+  | .arrow a b => a.vars ++ b.vars
+  | .record fs t => fs.vars ++ t.vars
+
+def SFields.vars : SFields → List Nat
+  | .nil => []
+  | .cons _ f fs => f.vars ++ fs.vars
+end
+
+/-- The bounds of each variable are ranked by `r`. -/
+def StructRanked (σ : Nat → Bounds) (r : Nat → Nat) : Prop :=
+  ∀ v b, (b ∈ (σ v).upper ∨ b ∈ (σ v).lower) →
+    (∀ w, b = .var w → r w ≤ r v) ∧ ((∀ w, b ≠ .var w) → ∀ w ∈ b.vars, r w < r v)
+
 /-! ## Constraining (Fig. 9, with rows) -/
 
 mutual
@@ -294,60 +324,6 @@ def builtins : SCtx :=
     ("succ", .arrow (.prim "int") (.prim "int")),
     ("add", .arrow (.prim "int") (.arrow (.prim "int") (.prim "int"))) ]
 
-/-! ## Coalescing (Sec. 3.3.3, contractive as in `lib/coalesce.ml`)
-
-Positive occurrences of a variable become the union of the variable and its
-lower bounds, negative ones the intersection with its upper bounds. Every
-variable visit introduces a `μ` binder; meeting the same (variable,
-polarity) again refers back to it (`bvar` = how many visits ago), unless no
-type constructor was passed in between (`parents`), in which case the
-neutral element is used, so the result is contractive. Each visit uses up
-one unit of fuel; `2 * next + 1` always suffices, since a visit adds a new
-(variable, polarity) pair to `inProc`. -/
-
-def vname (v : Nat) : String := "α" ++ toString v
-
-def indexOf (p : Nat × Bool) : List (Nat × Bool) → Option Nat
-  | [] => none
-  | q :: qs => if q = p then some 0 else (indexOf p qs).map (· + 1)
-
-mutual
-def coalesce (σ : Nat → Bounds) : Nat → SType → Bool → List (Nat × Bool) → List Nat → Ty
-  | _, .prim n, _, _, _ => .prim n
-  | _, .abs, _, _, _ => .abs
-  | fuel, .arrow a b, pol, inProc, _ =>
-    .arrow (coalesce σ fuel a (!pol) inProc []) (coalesce σ fuel b pol inProc [])
-  | fuel, .record fs t, pol, inProc, parents =>
-    .record (coalesceF σ fuel fs pol inProc) (coalesce σ fuel t pol inProc parents)
-  | 0, .var v, _, _, _ => .fvar (vname v)
-  | fuel + 1, .var v, pol, inProc, parents =>
-    match indexOf (v, pol) inProc with
-    | some i => if v ∈ parents then (if pol then .bot else .top) else .bvar i
-    | none =>
-      let bounds := if pol then (σ v).lower else (σ v).upper
-      .mu (coalesceBounds σ fuel bounds pol ((v, pol) :: inProc) (v :: parents) (.fvar (vname v)))
-termination_by fuel st _ _ _ => (fuel, sizeOf st, 0)
-
-def coalesceF (σ : Nat → Bounds) : Nat → SFields → Bool → List (Nat × Bool) → Fields
-  | _, .nil, _, _ => .nil
-  | fuel, .cons n f fs, pol, inProc =>
-    .cons n (coalesce σ fuel f pol inProc []) (coalesceF σ fuel fs pol inProc)
-termination_by fuel fs _ _ => (fuel, sizeOf fs, 0)
-
-/-- Fold the bounds into a union (positive) or intersection (negative). -/
-def coalesceBounds (σ : Nat → Bounds) (fuel : Nat) : List SType → Bool → List (Nat × Bool) →
-    List Nat → Ty → Ty
-  | [], _, _, _, acc => acc
-  | b :: bs, pol, inProc, parents, acc =>
-    let t := coalesce σ fuel b pol inProc parents
-    coalesceBounds σ fuel bs pol inProc parents (if pol then .union acc t else .inter acc t)
-termination_by bs _ _ _ _ => (fuel, sizeOf bs, 1)
-end
-
-/-- Coalesce a positive type in state `s`. -/
-def coalesceTop (s : State) (st : SType) : Ty :=
-  coalesce s.bounds (2 * s.next + 1) st true [] []
-
 /-! ## Sanity checks -/
 
 section Examples
@@ -356,13 +332,6 @@ section Examples
 theorem typeTerm_id :
     TypeTerm builtins State.init (.lam "x" (.var "x")) (.arrow (.var 0) (.var 0)) State.init.fresh :=
   .lam rfl (.var rfl)
-
-/-- Its coalesced type: `(μ. α₀) → (μ. α₀)`, where each `μ` binds nothing
-(every variable visit introduces a binder). -/
-example : coalesceTop State.init.fresh (.arrow (.var 0) (.var 0)) =
-    .arrow (.mu (.fvar "α0")) (.mu (.fvar "α0")) := by
-  simp [coalesceTop, coalesce, coalesceBounds, indexOf, State.init, State.initK, State.fresh]
-  decide
 
 /-- `1 2` is rejected: there is no way to constrain `int ≤ int → α`. -/
 theorem typeTerm_app_lit : ¬ ∃ st s', TypeTerm builtins State.init (.app (.lit 1) (.lit 2)) st s' := by

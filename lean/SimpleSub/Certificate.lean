@@ -45,12 +45,17 @@ structure Certificate where
   vars : List (Nat × Bounds)
   /-- The kind of each variable with a non-empty kind. -/
   kinds : List (Nat × List String)
+  /-- A rank for each variable, witnessing that there are no structural
+  recursive types (`StructRanked`). -/
+  ranks : List (Nat × Nat)
 
 namespace Certificate
 
 def bounds (c : Certificate) (v : Nat) : Bounds := (c.vars.lookup v).getD {}
 
 def kind (c : Certificate) (v : Nat) : List String := (c.kinds.lookup v).getD []
+
+def rank (c : Certificate) (v : Nat) : Nat := (c.ranks.lookup v).getD 0
 
 /-- The certificate as an algorithm state (the counter, cache and
 expansion table play no role in validity). -/
@@ -64,6 +69,8 @@ structure Valid (c : Certificate) : Prop where
   inLog : BoundsInLog c.state
   nac : LogNAC c.state
   kinds : KLog c.kind c.state
+  /-- No variable reaches itself through a type constructor. -/
+  acyclic : StructRanked c.bounds c.rank
 
 end Certificate
 
@@ -212,19 +219,6 @@ theorem CTyp.sound {c : Certificate} (hv : c.Valid) (h : CTyp c Γ t st) :
 
 /-! ## Adequacy: every run yields a valid certificate -/
 
-mutual
-/-- The variables occurring in a type. -/
-def SType.vars : SType → List Nat
-  | .var v => [v]
-  | .prim _ | .abs => []
-  | .arrow a b => a.vars ++ b.vars
-  | .record fs t => fs.vars ++ t.vars
-
-def SFields.vars : SFields → List Nat
-  | .nil => []
-  | .cons _ f fs => f.vars ++ fs.vars
-end
-
 /-- The variables occurring in accepted constraints. -/
 def logVars (log : List (SType × SType)) : List Nat := log.flatMap fun p => p.1.vars ++ p.2.vars
 
@@ -244,18 +238,25 @@ theorem lookup_map_self {β : Type} (f : Nat → β) (v : Nat) :
       have : (v == w) = false := by simp [h]
       rw [this]; simp [ih, h]
 
-/-- The certificate of a state: its constraints, and the bounds and kinds of
-the variables they mention. -/
-def State.certificate (s : State) : Certificate where
+/-- The certificate of a state, for a ranking `r` of its variables: its
+constraints, and the bounds, kinds and ranks of the variables they
+mention. -/
+def State.certificate (s : State) (r : Nat → Nat) : Certificate where
   log := s.log
   vars := (logVars s.log).map fun v => (v, s.bounds v)
   kinds := (logVars s.log).map fun v => (v, s.kind v)
+  ranks := (logVars s.log).map fun v => (v, r v)
 
-theorem State.certificate_kind {s : State} {v : Nat} (h : v ∈ logVars s.log) :
-    s.certificate.kind v = s.kind v := by
+theorem State.certificate_kind {s : State} {r : Nat → Nat} {v : Nat} (h : v ∈ logVars s.log) :
+    (s.certificate r).kind v = s.kind v := by
   simp [Certificate.kind, State.certificate, lookup_map_self, h]
 
-theorem State.certificate_bounds {s : State} (i : Inv₂ s) : s.certificate.bounds = s.bounds := by
+theorem State.certificate_rank {s : State} {r : Nat → Nat} {v : Nat} (h : v ∈ logVars s.log) :
+    (s.certificate r).rank v = r v := by
+  simp [Certificate.rank, State.certificate, lookup_map_self, h]
+
+theorem State.certificate_bounds {s : State} {r : Nat → Nat} (i : Inv₂ s) :
+    (s.certificate r).bounds = s.bounds := by
   funext v
   simp only [Certificate.bounds, State.certificate, lookup_map_self]
   split
@@ -340,20 +341,35 @@ theorem Inv.congr {s s' : State} (hb : s'.bounds = s.bounds) (hl : s'.log = s.lo
   exact ⟨h.just, h.cons⟩
 
 /-- The certificate of a state satisfying the invariants is valid. -/
-theorem State.certificate_valid {s : State} (hi : Inv s) (i : Inv₂ s) (hn : LogNAC s)
-    (hk : KInv K s) : s.certificate.Valid := by
-  have hb := State.certificate_bounds i
-  refine ⟨Inv.congr hb rfl hi, ?_, ?_, ?_⟩
-  · exact (Inv₂.of_bounds (s' := s.certificate.state) i hb (fun _ hp => hp)).inLog
+theorem State.certificate_valid {s : State} {r : Nat → Nat} (hi : Inv s) (i : Inv₂ s)
+    (hn : LogNAC s) (hk : KInv K s) (hr : StructRanked s.bounds r) :
+    (s.certificate r).Valid := by
+  have hb := State.certificate_bounds (r := r) i
+  refine ⟨Inv.congr hb rfl hi, ?_, ?_, ?_, ?_⟩
+  · exact (Inv₂.of_bounds (s' := (s.certificate r).state) i hb (fun _ hp => hp)).inLog
   · exact hn
   · intro p hp
     have hv := mem_logVars hp
-    have h₁ : Agree K s.certificate.kind p.1 := fun v hv' => by
+    have h₁ : Agree K (s.certificate r).kind p.1 := fun v hv' => by
       rw [State.certificate_kind (s := s) (hv.1 v hv'), hk.kind]
-    have h₂ : Agree K s.certificate.kind p.2 := fun v hv' => by
+    have h₂ : Agree K (s.certificate r).kind p.2 := fun v hv' => by
       rw [State.certificate_kind (s := s) (hv.2 v hv'), hk.kind]
     have := hk.log p hp
     exact ⟨this.1.congr h₁, this.2.1.congr h₂, this.2.2.congr h₁ h₂⟩
+  · -- the ranks of the variables a bound mentions are the ranks `r` gives
+    intro v b hvb
+    rw [hb] at hvb
+    have hm : v ∈ logVars s.log ∧ ∀ w ∈ b.vars, w ∈ logVars s.log := by
+      rcases hvb with h | h
+      · have := mem_logVars (i.inLog.1 v b h)
+        exact ⟨this.1 v (by simp [SType.vars]), this.2⟩
+      · have := mem_logVars (i.inLog.2 v b h)
+        exact ⟨this.2 v (by simp [SType.vars]), this.1⟩
+    obtain ⟨h₁, h₂⟩ := hr v b hvb
+    rw [State.certificate_rank hm.1]
+    refine ⟨fun w hw => ?_, fun hnv w hw => ?_⟩
+    · rw [State.certificate_rank (hm.2 w (by subst hw; simp [SType.vars]))]; exact h₁ w hw
+    · rw [State.certificate_rank (hm.2 w hw)]; exact h₂ hnv w hw
 
 theorem Logged.accepts {s : State} {c : Certificate} (hlog : ∀ p, p ∈ s.log → p ∈ c.log) :
     Logged s a b → c.Accepts a b
@@ -414,19 +430,59 @@ theorem TypeFields.skeleton {c : Certificate} :
       (h₂.skeleton hΓ (h₁.inv₂ i) r₁.1 hlog)
 end
 
-/-- **Adequacy**: a run of the algorithm from scratch yields a valid
-certificate, with a typing skeleton for the term at the inferred type. -/
-theorem TypeTerm.certificate (h : TypeTerm builtins (State.initK K) t st s') :
-    s'.certificate.Valid ∧ CTyp s'.certificate builtins t st :=
+/-- The model *accepts* `t` at `st`: a run from scratch, ending in a state
+without structural recursive types. -/
+def Infers (K : Nat → List String) (t : Term) (st : SType) (s' : State) : Prop :=
+  TypeTerm builtins (State.initK K) t st s' ∧ ∃ r, StructRanked s'.bounds r
+
+/-- **Adequacy**: an accepted run yields a valid certificate, with a typing
+skeleton for the term at the inferred type. -/
+theorem TypeTerm.certificate (h : TypeTerm builtins (State.initK K) t st s')
+    (hr : StructRanked s'.bounds r) :
+    (s'.certificate r).Valid ∧ CTyp (s'.certificate r) builtins t st :=
   ⟨State.certificate_valid h.inv_init (h.inv₂ Inv₂.init)
-      (h.nac builtins_NAC Inv₂.init LogNAC.init).1 (h.kinds builtins_K Inv₂.init KInv.init).1,
+      (h.nac builtins_NAC Inv₂.init LogNAC.init).1 (h.kinds builtins_K Inv₂.init KInv.init).1 hr,
     h.skeleton builtins_NAC Inv₂.init LogNAC.init fun _ hp => hp⟩
 
-/-- Theorem 1 again, through certificates: the certificate of a run is
-valid, and its skeleton gives the declarative typing. -/
-theorem theorem1_cert (h : TypeTerm builtins (State.initK K) t st s') :
-    Typ (defsOf s'.certificate.state) builtins.toCtx t st.toTy :=
-  have r := h.certificate
-  CTyp.sound r.1 r.2
+/-! ## No recursive types in the solution -/
+
+mutual
+theorem SType.toTy_gvars : ∀ a : SType, a.toTy.gvars = a.vars
+  | .var _ | .prim _ | .abs => rfl
+  | .arrow a b => by simp only [SType.toTy, Ty.gvars, SType.vars, SType.toTy_gvars a, SType.toTy_gvars b]
+  | .record fs t => by
+    simp only [SType.toTy, Ty.gvars, SType.vars, SFields.toFields_gvars fs, SType.toTy_gvars t]
+
+theorem SFields.toFields_gvars : ∀ fs : SFields, fs.toFields.gvars = fs.vars
+  | .nil => rfl
+  | .cons _ g fs => by
+    simp only [SFields.toFields, Fields.gvars, SFields.vars, SType.toTy_gvars g,
+      SFields.toFields_gvars fs]
+end
+
+/-- Along a chain of variable bounds the rank does not grow; the variables
+of the non-variable bound at its end rank strictly lower. -/
+theorem Clo.ranked {σ : Nat → Bounds} {r : Nat → Nat} (hr : StructRanked σ r) :
+    Clo σ n u → ∀ m ∈ u.vars, r m < r n
+  | .here hu hnv, m, hm => (hr _ _ (.inl hu)).2 hnv m hm
+  | .step hv hc, m, hm => Nat.lt_of_lt_of_le (hc.ranked hr m hm) ((hr _ _ (.inl hv)).1 _ rfl)
+
+/-- **No recursive types**: the solution of a valid certificate defines
+each graph variable only in terms of graph variables of lower rank. -/
+theorem Certificate.Valid.nonrec {c : Certificate} (hv : c.Valid) :
+    Defs.Ranked (defsOf c.state) c.rank := by
+  rintro n _ ⟨u, hc, rfl⟩ m hm
+  rw [SType.toTy_gvars] at hm
+  exact hc.ranked hv.acyclic m hm
+
+/-- Theorem 1 again, through certificates: an accepted run has a valid
+certificate whose skeleton gives the declarative typing, over a solution
+without recursive types. -/
+theorem theorem1_cert (h : Infers K t st s') :
+    ∃ c : Certificate, Typ (defsOf c.state) builtins.toCtx t st.toTy ∧
+      ∃ r, Defs.Ranked (defsOf c.state) r := by
+  obtain ⟨h, r, hr⟩ := h
+  have hc := h.certificate hr
+  exact ⟨_, CTyp.sound hc.1 hc.2, _, hc.1.nonrec⟩
 
 end SimpleSub.Alg

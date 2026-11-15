@@ -49,12 +49,10 @@ def Ty.substM : Ty → (String → Option Ty) → Ty
   | .bot, _ => .bot
   | .abs, _ => .abs
   | .prim n, _ => .prim n
-  | .bvar i, _ => .bvar i
   | .union a b, m => .union (a.substM m) (b.substM m)
   | .inter a b, m => .inter (a.substM m) (b.substM m)
   | .arrow a b, m => .arrow (a.substM m) (b.substM m)
   | .record fs t, m => .record (fs.substM m) (t.substM m)
-  | .mu a, m => .mu (a.substM m)
   | .proj l t, m => .proj l (t.substM m)
   | .gvar n, _ => .gvar n
 
@@ -65,11 +63,10 @@ end
 
 mutual
 theorem Ty.substM_none : ∀ t : Ty, t.substM (fun _ => none) = t
-  | .fvar _ | .top | .bot | .abs | .prim _ | .bvar _ | .gvar _ => rfl
+  | .fvar _ | .top | .bot | .abs | .prim _ | .gvar _ => rfl
   | .union a b | .inter a b | .arrow a b => by
     simp only [Ty.substM, Ty.substM_none a, Ty.substM_none b]
   | .record fs t => by simp only [Ty.substM, Fields.substM_none fs, Ty.substM_none t]
-  | .mu a => by simp only [Ty.substM, Ty.substM_none a]
   | .proj _ t => by simp only [Ty.substM, Ty.substM_none t]
 
 theorem Fields.substM_none : ∀ fs : Fields, fs.substM (fun _ => none) = fs

@@ -1,13 +1,12 @@
 import SimpleSub.Types
 
 /-!
-# Declarative subtyping with equi-recursive types
+# Declarative subtyping
 
-Subtyping between recursive types must be coinductive (two recursive types
-are related if no finite amount of unfolding finds a difference), but only
-in a *guarded* way: unfolding `mu`, splitting unions and intersections and
-comparing row tails may happen only finitely often between two type
-constructors, otherwise `μα. α` would be related to everything. This is the
+Subtyping between graph variables, whose definitions may be cyclic, must be
+coinductive, but only in a *guarded* way: splitting unions and
+intersections, unfolding graph variables and comparing row tails may
+happen only finitely often between two type constructors. This is the
 formal content of the paper's `▷`/`◁` discipline (Fig. 10), where an
 assumption only becomes usable after passing through a function or record
 type.
@@ -26,18 +25,14 @@ related, where `Ty.field` looks a label up in the explicit fields and
 otherwise in the tail. The comparison of each field goes through the
 coinductive hypothesis (a record field is a constructor), and tails need no
 separate rule. A row variable's fields are opaque atoms `proj l ρ`, related
-only to themselves (and to `⊤`/`Abs`).
+only to themselves (and to `⊤`/`Abs`), or through a graph variable's
+definitions.
 
-Remaining gaps, all deliberate for now:
-
-* A *recursive* row in tail position (a row variable that is recursive
-  through its own fields) stays opaque instead of being unfolded.
-* Row variables have no kinds yet (Rémy: the labels a row variable lacks).
-  Without them, ill-kinded types such as `{| 'a} → {y: int | 'a}` (where
-  `'a` is used both with and without `y`) are accepted as types and get
-  conservative answers. **TODO: add kinds.**
-* The MLsub lattice equations that the simplifier relies on (merging
-  intersections of functions or records, distributivity) are not included.
+There are no structural recursive types (`Types.lean`); a recursive type
+can only arise through graph-variable definitions, which the model only
+allows without a cycle through a type constructor. The MLsub lattice
+equations that the simplifier relies on (merging intersections of
+functions or records, distributivity) are not included.
 -/
 
 namespace SimpleSub
@@ -51,6 +46,24 @@ that cycles between variables need no special treatment. -/
 abbrev Defs := Nat → Ty → Prop
 
 variable {E : Defs}
+
+mutual
+/-- The graph variables occurring in a type. -/
+def Ty.gvars : Ty → List Nat
+  | .gvar n => [n]
+  | .top | .bot | .abs | .prim _ | .fvar _ => []
+  | .union a b | .inter a b | .arrow a b => a.gvars ++ b.gvars
+  | .record fs t => fs.gvars ++ t.gvars
+  | .proj _ t => t.gvars
+
+def Fields.gvars : Fields → List Nat
+  | .nil => []
+  | .cons _ f fs => f.gvars ++ fs.gvars
+end
+
+/-- Definitions without recursive types: a graph variable's definitions
+only mention graph variables of strictly lower rank. -/
+def Defs.Ranked (E : Defs) (r : Nat → Nat) : Prop := ∀ n u, E n u → ∀ m ∈ u.gvars, r m < r n
 
 /-- One layer of subtyping, relative to the coinductive hypothesis `R`. -/
 inductive Step (E : Defs) (R : Ty → Ty → Prop) : Ty → Ty → Prop where
@@ -66,10 +79,6 @@ inductive Step (E : Defs) (R : Ty → Ty → Prop) : Ty → Ty → Prop where
   | interL₁ : Step E R a₁ b → Step E R (.inter a₁ a₂) b
   | interL₂ : Step E R a₂ b → Step E R (.inter a₁ a₂) b
   | interR : Step E R a b₁ → Step E R a b₂ → Step E R a (.inter b₁ b₂)
-  /-- Unfold a recursive type on the left (S-Rec). -/
-  | muL : Step E R (a.open (.mu a)) b → Step E R (.mu a) b
-  /-- Unfold a recursive type on the right (S-Rec). -/
-  | muR : Step E R a (b.open (.mu b)) → Step E R a (.mu b)
   /-- Function types: the hypothesis `R` becomes usable here (◁). -/
   | arrow : R b₁ a₁ → R a₂ b₂ → Step E R (.arrow a₁ a₂) (.arrow b₁ b₂)
   /-- Records, compared as rows: every label's field, under `R` (◁). -/
@@ -102,8 +111,6 @@ theorem Step.mono (hR : ∀ x y, R x y → R' x y) : Step E R a b → Step E R' 
   | interL₁ _ ih => exact .interL₁ ih
   | interL₂ _ ih => exact .interL₂ ih
   | interR _ _ ih₁ ih₂ => exact .interR ih₁ ih₂
-  | muL _ ih => exact .muL ih
-  | muR _ ih => exact .muR ih
   | arrow h₁ h₂ => exact .arrow (hR _ _ h₁) (hR _ _ h₂)
   | record hf => exact .record (fun l => hR _ _ (hf l))
   | proj => exact .proj
@@ -142,51 +149,24 @@ theorem Sub.top : Sub E a .top := Sub.of_step .top
 theorem Sub.bot : Sub E .bot b := Sub.of_step .bot
 theorem Sub.abs : Sub E a .abs := Sub.of_step .abs
 
-/-! ## Reflexivity
+/-! ## Reflexivity -/
 
-Reflexivity already needs the guarded structure: `μα. a` is related to
-itself by unfolding both sides, which only terminates because the
-unguarded size `ug` decreases under unfolding for contractive types
-(`ug_open`). -/
+theorem step_refl : (t : Ty) → Step E Eq t t
+  | .top => .top
+  | .bot => .bot
+  | .abs => .abs
+  | .prim _ => .prim
+  | .fvar _ => .fvar
+  | .union a b => .unionL (.unionR₁ (step_refl a)) (.unionR₂ (step_refl b))
+  | .inter a b => .interR (.interL₁ (step_refl a)) (.interL₂ (step_refl b))
+  | .arrow _ _ => .arrow rfl rfl
+  | .record _ _ => .record fun _ => rfl
+  | .proj _ _ => .proj
+  | .gvar _ => .gvar
 
-/-- The relation used to prove reflexivity. -/
-def ReflRel (x y : Ty) : Prop := x = y ∧ Contractive x ∧ LC 0 x
-
-theorem step_refl : (t : Ty) → Contractive t → LC 0 t → Step E ReflRel t t
-  | .top, _, _ => .top
-  | .bot, _, _ => .bot
-  | .abs, _, _ => .abs
-  | .prim _, _, _ => .prim
-  | .fvar _, _, _ => .fvar
-  | .bvar _, _, hlc => by cases hlc with | bvar h => exact absurd h (Nat.not_lt_zero _)
-  | .union a b, hc, hlc => by
-    cases hc with | union ha hb =>
-    cases hlc with | union la lb =>
-    exact .unionL (.unionR₁ (step_refl a ha la)) (.unionR₂ (step_refl b hb lb))
-  | .inter a b, hc, hlc => by
-    cases hc with | inter ha hb =>
-    cases hlc with | inter la lb =>
-    exact .interR (.interL₁ (step_refl a ha la)) (.interL₂ (step_refl b hb lb))
-  | .arrow a b, hc, hlc => by
-    cases hc with | arrow ha hb =>
-    cases hlc with | arrow la lb =>
-    exact .arrow ⟨rfl, ha, la⟩ ⟨rfl, hb, lb⟩
-  | .record fs t, hc, hlc => .record (fun _ => ⟨rfl, hc.field, hlc.field⟩)
-  | .proj _ _, _, _ => .proj
-  | .gvar _, _, _ => .gvar
-  | .mu a, hc, hlc => by
-    have hd : (a.open (.mu a)).ug < (Ty.mu a).ug := by
-      cases hc with | mu _ hg => exact ug_open a hg
-    exact .muL (.muR (step_refl (a.open (.mu a)) (Contractive.open hlc hc) (LC.open hlc)))
-termination_by t => t.ug
-decreasing_by
-  all_goals first
-    | assumption
-    | (simp only [Ty.ug]; omega)
-
-/-- Every closed contractive type is a subtype of itself. -/
-theorem Sub.refl (hc : Contractive t) (hlc : LC 0 t) : Sub E t t :=
-  Sub.coind ReflRel (by rintro x y ⟨rfl, hc, hlc⟩; exact step_refl x hc hlc) ⟨rfl, hc, hlc⟩
+/-- Every type is a subtype of itself. -/
+theorem Sub.refl : Sub E t t :=
+  Sub.coind Eq (by rintro x y rfl; exact step_refl x) rfl
 
 /-! ## Transitivity
 
@@ -195,15 +175,12 @@ itself is closed under `Step`. That reduces to a cut-elimination lemma on
 single layers (`cut`): from finite derivations of `x ≤ y` and `y ≤ z`, build
 one of `x ≤ z` whose guarded premises are again compositions. It goes by
 induction on the left derivation; when that derivation ends with a rule
-that takes `y` apart (`unionR`, `interR`, `muR`, or a constructor rule),
+that takes `y` apart (`unionR`, `interR`, or a constructor rule),
 one of the `cut_*` lemmas below does an induction on the right derivation:
 rules that take `z` apart commute outward, and the rule that takes `y`
-apart must be the matching one (`unionL`, `interL`, `muL`, the same
+apart must be the matching one (`unionL`, `interL`, the same
 constructor), which cuts on smaller derivations. No rule takes `⊤` or `Abs`
-apart on the left, so those cases are vacuous.
-
-Contractiveness is not needed: every cut is between finite (inductive)
-derivations. -/
+apart on the left, so those cases are vacuous. -/
 
 /-- A relation, or its composition with itself. Including `R` itself lets
 a cut against the reflexive atom rule of a *defined* variable reuse the
@@ -234,10 +211,9 @@ theorem cut_top : ∀ y z, Step E R y z → y = .top → Step E (RComp R) x z :=
   | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
   | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
   | interR _ _ ih₁' ih₂' => intro hy; exact .interR (ih₁' hy) (ih₂' hy)
-  | muR _ ih' => intro hy; exact .muR (ih' hy)
   | defR _ ih' => intro hy; exact .defR fun u hu => ih' u hu hy
   | projDefR _ ih' => intro hy; exact .projDefR fun u hu => ih' u hu hy
-  | bot | prim | fvar | proj | gvar | unionL | interL₁ | interL₂ | muL | arrow | record | defL | projDefL =>
+  | bot | prim | fvar | proj | gvar | unionL | interL₁ | interL₂ | arrow | record | defL | projDefL =>
     intro hy; cases hy
 
 theorem cut_abs : ∀ y z, Step E R y z → y = .abs → Step E (RComp R) x z := by
@@ -248,10 +224,9 @@ theorem cut_abs : ∀ y z, Step E R y z → y = .abs → Step E (RComp R) x z :=
   | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
   | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
   | interR _ _ ih₁' ih₂' => intro hy; exact .interR (ih₁' hy) (ih₂' hy)
-  | muR _ ih' => intro hy; exact .muR (ih' hy)
   | defR _ ih' => intro hy; exact .defR fun u hu => ih' u hu hy
   | projDefR _ ih' => intro hy; exact .projDefR fun u hu => ih' u hu hy
-  | bot | prim | fvar | proj | gvar | unionL | interL₁ | interL₂ | muL | arrow | record | defL | projDefL =>
+  | bot | prim | fvar | proj | gvar | unionL | interL₁ | interL₂ | arrow | record | defL | projDefL =>
     intro hy; cases hy
 
 /-- Atoms (`prim`, `fvar`, `proj`, `gvar`): `x` is the atom itself. A graph
@@ -268,7 +243,6 @@ theorem cut_atom
   | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
   | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
   | interR _ _ ih₁' ih₂' => intro hy; exact .interR (ih₁' hy) (ih₂' hy)
-  | muR _ ih' => intro hy; exact .muR (ih' hy)
   | defR _ ih' => intro hy; exact .defR fun u hu => ih' u hu hy
   | projDefR _ ih' => intro hy; exact .projDefR fun u hu => ih' u hu hy
   | prim => intro hy; subst hy; exact .prim
@@ -277,7 +251,7 @@ theorem cut_atom
   | gvar => intro hy; subst hy; exact .gvar
   | defL hd h' _ => intro hy; subst hy; exact (Step.defL hd h').toComp
   | projDefL hd h' _ => intro hy; subst hy; exact (Step.projDefL hd h').toComp
-  | bot | unionL | interL₁ | interL₂ | muL | arrow | record =>
+  | bot | unionL | interL₁ | interL₂ | arrow | record =>
     intro hy; subst hy
     rcases hatom with ⟨_, h⟩ | ⟨_, h⟩ | ⟨_, _, h⟩ | ⟨_, h⟩ <;> cases h
 
@@ -290,11 +264,10 @@ theorem cut_unionR₁ (ih : ∀ z, Step E R y₁ z → Step E (RComp R) x z) :
   | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
   | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
   | interR _ _ ih₁' ih₂' => intro hy; exact .interR (ih₁' hy) (ih₂' hy)
-  | muR _ ih' => intro hy; exact .muR (ih' hy)
   | defR _ ih' => intro hy; exact .defR fun u hu => ih' u hu hy
   | projDefR _ ih' => intro hy; exact .projDefR fun u hu => ih' u hu hy
   | unionL h₁ _ _ _ => intro hy; cases hy; exact ih _ h₁
-  | bot | prim | fvar | proj | gvar | interL₁ | interL₂ | muL | arrow | record | defL | projDefL =>
+  | bot | prim | fvar | proj | gvar | interL₁ | interL₂ | arrow | record | defL | projDefL =>
     intro hy; cases hy
 
 theorem cut_unionR₂ (ih : ∀ z, Step E R y₂ z → Step E (RComp R) x z) :
@@ -306,11 +279,10 @@ theorem cut_unionR₂ (ih : ∀ z, Step E R y₂ z → Step E (RComp R) x z) :
   | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
   | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
   | interR _ _ ih₁' ih₂' => intro hy; exact .interR (ih₁' hy) (ih₂' hy)
-  | muR _ ih' => intro hy; exact .muR (ih' hy)
   | defR _ ih' => intro hy; exact .defR fun u hu => ih' u hu hy
   | projDefR _ ih' => intro hy; exact .projDefR fun u hu => ih' u hu hy
   | unionL _ h₂ _ _ => intro hy; cases hy; exact ih _ h₂
-  | bot | prim | fvar | proj | gvar | interL₁ | interL₂ | muL | arrow | record | defL | projDefL =>
+  | bot | prim | fvar | proj | gvar | interL₁ | interL₂ | arrow | record | defL | projDefL =>
     intro hy; cases hy
 
 theorem cut_interR (ih₁ : ∀ z, Step E R y₁ z → Step E (RComp R) x z)
@@ -323,28 +295,11 @@ theorem cut_interR (ih₁ : ∀ z, Step E R y₁ z → Step E (RComp R) x z)
   | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
   | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
   | interR _ _ ih₁' ih₂' => intro hy; exact .interR (ih₁' hy) (ih₂' hy)
-  | muR _ ih' => intro hy; exact .muR (ih' hy)
   | defR _ ih' => intro hy; exact .defR fun u hu => ih' u hu hy
   | projDefR _ ih' => intro hy; exact .projDefR fun u hu => ih' u hu hy
   | interL₁ h _ => intro hy; cases hy; exact ih₁ _ h
   | interL₂ h _ => intro hy; cases hy; exact ih₂ _ h
-  | bot | prim | fvar | proj | gvar | unionL | muL | arrow | record | defL | projDefL =>
-    intro hy; cases hy
-
-theorem cut_muR (ih : ∀ z, Step E R (b.open (.mu b)) z → Step E (RComp R) x z) :
-    ∀ y z, Step E R y z → y = .mu b → Step E (RComp R) x z := by
-  intro y z h
-  induction h with
-  | top => intro _; exact .top
-  | abs => intro _; exact .abs
-  | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
-  | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
-  | interR _ _ ih₁' ih₂' => intro hy; exact .interR (ih₁' hy) (ih₂' hy)
-  | muR _ ih' => intro hy; exact .muR (ih' hy)
-  | defR _ ih' => intro hy; exact .defR fun u hu => ih' u hu hy
-  | projDefR _ ih' => intro hy; exact .projDefR fun u hu => ih' u hu hy
-  | muL h _ => intro hy; cases hy; exact ih _ h
-  | bot | prim | fvar | proj | gvar | unionL | interL₁ | interL₂ | arrow | record | defL | projDefL =>
+  | bot | prim | fvar | proj | gvar | unionL | arrow | record | defL | projDefL =>
     intro hy; cases hy
 
 /-- The middle type is a graph variable, reached by `defR` on the left (so
@@ -361,12 +316,11 @@ theorem cut_defR (hl : ∀ u, E n u → Step E R x u)
   | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
   | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
   | interR _ _ ih₁' ih₂' => intro hy; exact .interR (ih₁' hy) (ih₂' hy)
-  | muR _ ih' => intro hy; exact .muR (ih' hy)
   | defR _ ih' => intro hy; exact .defR fun u hu => ih' u hu hy
   | projDefR _ ih' => intro hy; exact .projDefR fun u hu => ih' u hu hy
   | gvar => intro hy; cases hy; exact (Step.defR hl).toComp
   | defL hd h _ => intro hy; cases hy; exact ih _ hd _ h
-  | bot | prim | fvar | proj | unionL | interL₁ | interL₂ | muL | arrow | record | projDefL =>
+  | bot | prim | fvar | proj | unionL | interL₁ | interL₂ | arrow | record | projDefL =>
     intro hy; cases hy
 
 theorem cut_projDefR (hl : ∀ u, E n u → Step E R x (u.field l))
@@ -379,12 +333,11 @@ theorem cut_projDefR (hl : ∀ u, E n u → Step E R x (u.field l))
   | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
   | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
   | interR _ _ ih₁' ih₂' => intro hy; exact .interR (ih₁' hy) (ih₂' hy)
-  | muR _ ih' => intro hy; exact .muR (ih' hy)
   | defR _ ih' => intro hy; exact .defR fun u hu => ih' u hu hy
   | projDefR _ ih' => intro hy; exact .projDefR fun u hu => ih' u hu hy
   | proj => intro hy; cases hy; exact (Step.projDefR hl).toComp
   | projDefL hd h _ => intro hy; cases hy; exact ih _ hd _ h
-  | bot | prim | fvar | gvar | unionL | interL₁ | interL₂ | muL | arrow | record | defL =>
+  | bot | prim | fvar | gvar | unionL | interL₁ | interL₂ | arrow | record | defL =>
     intro hy; cases hy
 
 theorem cut_arrow (h₁ : R b₁ a₁) (h₂ : R a₂ b₂) :
@@ -396,11 +349,10 @@ theorem cut_arrow (h₁ : R b₁ a₁) (h₂ : R a₂ b₂) :
   | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
   | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
   | interR _ _ ih₁' ih₂' => intro hy; exact .interR (ih₁' hy) (ih₂' hy)
-  | muR _ ih' => intro hy; exact .muR (ih' hy)
   | defR _ ih' => intro hy; exact .defR fun u hu => ih' u hu hy
   | projDefR _ ih' => intro hy; exact .projDefR fun u hu => ih' u hu hy
   | arrow g₁ g₂ => intro hy; cases hy; exact .arrow (.inr ⟨_, g₁, h₁⟩) (.inr ⟨_, h₂, g₂⟩)
-  | bot | prim | fvar | proj | gvar | unionL | interL₁ | interL₂ | muL | record | defL | projDefL =>
+  | bot | prim | fvar | proj | gvar | unionL | interL₁ | interL₂ | record | defL | projDefL =>
     intro hy; cases hy
 
 theorem cut_record
@@ -413,11 +365,10 @@ theorem cut_record
   | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
   | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
   | interR _ _ ih₁' ih₂' => intro hy; exact .interR (ih₁' hy) (ih₂' hy)
-  | muR _ ih' => intro hy; exact .muR (ih' hy)
   | defR _ ih' => intro hy; exact .defR fun u hu => ih' u hu hy
   | projDefR _ ih' => intro hy; exact .projDefR fun u hu => ih' u hu hy
   | record hg => intro hy; cases hy; exact .record fun l => .inr ⟨_, hf l, hg l⟩
-  | bot | prim | fvar | proj | gvar | unionL | interL₁ | interL₂ | muL | arrow | defL | projDefL =>
+  | bot | prim | fvar | proj | gvar | unionL | interL₁ | interL₂ | arrow | defL | projDefL =>
     intro hy; cases hy
 
 end Cut
@@ -440,8 +391,6 @@ theorem cut : Step E R x y → ∀ z, Step E R y z → Step E (RComp R) x z := b
   | interL₁ _ ih => intro z hr; exact .interL₁ (ih z hr)
   | interL₂ _ ih => intro z hr; exact .interL₂ (ih z hr)
   | interR _ _ ih₁ ih₂ => intro z hr; exact cut_interR ih₁ ih₂ _ z hr rfl
-  | muL _ ih => intro z hr; exact .muL (ih z hr)
-  | muR _ ih => intro z hr; exact cut_muR ih _ z hr rfl
   | arrow h₁ h₂ => intro z hr; exact cut_arrow h₁ h₂ _ z hr rfl
   | record hf => intro z hr; exact cut_record hf _ z hr rfl
   | defL hd _ ih => intro z hr; exact .defL hd (ih z hr)
@@ -481,40 +430,38 @@ theorem Sub.coind_trans (R : Ty → Ty → Prop) (hR : ∀ x y, R x y → Step E
     (h : R a b) : Sub E a b :=
   Sub.coind (TC R) (fun _ _ h => TC.step hR h) (.base h)
 
-/-! ## Recursive types equal their unfolding (S-Rec) -/
+/-! ## The paper's example (Sec. 5.1.3), with graph variables
 
-theorem Sub.unfold (hc : Contractive (.mu a)) (hlc : LC 0 (.mu a)) :
-    Sub E (.mu a) (a.open (.mu a)) :=
-  Sub.of_step (.muL (Sub.refl (Contractive.open hlc hc) (LC.open hlc)).step)
-
-theorem Sub.fold (hc : Contractive (.mu a)) (hlc : LC 0 (.mu a)) :
-    Sub E (a.open (.mu a)) (.mu a) :=
-  Sub.of_step (.muR (Sub.refl (Contractive.open hlc hc) (LC.open hlc)).step)
-
-/-! ## The paper's example (Sec. 5.1.3)
-
-`μα₀. τ → τ → α₀ ≤ μα₁. τ → α₁`: these types never unfold to the same
-syntax, so the proof needs a genuine coinductive hypothesis. -/
+`A = τ → τ → A ≤ B = τ → B`: the two recursive types never unfold to the
+same syntax, so the proof needs a genuine coinductive hypothesis. They are
+written as graph variables `0` and `1`, defined by their unfoldings. -/
 
 namespace PaperExample
 
 def τ : Ty := .prim "t"
-def A : Ty := .mu (.arrow τ (.arrow τ (.bvar 0)))
-def B : Ty := .mu (.arrow τ (.bvar 0))
+def A : Ty := .gvar 0
+def B : Ty := .gvar 1
 
-theorem paper_example : Sub E A B := by
+/-- `A` is defined as `τ → τ → A`, `B` as `τ → B`. -/
+def E₀ : Defs := fun n t =>
+  (n = 0 ∧ t = .arrow τ (.arrow τ A)) ∨ (n = 1 ∧ t = .arrow τ B)
+
+theorem paper_example : Sub E₀ A B := by
   refine Sub.coind
     (fun x y => (x = A ∧ y = B) ∨ (x = .arrow τ A ∧ y = B) ∨ (x = τ ∧ y = τ))
     ?_ (Or.inl ⟨rfl, rfl⟩)
   rintro x y (⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩)
-  · -- unfold both sides: τ → (τ → A) ≤ τ → B
-    refine .muL (.muR ?_)
-    show Step E _ (.arrow τ (.arrow τ A)) (.arrow τ B)
-    exact .arrow (Or.inr (Or.inr ⟨rfl, rfl⟩)) (Or.inr (Or.inl ⟨rfl, rfl⟩))
-  · -- unfold the right: τ → A ≤ τ → B
-    refine .muR ?_
-    show Step E _ (.arrow τ A) (.arrow τ B)
-    exact .arrow (Or.inr (Or.inr ⟨rfl, rfl⟩)) (Or.inl ⟨rfl, rfl⟩)
+  · -- B's only definition is `τ → B`; use A's: τ → (τ → A) ≤ τ → B
+    refine .defR fun u hu => ?_
+    rcases hu with ⟨h, _⟩ | ⟨_, rfl⟩
+    · exact absurd h (by decide)
+    · exact .defL (Or.inl ⟨rfl, rfl⟩)
+        (.arrow (Or.inr (Or.inr ⟨rfl, rfl⟩)) (Or.inr (Or.inl ⟨rfl, rfl⟩)))
+  · -- τ → A ≤ τ → B
+    refine .defR fun u hu => ?_
+    rcases hu with ⟨h, _⟩ | ⟨_, rfl⟩
+    · exact absurd h (by decide)
+    · exact .arrow (Or.inr (Or.inr ⟨rfl, rfl⟩)) (Or.inl ⟨rfl, rfl⟩)
   · exact .prim
 
 end PaperExample
@@ -578,46 +525,5 @@ theorem not_empty_le_field : ¬ Sub E (.record .nil .abs) (.record (.cons "x" in
     cases this
 
 end Rows
-
-/-! ## Why non-contractive types are excluded
-
-The paper's coalescing produces `μα. int ∧ α` for a variable cycle. Under
-these rules it is *strictly below* `int`: `int ≤ μα. int ∧ α` would need
-infinitely many unfoldings without passing a constructor, which the
-inductive `Step` cannot do. The simplifier, however, treats such a cycle as
-`int`. Hence `lib/coalesce.ml` only emits contractive types. -/
-
-namespace NonContractive
-
-def M : Ty := .mu (.inter (.prim "int") (.bvar 0))
-
-theorem M_le_int : Sub E M (.prim "int") :=
-  Sub.of_step (.muL (show Step E (Sub E) (.inter (.prim "int") M) (.prim "int") from .interL₁ .prim))
-
-theorem not_int_le_M : ¬ Sub E (.prim "int") M := by
-  rintro ⟨R, hR, h⟩
-  suffices ∀ x y, Step E R x y → x = .prim "int" →
-      (y = M ∨ y = .inter (.prim "int") M) → False from
-    this _ _ (hR _ _ h) rfl (Or.inl rfl)
-  intro x y hs
-  induction hs with
-  | top | abs | prim | unionR₁ | unionR₂ | defR | projDefR =>
-    intro _ hy; rcases hy with hy | hy <;> simp [M] at hy
-  | bot | fvar | unionL | interL₁ | interL₂ | muL | arrow | record | proj | gvar | defL | projDefL =>
-    intro hx; simp at hx
-  | interR _ _ _ ih₂ =>
-    intro hx hy
-    rcases hy with hy | hy
-    · simp [M] at hy
-    · cases hy; exact ih₂ hx (Or.inl rfl)
-  | muR _ ih =>
-    intro hx hy
-    rcases hy with hy | hy
-    · simp only [M, Ty.mu.injEq] at hy
-      subst hy
-      exact ih hx (Or.inr rfl)
-    · simp [M] at hy
-
-end NonContractive
 
 end SimpleSub

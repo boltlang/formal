@@ -157,12 +157,10 @@ expanded and memoized per label set. A few more rules apply:
 in `lean/`. Everything below is proved; there are no `sorry`s.
 
 - `SimpleSub/Syntax.lean`: terms, mirroring `lib/syntax.ml`.
-- `SimpleSub/Types.lean`: types with rows, μ-binders as de Bruijn
-  indices (locally nameless), local closedness, contractiveness, and the
-  *unguarded size* `ug`. That's the size of the part not under a function
-  type or record field. Unfolding a contractive μ strictly decreases it
-  (`ug_open`).
-- `SimpleSub/Sub.lean`: declarative subtyping with equi-recursive types.
+- `SimpleSub/Types.lean`: types with rows. There are no structural
+  recursive types (no `μ`): the model rejects them, as an occurs check
+  would, and recursive data is meant to be nominal (issue #4).
+- `SimpleSub/Sub.lean`: declarative subtyping.
   `Step E R` is one layer of subtyping. It's inductive and uses the
   coinductive hypothesis `R` only under a function type or record field,
   which is the paper's ▷/◁ discipline. `E` gives *graph variables*
@@ -170,17 +168,15 @@ in `lean/`. Everything below is proved; there are no `sorry`s.
   possibly mutually recursive definitions without binders, used to express
   solutions. `Sub` is the greatest fixed point
   (Knaster–Tarski), with a coinduction principle `Sub.coind`. Proved so far:
-  - `Sub.refl`: every closed contractive type is a subtype of itself.
-  - `Sub.trans`: transitivity, with no side conditions (not even
-    contractiveness). The proof is cut elimination on single layers
-    (`cut`): induction on the two finite derivations, with the composed
-    relation as the coinductive hypothesis.
-  - `Sub.unfold`/`Sub.fold` (S-Rec): `μα. a ≡ a[μα. a/α]`.
-  - `paper_example`: the paper's §5.1.3 example,
-    `μα₀. τ → τ → α₀ ≤ μα₁. τ → α₁`.
-  - `M_le_int` and `not_int_le_M`: the non-contractive `μα. int ∧ α` is
-    strictly below `int`. This is why raw coalescing only emits contractive
-    types.
+  - `Sub.refl`: every type is a subtype of itself.
+  - `Sub.trans`: transitivity. The proof is cut elimination on single
+    layers (`cut`, for any relation in the guarded premises): induction
+    on the two finite derivations, with the composed relation as the
+    coinductive hypothesis. `Sub.coind_trans` is coinduction up to
+    transitivity.
+  - `paper_example`: the paper's §5.1.3 example, `A = τ → τ → A ≤
+    B = τ → B`, with `A` and `B` graph variables defined by their
+    unfoldings.
   - `field_in_compound_tail`, `bottom_tail`, `nested_tail`: row facts
     that need tails to be looked into. One is the shape the simplifier
     produces for `count`. `not_empty_le_field` checks the other direction.
@@ -188,9 +184,8 @@ in `lean/`. Everything below is proved; there are no `sorry`s.
   Records are compared as rows, i.e. total maps from labels to fields:
   `{fs | t} ≤ {gs | u}` when every label's field is related. `Ty.field`
   looks a label up in the explicit fields, then in the tail. A row
-  variable's fields are opaque atoms `proj l ρ`. Not covered yet: recursive
-  rows in tail position (kept opaque), kinds, and the MLsub lattice
-  equations. The OCaml code uses five such equations that aren't derivable
+  variable's fields are opaque atoms `proj l ρ`. Not covered yet: the
+  MLsub lattice equations. The OCaml code uses five such equations that aren't derivable
   yet: merging intersections and unions of functions, merging intersections
   and unions of records, and distributing a row over a union of tails.
   Adding them while keeping transitivity is the next milestone.
@@ -213,18 +208,22 @@ in `lean/`. Everything below is proved; there are no `sorry`s.
   proves that function merging isn't derivable from the minimal rules. The
   file header records the sequent-style plan for adding the equations.
 - `SimpleSub/Typing.lean`: declarative typing over the minimal subtyping
-  rules. `let` is monomorphic for now, but contexts hold schemes, so
-  built-ins like `if` instantiate. It includes record extension, and the
-  examples `typ_twice`, `typ_if` and `typ_ext` (the extension example of
-  Marques et al.).
-- `SimpleSub/Algorithm.lean`: a model of `lib/typer.ml` and
-  `lib/coalesce.ml`, without levels. Bounds live in an explicit `State`.
+  rules, with constrained schemes for built-ins and let-polymorphism, and
+  record extension. Examples: `typ_twice`, `typ_if`, `typ_ext` (the
+  extension example of Marques et al.), `typ_letPoly`,
+  `typ_letConstrained`.
+- `SimpleSub/Algorithm.lean`: a model of `lib/typer.ml`, without levels.
+  Coalescing only affects printing and is left for step 5. Unlike the
+  OCaml code, the model rejects structural recursive types: an accepted
+  run ends in a state whose bounds are ranked (`StructRanked`: a
+  variable's non-variable bounds mention only lower-ranked variables,
+  its variable bounds none of higher rank). Cycles of variable bounds
+  stay allowed. Bounds live in an explicit `State`.
   `Constrain`, including row expansion, and `TypeTerm` are big-step
   relations: "succeeds from state `s` with state `s'`". A type error is the
   absence of a derivation. Rules only apply where the OCaml `match` would
   reach them, so the relations are as deterministic as the code.
-  Coalescing is a function, contractive like `lib/coalesce.ml`. Sanity
-  checks: `fun x -> x`, `1 2` is rejected, and in `(fun x -> x) 42`
+  Sanity checks: `fun x -> x`, `1 2` is rejected, and in `(fun x -> x) 42`
   propagation gives the result variable the lower bound `int`. The state
   has a ghost `log` of every accepted constraint, which exists only for
   the proofs.
@@ -348,12 +347,14 @@ proof, where they are needed.
    the soundness proofs rely on (justification, consistency, kinds, `Abs`
    only in rows), so Theorem 1 applies to every accepted certificate.
    - 6a, proofs: done (`Certificate.lean`). A certificate lists the
-     accepted constraints, the bounds and the kinds; validity is the
-     invariants over those finite lists. Soundness (`CTyp.sound`): a
-     valid certificate with a typing skeleton for a term gives its
-     declarative typing. Adequacy (`TypeTerm.certificate`): every run of
-     the model yields a valid certificate and skeleton, so a correct
-     inferencer is never rejected.
+     accepted constraints, the bounds, the kinds and a rank per variable;
+     validity is the invariants over those finite lists, including that
+     the ranks exclude structural recursive types. Soundness
+     (`CTyp.sound`): a valid certificate with a typing skeleton for a
+     term gives its declarative typing, and its solution has no recursive
+     types (`Valid.nonrec`). Adequacy (`TypeTerm.certificate`): every
+     accepted run of the model yields a valid certificate and skeleton,
+     so a correct inferencer is never rejected.
    - 6b, programs: to do. Boolean checks with proofs that they decide
      validity and skeletons, and certificate output from `lib/typer.ml`.
 
