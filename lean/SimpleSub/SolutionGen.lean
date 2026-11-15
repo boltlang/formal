@@ -38,7 +38,9 @@ structure GenHyp (s : State) (A : List Nat) (I : Nat → Ty) : Prop where
   out : ∀ v, v ∉ A → I v = .gvar v
   avoid : ∀ v, v ∉ A → ∀ b, (b ∈ (s.bounds v).upper ∨ b ∈ (s.bounds v).lower) → Av A b
   up : ∀ α ∈ A, ∀ u ∈ (s.bounds α).upper, Holds (defsOf s) (I α) (u.interp I)
-  low : ∀ α ∈ A, ∀ l ∈ (s.bounds α).lower, Holds (defsOf s) (l.interp I) (I α)
+  low : ∀ α ∈ A, ∀ l ∈ (s.bounds α).lower,
+    (l ≠ .abs → Sub (defsOf s) (l.interp I) (I α)) ∧
+      ∀ f, Sub (defsOf s) ((l.interp I).field f) ((I α).field f)
 
 section
 variable {s : State} {A : List Nat} {I : Nat → Ty}
@@ -183,7 +185,11 @@ theorem stepTyG (hi : Inv s) (hn : LogNAC s) (hr : TailRanked s rank) (hg : GenH
       · exact absurd ⟨Av.var.2 hv, hg.avoid v hv _ (.inl hub)⟩ hav
     | @varR v _ hlb =>
       by_cases hv : v ∈ A
-      · exact .of_sub (hg.low v hv _ hlb).1
+      · have ha' : a ≠ .abs := by
+          rcases ha with ha | ha
+          · exact ha
+          · subst ha; exact fun h => nomatch h
+        exact .of_sub ((hg.low v hv _ hlb).1 ha')
       · exact absurd ⟨hg.avoid v hv _ (.inr hlb), Av.var.2 hv⟩ hav
     | @viaL v b' _ hb hbv hba hnv hR =>
       by_cases hv : v ∈ A
@@ -195,7 +201,7 @@ theorem stepTyG (hi : Inv s) (hn : LogNAC s) (hr : TailRanked s rank) (hg : GenH
         exact .defL ⟨_, .here hb hbv, rfl⟩ h
     | @viaR v a' _ hl' h₁ h₂ hav' haa hR =>
       by_cases hv : v ∈ A
-      · exact (stepNonvarG hi hn hR haa hav' h₁).comp (StG.of_sub (hg.low v hv _ hl').1)
+      · exact (stepNonvarG hi hn hR haa hav' h₁).comp (StG.of_sub ((hg.low v hv _ hl').1 h₂))
       · show StG s I _ (I v)
         rw [hg.out v hv]
         refine .defR fun τ ⟨u, hc, hτ⟩ => ?_

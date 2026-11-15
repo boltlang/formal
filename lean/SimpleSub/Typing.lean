@@ -91,11 +91,21 @@ def Scheme.mono (t : Ty) : Scheme := .poly [] [] t
 variable may stand for a row). -/
 def Holds (E : Defs) (a b : Ty) : Prop := Sub E a b ∧ ∀ l, Sub E (a.field l) (b.field l)
 
+/-- A constraint `a ≤ b` of a scheme holds after substituting `m`: field
+by field, and also as subtyping unless `a` is `Abs`. A constraint with
+`Abs` on the left (`Abs ≤ ρ`: the row `ρ` guarantees no field) is a row
+constraint, only meaningful field by field, since `Abs` is the top type.
+The condition is on `a` before substitution, so instantiating a variable
+with `Abs` does not discharge its constraints. -/
+def SatAfter (E : Defs) (m : String → Option Ty) (p : Ty × Ty) : Prop :=
+  (p.1 ≠ .abs → Sub E (p.1.substM m) (p.2.substM m)) ∧
+    ∀ l, Sub E ((p.1.substM m).field l) ((p.2.substM m).field l)
+
 /-- `τ` is an instance of `σ`: substitute types for (some of) its
 quantified variables, such that its constraints hold. -/
 def Scheme.Instance (E : Defs) (σ : Scheme) (τ : Ty) : Prop :=
   ∃ m : String → Option Ty, (∀ x, (m x).isSome → x ∈ σ.vars) ∧
-    (∀ p ∈ σ.cs, Holds E (p.1.substM m) (p.2.substM m)) ∧ τ = σ.body.substM m
+    (∀ p ∈ σ.cs, SatAfter E m p) ∧ τ = σ.body.substM m
 
 theorem Scheme.instance_mono (E : Defs) (t : Ty) : (Scheme.mono t).Instance E t :=
   ⟨fun _ => none, by simp, (fun _ h => nomatch h), (Ty.substM_none t).symm⟩
@@ -275,11 +285,14 @@ theorem typ_letConstrained :
   have inst : σ.Instance E (.arrow int int) :=
     ⟨fun y => if y = "a" then some int else none,
       fun y hy => by by_cases h : y = "a" <;> simp_all [σ],
-      fun p hp => by simp only [σ, List.mem_singleton] at hp; subst hp; simpa [Ty.substM, int] using hint,
+      fun p hp => by
+        simp only [σ, List.mem_singleton] at hp; subst hp
+        exact ⟨fun _ => by simpa [Ty.substM, int] using hint.1,
+          fun l => by simpa [Ty.substM, int] using hint.2 l⟩,
       by simp [σ, Ty.substM, int]⟩
   refine .letIn (σ := σ) (fun τ' ⟨m, _, hcs, h⟩ => ?_) inst (.app (.var rfl inst) .lit)
   subst h
-  have hc := (hcs _ (List.mem_singleton.mpr rfl)).1
+  have hc := (hcs _ (List.mem_singleton.mpr rfl)).1 (fun h => nomatch h)
   simp only [Ty.substM] at hc ⊢
   exact .lam (.app (.var_mono rfl) (.sub (.var_mono rfl) hc))
 
