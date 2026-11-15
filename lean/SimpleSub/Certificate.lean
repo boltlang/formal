@@ -105,31 +105,110 @@ theorem Certificate.Valid.sub {c : Certificate} (hv : c.Valid) (h : c.Accepts a 
     (ha : a ≠ .abs) : Sub (defsOf c.state) a.toTy b.toTy :=
   hv.final.sub (s := c.state) h (fun _ h => h) ha
 
+/-! ### Interpretations
+
+Generalizing a `let` needs the right-hand side typed with some variables
+read as *free* type variables instead of graph variables. So soundness is
+stated for any interpretation `I` of the variables: if every accepted
+constraint holds under `I`, the skeleton gives a typing under `I`. -/
+
 mutual
+/-- A simple type, with variable `v` read as `I v`. -/
+def SType.interp (I : Nat → Ty) : SType → Ty
+  | .var v => I v
+  | .prim n => .prim n
+  | .arrow a b => .arrow (a.interp I) (b.interp I)
+  | .record fs t => .record (fs.interp I) (t.interp I)
+  | .abs => .abs
+
+def SFields.interp (I : Nat → Ty) : SFields → Fields
+  | .nil => .nil
+  | .cons n f fs => .cons n (f.interp I) (fs.interp I)
+end
+
+mutual
+theorem SType.interp_gvar : ∀ a : SType, a.interp .gvar = a.toTy
+  | .var _ | .prim _ | .abs => rfl
+  | .arrow a b => by simp only [SType.interp, SType.toTy, SType.interp_gvar a, SType.interp_gvar b]
+  | .record fs t => by
+    simp only [SType.interp, SType.toTy, SFields.interp_gvar fs, SType.interp_gvar t]
+
+theorem SFields.interp_gvar : ∀ fs : SFields, fs.interp .gvar = fs.toFields
+  | .nil => rfl
+  | .cons _ g fs => by
+    simp only [SFields.interp, SFields.toFields, SType.interp_gvar g, SFields.interp_gvar fs]
+end
+
+theorem SFields.interp_absOf (I : Nat → Ty) : ∀ F : SFields,
+    F.absOf.interp I = (F.interp I).absOf
+  | .nil => rfl
+  | .cons _ _ F => by
+    simp only [SFields.absOf, SFields.interp, SType.interp, Fields.absOf, SFields.interp_absOf I F]
+
+/-- The context, interpreted. -/
+def SCtx.toCtxI (I : Nat → Ty) (Γ : SCtx) : Ctx :=
+  Γ.map fun p => (p.1, Scheme.mono (p.2.interp I))
+
+theorem SCtx.toCtxI_gvar (Γ : SCtx) : Γ.toCtxI .gvar = Γ.toCtx := by
+  simp only [SCtx.toCtxI, SCtx.toCtx, SType.interp_gvar]
+
+theorem SCtx.lookup_toCtxI {I : Nat → Ty} {Γ : SCtx} {x : String} {st : SType}
+    (h : Γ.lookup x = some st) : (Γ.toCtxI I).lookup x = some (.mono (st.interp I)) := by
+  induction Γ with
+  | nil => simp [SCtx.lookup] at h
+  | cons p Γ ih =>
+    simp only [SCtx.lookup, List.find?_cons] at h
+    simp only [SCtx.toCtxI, List.map_cons, Ctx.lookup, List.find?_cons]
+    by_cases hp : p.1 = x
+    · simp only [hp, decide_true] at h ⊢
+      simp at h
+      subst h
+      rfl
+    · simp only [hp, decide_false] at h ⊢
+      have := ih h
+      simpa [SCtx.toCtxI, Ctx.lookup] using this
+
+/-- The certificate's constraints hold under `I` in `E`. -/
+def Certificate.HoldsUnder (c : Certificate) (E : Defs) (I : Nat → Ty) : Prop :=
+  ∀ a b, c.Accepts a b → a ≠ .abs → Sub E (a.interp I) (b.interp I)
+
+mutual
+/-- **Soundness under an interpretation**: if the certificate's constraints
+hold under `I`, a typing skeleton gives a declarative typing under `I`. -/
+theorem CTyp.soundI {c : Certificate} {E : Defs} {I : Nat → Ty} (H : c.HoldsUnder E I) :
+    CTyp c Γ t st → Typ E (Γ.toCtxI I) t (st.interp I)
+  | .lit => .lit
+  | .var hx => Typ.var_mono (SCtx.lookup_toCtxI hx)
+  | .lam h => .lam (h.soundI H)
+  | .app h₁ h₂ ha hc => .app (.sub (h₁.soundI H) (H _ _ hc ha)) (h₂.soundI H)
+  | .rcd h => .rcd (h.soundI H)
+  | .sel h ha hc => .sel (.sub (h.soundI H) (H _ _ hc ha))
+  | .ext h₁ h₂ ha hc => by
+    have hs := H _ _ hc ha
+    simp only [SType.interp, SFields.interp_absOf] at hs
+    exact .ext (.sub (h₁.soundI H) hs) (h₂.soundI H)
+  | .extNil h => .extNil (h.soundI H)
+  | .letIn h₁ h₂ => Typ.letIn_mono (h₁.soundI H) (h₂.soundI H)
+  | .letRec h₁ ha hc h₂ => Typ.letRec_mono (.sub (h₁.soundI H) (H _ _ hc ha)) (h₂.soundI H)
+
+theorem CFields.soundI {c : Certificate} {E : Defs} {I : Nat → Ty} (H : c.HoldsUnder E I) :
+    CFields c Γ fs F → TypFields E (Γ.toCtxI I) fs (F.interp I)
+  | .nil => .nil
+  | .cons h₁ h₂ => .cons (h₁.soundI H) (h₂.soundI H)
+end
+
+/-- A valid certificate's constraints hold of its solution. -/
+theorem Certificate.Valid.holds {c : Certificate} (hv : c.Valid) :
+    c.HoldsUnder (defsOf c.state) .gvar := fun a b h ha => by
+  rw [SType.interp_gvar, SType.interp_gvar]; exact hv.sub h ha
+
 /-- **Theorem 1 for certificates**: a typing skeleton checked against a
 valid certificate gives a declarative typing, at the type the skeleton
 assigns translated through the certificate's solution. -/
-theorem CTyp.sound {c : Certificate} (hv : c.Valid) :
-    CTyp c Γ t st → Typ (defsOf c.state) Γ.toCtx t st.toTy
-  | .lit => .lit
-  | .var hx => Typ.var_mono (SCtx.lookup_toCtx hx)
-  | .lam h => .lam (h.sound hv)
-  | .app h₁ h₂ ha hc => .app (.sub (h₁.sound hv) (hv.sub hc ha)) (h₂.sound hv)
-  | .rcd h => .rcd (h.sound hv)
-  | .sel h ha hc => .sel (.sub (h.sound hv) (hv.sub hc ha))
-  | .ext h₁ h₂ ha hc => by
-    have hs := hv.sub hc ha
-    simp only [SType.toTy, SFields.toFields_absOf] at hs
-    exact .ext (.sub (h₁.sound hv) hs) (h₂.sound hv)
-  | .extNil h => .extNil (h.sound hv)
-  | .letIn h₁ h₂ => Typ.letIn_mono (h₁.sound hv) (h₂.sound hv)
-  | .letRec h₁ ha hc h₂ => Typ.letRec_mono (.sub (h₁.sound hv) (hv.sub hc ha)) (h₂.sound hv)
-
-theorem CFields.sound {c : Certificate} (hv : c.Valid) :
-    CFields c Γ fs F → TypFields (defsOf c.state) Γ.toCtx fs F.toFields
-  | .nil => .nil
-  | .cons h₁ h₂ => .cons (h₁.sound hv) (h₂.sound hv)
-end
+theorem CTyp.sound {c : Certificate} (hv : c.Valid) (h : CTyp c Γ t st) :
+    Typ (defsOf c.state) Γ.toCtx t st.toTy := by
+  have := h.soundI hv.holds
+  rwa [SCtx.toCtxI_gvar, SType.interp_gvar] at this
 
 /-! ## Adequacy: every run yields a valid certificate -/
 
@@ -348,6 +427,6 @@ valid, and its skeleton gives the declarative typing. -/
 theorem theorem1_cert (h : TypeTerm builtins (State.initK K) t st s') :
     Typ (defsOf s'.certificate.state) builtins.toCtx t st.toTy :=
   have r := h.certificate
-  r.2.sound r.1
+  CTyp.sound r.1 r.2
 
 end SimpleSub.Alg
