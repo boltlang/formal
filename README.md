@@ -9,6 +9,7 @@ dune build
 dune exec -- simplesub -e 'fun f -> fun x -> f (f x)'
 dune exec -- simplesub program.sub      # or read from stdin
 dune exec -- simplesub --raw -e '...'   # skip simplification (Sec. 3.3 output)
+dune exec -- simplesub --rectypes -e '...'   # allow recursive types, as in the paper
 dune exec -- simplesub -e '...' --expect "'a -> 'a"   # check modulo equivalence
 dune exec -- simplesub --self-check program.sub      # simplified ≡ raw, per item
 dune exec -- simplesub --compare "⊤ -> int" "'a -> int" # relate two type schemes
@@ -116,6 +117,16 @@ expanded and memoized per label set. A few more rules apply:
 
 ## Deviations from the paper
 
+- **No structural recursive types by default.** Like an occurs check,
+  inference rejects a type variable that reaches itself through a type
+  constructor, following both upper and lower bounds (`check_acyclic` in
+  `lib/typer.ml`). Variable-only cycles such as `α ≤ β ≤ α` are fine.
+  Recursive data is meant to be nominal, as in Bolt (issue #4).
+  `--rectypes` restores the paper's equi-recursive types; the paper's
+  recursive examples in the tests use it. Following both bound directions
+  is conservative: `fun x -> if true then x else {a = x}` is rejected,
+  as HM rejects it, although its type `'a -> 'a ∨ {a: 'a}` is not
+  recursive.
 - **Raw coalescing only produces contractive types.** Every recursive
   occurrence is under a function or record field. A variable cycle with no
   constructor in between, like `α ≤ β ≤ α`, gives the neutral element of
@@ -213,7 +224,7 @@ in `lean/`. Everything below is proved; there are no `sorry`s.
   extension example of Marques et al.), `typ_letPoly`,
   `typ_letConstrained`.
 - `SimpleSub/Algorithm.lean`: a model of `lib/typer.ml`, without levels.
-  Coalescing only affects printing and is left for step 5. Unlike the
+  Coalescing only affects printing and is left for step 5. Like the
   OCaml code, the model rejects structural recursive types: an accepted
   run ends in a state whose bounds are ranked (`StructRanked`: a
   variable's non-variable bounds mention only lower-ranked variables,

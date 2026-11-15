@@ -165,8 +165,8 @@ open State
 
 /-! ## No structural recursive types
 
-Unlike the OCaml code, the model rejects structural recursive types, as an
-occurs check would: no variable may reach itself through a type
+Like the OCaml code (`check_acyclic`, unless `--rectypes`), the model
+rejects structural recursive types, as an occurs check would: no variable may reach itself through a type
 constructor. This is witnessed by a *ranking* of the variables (decidable
 for a finite graph, and checkable when given): the variables of a
 non-variable bound rank strictly below the bounded variable, and a

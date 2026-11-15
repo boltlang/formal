@@ -129,6 +129,49 @@ let rec row_kind = function
           Some (SSet.diff k labels))
   | _ -> None
 
+(** {1 No structural recursive types}
+
+    Like an occurs check, inference rejects a type variable that reaches
+    itself through a type constructor, following both upper and lower
+    bounds. Cycles of variable bounds only ([α ≤ β ≤ α]) equate variables
+    and are allowed. [--rectypes] restores the paper's equi-recursive types.
+    Only installing a bound in [constrain] can close a cycle: extrusion and
+    instantiation copy an acyclic graph, and copies of it are acyclic. This
+    is the check the Lean model's [StructRanked] stands for. *)
+
+let allow_recursive = ref false
+
+let rec vars_of acc = function
+  | Variable vs -> vs :: acc
+  | Function (l, r) -> vars_of (vars_of acc l) r
+  | Record (fs, t) -> List.fold_left (fun acc (_, f) -> vars_of acc f) (vars_of acc t) fs
+  | Primitive _ | Abs -> acc
+
+(** Does [v] reach itself through a type constructor? A search over
+    (variable, passed a constructor) pairs. *)
+let reaches_itself (v : var_state) : bool =
+  let seen = Hashtbl.create 16 in
+  let rec visit (u : var_state) guarded =
+    if u == v && guarded then true
+    else if Hashtbl.mem seen (u.id, guarded) then false
+    else begin
+      Hashtbl.add seen (u.id, guarded) ();
+      List.exists (edge guarded) (u.upper_bounds @ u.lower_bounds)
+    end
+  and edge guarded = function
+    | Variable w -> visit w guarded
+    | b -> List.exists (fun w -> visit w true) (vars_of [] b)
+  in
+  List.exists (edge false) (v.upper_bounds @ v.lower_bounds)
+
+(** Reject the bound just installed on [v] if it closes a recursive type. *)
+let check_acyclic (v : var_state) (bound : simple_type) =
+  if (not !allow_recursive) && reaches_itself v then
+    err
+      (Printf.sprintf
+         "recursive type: %s reaches itself through a type constructor (via bound %s)"
+         (show_simple (Variable v)) (show_simple bound))
+
 (** Check that a new bound of [v] has [v]'s kind. *)
 let check_kind (vs : var_state) (bound : simple_type) =
   match row_kind bound with
@@ -205,10 +248,12 @@ let constrain (lhs : simple_type) (rhs : simple_type) : unit =
           check_kind lv rhs;
           (* install the new bound *before* propagating (see Sec. 3.2.2) *)
           lv.upper_bounds <- rhs :: lv.upper_bounds;
+          check_acyclic lv rhs;
           List.iter (fun lb -> go lb rhs) lv.lower_bounds
       | _, Variable rv when level lhs <= rv.level ->
           check_kind rv lhs;
           rv.lower_bounds <- lhs :: rv.lower_bounds;
+          check_acyclic rv lhs;
           List.iter (fun ub -> go lhs ub) rv.upper_bounds
       | Variable lv, _ ->
           let rhs' = extrude rhs false lv.level (PolarTbl.create 8) in

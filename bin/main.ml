@@ -5,6 +5,9 @@
 
    Options:
      --raw          print coalesced types without simplification (Sec. 3.3)
+     --rectypes     allow structural recursive types, as in the paper (by
+                    default a type variable may not reach itself through a
+                    type constructor)
      --expect TYPE  check that each inferred type is equivalent to TYPE
      --self-check   check that each simplified type is equivalent to the raw
                     coalesced type (i.e. that simplification is sound)
@@ -16,7 +19,7 @@ open Simplesub
 
 let usage () =
   prerr_endline
-    "usage: simplesub [--raw] [--expect TYPE] [--self-check] [FILE | -e SOURCE]\n\
+    "usage: simplesub [--raw] [--rectypes] [--expect TYPE] [--self-check] [FILE | -e SOURCE]\n\
     \       simplesub --compare TYPE1 TYPE2";
   exit 2
 
@@ -79,6 +82,9 @@ let () =
   let rec parse ((simplify, expect, self_check, src) as acc) = function
     | "--raw" :: rest -> parse (false, expect, self_check, src) rest
     | "--self-check" :: rest -> parse (simplify, expect, true, src) rest
+    | "--rectypes" :: rest ->
+        Typer.allow_recursive := true;
+        parse acc rest
     | "--expect" :: t :: rest ->
         parse (simplify, Some (parse_type_or_exit t), self_check, src) rest
     | "-e" :: s :: rest when src = None -> parse (simplify, expect, self_check, Some s) rest

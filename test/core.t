@@ -34,7 +34,7 @@ when they are never eliminated
 
   $ simplesub -e 'fun x -> if x then 1 else 2'
   - : bool -> int
-  $ simplesub -e 'fun x -> if true then x else {a = x}'
+  $ simplesub --rectypes -e 'fun x -> if true then x else {a = x}'
   - : 'a -> 'a ∨ {a: 'a}
 
 Let polymorphism (levels, freshenAbove)
@@ -51,24 +51,47 @@ Extrusion: a lambda-bound variable flowing into a let-bound definition
   $ simplesub -e 'fun k -> let f = fun x -> k x in {a = f 1; b = f true}'
   - : (bool ∨ int -> 'a) -> {a: 'a, b: 'a}
 
-Recursion and recursive types (Sec. 3.4.1, 4.3.2)
+Recursive types are rejected by default, as by an occurs check: no type
+variable may reach itself through a type constructor (following upper and
+lower bounds). Recursive data is meant to be nominal. Variable-only cycles
+are fine. Like HM, this also rejects joining a value with a structure
+containing it, although subtyping could type that without recursion.
 
   $ simplesub -e 'let rec f = fun x -> f in f'
+  - : type error: recursive type: α2 reaches itself through a type constructor (via bound (α3 -> α2))
+  [1]
+  $ simplesub -e 'fun x -> x x'
+  - : type error: recursive type: α2 reaches itself through a type constructor (via bound (α2 -> α3))
+  [1]
+  $ simplesub -e 'let rec len = fun l -> if l.isNil then 0 else succ (len l.tail) in len'
+  - : type error: recursive type: α11 reaches itself through a type constructor (via bound α3)
+  [1]
+  $ simplesub -e 'fun x -> if true then x else {a = x}'
+  - : type error: recursive type: α6 reaches itself through a type constructor (via bound {a: α2})
+  [1]
+  $ simplesub -e 'let rec loop = fun x -> loop x in loop'
+  - : ⊤ -> ⊥
+  $ simplesub -e 'fun f -> fun x -> if true then f x else x'
+  - : ('a -> 'b) -> 'a ∧ 'b -> 'b
+
+Recursion and recursive types (Sec. 3.4.1, 4.3.2), with `--rectypes`
+
+  $ simplesub --rectypes -e 'let rec f = fun x -> f in f'
   - : (⊤ -> 'a as 'a)
-  $ simplesub -e 'let rec f = fun x -> {L = x; R = f x} in f'
+  $ simplesub --rectypes -e 'let rec f = fun x -> {L = x; R = f x} in f'
   - : 'a -> ({L: 'a, R: 'b} as 'b)
-  $ simplesub -e 'let rec x = (let y = x in (fun x -> y)) in x'
+  $ simplesub --rectypes -e 'let rec x = (let y = x in (fun x -> y)) in x'
   - : (⊤ -> 'a as 'a)
-  $ simplesub -e 'let rec produce = fun arg -> {head = arg; tail = produce (succ arg)} in produce'
+  $ simplesub --rectypes -e 'let rec produce = fun arg -> {head = arg; tail = produce (succ arg)} in produce'
   - : int -> ({head: int, tail: 'a} as 'a)
-  $ simplesub -e 'let rec consume = fun strm -> add strm.head (consume strm.tail) in consume'
+  $ simplesub --rectypes -e 'let rec consume = fun strm -> add strm.head (consume strm.tail) in consume'
   - : ({head: int, tail: 'a} as 'a) -> int
 
 Self-application and the Y combinator
 
-  $ simplesub -e 'fun x -> x x'
+  $ simplesub --rectypes -e 'fun x -> x x'
   - : 'a ∧ ('a -> 'b) -> 'b
-  $ simplesub -e 'let y = fun f -> (fun x -> f (x x)) (fun x -> f (x x)) in y (fun f -> fun x -> f)'
+  $ simplesub --rectypes -e 'let y = fun f -> (fun x -> f (x x)) (fun x -> f (x x)) in y (fun f -> fun x -> f)'
   - : (⊤ -> 'a as 'a)
 
 Top-level declarations are generalized and can be reused. A failing
@@ -84,7 +107,7 @@ flow typing, so `length` demands a `tail` field even on the `isNil = true` node
   > let ok = {a = id 1; b = id {c = true}; n = length nils}
   > let use = length {isNil = false; tail = {isNil = true}}
   > SRC
-  $ simplesub prog.sub
+  $ simplesub --rectypes prog.sub
   let id : 'a -> 'a
   let length : ({isNil: bool, tail: 'a} as 'a) -> int
   let nils : ({isNil: bool, tail: 'a} as 'a)
@@ -112,7 +135,7 @@ Type errors
   $ simplesub -e 'let f = fun x -> x.a in f {b = 1}'
   - : type error: missing field: a in {b: int}
   [1]
-  $ simplesub -e 'let rec f = fun x -> f x.a in f {a = {a = 1}}'
+  $ simplesub --rectypes -e 'let rec f = fun x -> f x.a in f {a = {a = 1}}'
   - : type error: cannot constrain int <: {a: α9}
   [1]
 
@@ -128,9 +151,9 @@ Raw (coalesced but unsimplified) output, Sec. 3.3, versus simplified output
   - : 'a ∧ ('b -> 'c) ∧ ('d -> 'b) -> 'd -> 'c
   $ simplesub -e 'fun f -> fun x -> f (f x)'
   - : ('a ∨ 'b -> 'a) -> 'b -> 'a
-  $ simplesub --raw -e 'let rec f = fun x -> {L = x; R = f x} in f'
+  $ simplesub --rectypes --raw -e 'let rec f = fun x -> {L = x; R = f x} in f'
   - : 'a ∨ ('b -> {L: 'b, R: ('d ∨ {L: 'b, R: 'c} as 'c)})
-  $ simplesub -e 'let rec f = fun x -> {L = x; R = f x} in f'
+  $ simplesub --rectypes -e 'let rec f = fun x -> {L = x; R = f x} in f'
   - : 'a -> ({L: 'a, R: 'b} as 'b)
   $ simplesub --raw -e 'fun x -> {L = add x 1; R = if true then 0 else x}'
   - : 'a ∧ 'b ∧ 'c ∧ int -> {L: 'd ∨ int, R: 'c ∨ int}
@@ -139,15 +162,15 @@ Raw (coalesced but unsimplified) output, Sec. 3.3, versus simplified output
 
 More cases from the paper (Secs. 2-4)
 
-  $ simplesub -e 'fun x -> x x x'
+  $ simplesub --rectypes -e 'fun x -> x x x'
   - : 'a ∧ ('a -> 'a -> 'b) -> 'b
-  $ simplesub -e '(fun x -> x x) (fun x -> x x)'
+  $ simplesub --rectypes -e '(fun x -> x x) (fun x -> x x)'
   - : ⊥
-  $ simplesub -e 'fun x -> {l = x x; r = x}'
+  $ simplesub --rectypes -e 'fun x -> {l = x x; r = x}'
   - : 'a ∧ ('a -> 'b) -> {l: 'b, r: 'a}
-  $ simplesub -e 'fun f -> (fun x -> f (x x)) (fun x -> f (x x))'
+  $ simplesub --rectypes -e 'fun f -> (fun x -> f (x x)) (fun x -> f (x x))'
   - : ('a -> 'a) -> 'a
-  $ simplesub -e 'let rec f = fun x -> f x.u in f'
+  $ simplesub --rectypes -e 'let rec f = fun x -> f x.u in f'
   - : ({u: 'a} as 'a) -> ⊥
   $ simplesub -e 'fun x -> fun y -> fun z -> if x then y else z'
   - : bool -> 'a -> 'a -> 'a

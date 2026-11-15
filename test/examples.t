@@ -11,7 +11,7 @@ simplified type is equivalent to the raw coalesced one.
   let inc : int -> int
   let plus2 : int -> int
   let negate_twice : bool -> bool
-  $ simplesub --self-check ../examples/errors.sub
+  $ simplesub --rectypes --self-check ../examples/errors.sub
   let not_a_function : type error: cannot constrain int <: (int -> α2)
   let wrong_arg : type error: cannot constrain bool <: int
   let missing_field : type error: missing field: b in {a: int}
@@ -51,7 +51,7 @@ simplified type is equivalent to the raw coalesced one.
   let count : 'a ∧ {n: int | 'b ∧ {done: bool}} ∧ {done: bool} -> 'a ∨ {n: int | 'b}
   let noZ : type error: missing field: z in {x: int}
   [1]
-  $ simplesub --self-check ../examples/recursion.sub
+  $ simplesub --rectypes --self-check ../examples/recursion.sub
   let produce : int -> ({head: int, tail: 'a} as 'a)
   let sum : ({head: int, tail: 'a} as 'a) -> int
   let total : int

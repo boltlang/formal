@@ -67,11 +67,11 @@ Non-polar types are rejected
   - : ('a ∨ 'b -> 'a) -> 'b -> 'a
   $ simplesub -e 'fun x -> 42' --expect "⊤ -> int"
   - : ⊤ -> int
-  $ simplesub -e 'let rec f = fun x -> {L = x; R = f x} in f' --expect "'a -> ({L: 'a, R: 'b} as 'b)"
+  $ simplesub --rectypes -e 'let rec f = fun x -> {L = x; R = f x} in f' --expect "'a -> ({L: 'a, R: 'b} as 'b)"
   - : 'a -> ({L: 'a, R: 'b} as 'b)
-  $ simplesub -e 'let rec f = fun x -> f in f' --expect "(⊤ -> 'a as 'a)"
+  $ simplesub --rectypes -e 'let rec f = fun x -> f in f' --expect "(⊤ -> 'a as 'a)"
   - : (⊤ -> 'a as 'a)
-  $ simplesub -e 'let rec x = (let y = x in (fun x -> y)) in x' --expect "(⊤ -> 'a as 'a)"
+  $ simplesub --rectypes -e 'let rec x = (let y = x in (fun x -> y)) in x' --expect "(⊤ -> 'a as 'a)"
   - : (⊤ -> 'a as 'a)
   $ simplesub -e 'fun x -> {L = add x 1; R = if true then 0 else x}' --expect "int -> {L: int, R: int}"
   - : int -> {L: int, R: int}
