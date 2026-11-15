@@ -19,4 +19,10 @@ inductive Term where
   | letIn : (isRec : Bool) → String → Term → Term → Term
   deriving Repr, Inhabited
 
+/-- The term is a function. Evaluation is eager, so `let rec x = s` must
+bind a function: any other `s` would be evaluated before `x` exists. -/
+def Term.IsFun : Term → Prop
+  | .lam _ _ => True
+  | _ => False
+
 end SimpleSub

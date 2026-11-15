@@ -513,7 +513,7 @@ theorem TypeTerm.kinds : TypeTerm Γ s t st s' → CtxK K Γ → Inv₂ s → KI
   | .letIn h₁ h₂, hΓ, i, k => by
     have r₁ := h₁.kinds hΓ i k
     exact h₂.kinds (hΓ.cons r₁.2.1 r₁.2.2) (h₁.inv₂ i) r₁.1
-  | .letRec (x := x) hn h₁ hc h₂, hΓ, i, k => by
+  | .letRec (x := x) _ hn h₁ hc h₂, hΓ, i, k => by
     have hv := KEmpty.var_nil (k.kind ▸ hn)
     have hΓ' := hΓ.cons (x := x) (st := .var _) trivial hv
     have r₁ := h₁.kinds hΓ' i.fresh ⟨k.kind, k.log, k.exps⟩

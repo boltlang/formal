@@ -74,6 +74,17 @@ containing it, although subtyping could type that without recursion.
   $ simplesub -e 'fun f -> fun x -> if true then f x else x'
   - : ('a -> 'b) -> 'a ∧ 'b -> 'b
 
+`let rec` only binds functions: evaluation is eager, so any other
+right-hand side would be evaluated before the name it defines exists.
+
+  $ simplesub -e 'let rec x = succ x in x'
+  - : type error: let rec x: the right-hand side must be a function
+  [1]
+  $ simplesub -e 'let rec f = fun x -> f (succ x) in f'
+  - : int -> ⊥
+  $ simplesub -e 'let f = fun x -> let rec g = fun y -> g x in g in f'
+  - : ⊤ -> ⊤ -> ⊥
+
 Recursion and recursive types (Sec. 3.4.1, 4.3.2), with `--rectypes`
 
   $ simplesub --rectypes -e 'let rec f = fun x -> f in f'
@@ -81,7 +92,8 @@ Recursion and recursive types (Sec. 3.4.1, 4.3.2), with `--rectypes`
   $ simplesub --rectypes -e 'let rec f = fun x -> {L = x; R = f x} in f'
   - : 'a -> ({L: 'a, R: 'b} as 'b)
   $ simplesub --rectypes -e 'let rec x = (let y = x in (fun x -> y)) in x'
-  - : (⊤ -> 'a as 'a)
+  - : type error: let rec x: the right-hand side must be a function
+  [1]
   $ simplesub --rectypes -e 'let rec produce = fun arg -> {head = arg; tail = produce (succ arg)} in produce'
   - : int -> ({head: int, tail: 'a} as 'a)
   $ simplesub --rectypes -e 'let rec consume = fun strm -> add strm.head (consume strm.tail) in consume'
@@ -97,7 +109,8 @@ Self-application and the Y combinator
 Top-level declarations are generalized and can be reused. A failing
 declaration is reported and skipped. `use` is rightly rejected: there is no
 flow typing, so `length` demands a `tail` field even on the `isNil = true` node
-(its input type is `μb. {tail: b, isNil: bool}`; only a cyclic record fits).
+(its input type is `μb. {tail: b, isNil: bool}`; only a cyclic record fits,
+and `let rec` cannot build one, since it only binds functions).
 
   $ cat > prog.sub <<'SRC'
   > // a small program
@@ -110,8 +123,8 @@ flow typing, so `length` demands a `tail` field even on the `isNil = true` node
   $ simplesub --rectypes prog.sub
   let id : 'a -> 'a
   let length : ({isNil: bool, tail: 'a} as 'a) -> int
-  let nils : ({isNil: bool, tail: 'a} as 'a)
-  let ok : {a: int, b: {c: bool}, n: int}
+  let nils : type error: let rec nils: the right-hand side must be a function
+  let ok : type error: identifier not found: nils
   let use : type error: missing field: tail in {isNil: bool}
   [1]
 

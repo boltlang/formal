@@ -354,8 +354,18 @@ let rec type_term (ctx : ctx) (lvl : int) (trm : term) : simple_type =
       type_term (StringMap.add name sch ctx) lvl body
 
 (** Type the right-hand side of a (possibly recursive) let binding at level
-    [lvl + 1] and generalize it. Shared by local and top-level lets. *)
+    [lvl + 1] and generalize it. Shared by local and top-level lets.
+
+    The language is eagerly evaluated, so [let rec x = s] evaluates [s]
+    once, before [x] exists: [s] must be a function, whose body only runs
+    (and reads [x]) once it is called. Cyclic data such as
+    [let rec ones = {head = 1; tail = ones}] is rejected. *)
 and type_let_rhs ctx lvl isrec name rhs : type_scheme =
+  (match rhs with
+  | Lam _ -> ()
+  | _ when isrec ->
+      err (Printf.sprintf "let rec %s: the right-hand side must be a function" name)
+  | _ -> ());
   let rhs_ty =
     if isrec then begin
       let exp = fresh_var (lvl + 1) in

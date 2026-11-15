@@ -72,7 +72,8 @@ Non-polar types are rejected
   $ simplesub --rectypes -e 'let rec f = fun x -> f in f' --expect "(⊤ -> 'a as 'a)"
   - : (⊤ -> 'a as 'a)
   $ simplesub --rectypes -e 'let rec x = (let y = x in (fun x -> y)) in x' --expect "(⊤ -> 'a as 'a)"
-  - : (⊤ -> 'a as 'a)
+  - : type error: let rec x: the right-hand side must be a function
+  [1]
   $ simplesub -e 'fun x -> {L = add x 1; R = if true then 0 else x}' --expect "int -> {L: int, R: int}"
   - : int -> {L: int, R: int}
 

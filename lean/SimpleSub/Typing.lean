@@ -145,8 +145,10 @@ inductive Typ (E : Defs) : Ctx → Term → Ty → Prop where
   /-- `let`: `s` has every instance of the scheme `σ`, which has one. -/
   | letIn : (∀ τ', σ.Instance E τ' → Typ E Γ s τ') → σ.Instance E τ₀ →
       Typ E ((x, σ) :: Γ) t τ → Typ E Γ (.letIn false x s t) τ
-  /-- `let rec`: for every instance, `s` has it assuming `x` has it. -/
-  | letRec : (∀ τ', σ.Instance E τ' → Typ E ((x, .mono τ') :: Γ) s τ') → σ.Instance E τ₀ →
+  /-- `let rec`: `s` is a function (evaluation is eager), and for every
+  instance, `s` has it assuming `x` has it. -/
+  | letRec : s.IsFun → (∀ τ', σ.Instance E τ' → Typ E ((x, .mono τ') :: Γ) s τ') →
+      σ.Instance E τ₀ →
       Typ E ((x, σ) :: Γ) t τ → Typ E Γ (.letIn true x s t) τ
   /-- Subsumption. -/
   | sub : Typ E Γ t τ → Sub E τ τ' → Typ E Γ t τ'
@@ -185,9 +187,9 @@ theorem Typ.letIn_mono {Γ : Ctx} (h₁ : Typ E Γ s σ) (h₂ : Typ E ((x, .mon
   .letIn (fun _ h => Scheme.instance_mono_eq h ▸ h₁) (Scheme.instance_mono E σ) h₂
 
 /-- A monomorphic `let rec`. -/
-theorem Typ.letRec_mono {Γ : Ctx} (h₁ : Typ E ((x, .mono σ) :: Γ) s σ)
+theorem Typ.letRec_mono {Γ : Ctx} (hf : s.IsFun) (h₁ : Typ E ((x, .mono σ) :: Γ) s σ)
     (h₂ : Typ E ((x, .mono σ) :: Γ) t τ) : Typ E Γ (.letIn true x s t) τ :=
-  .letRec (fun _ h => Scheme.instance_mono_eq h ▸ h₁) (Scheme.instance_mono E σ) h₂
+  .letRec hf (fun _ h => Scheme.instance_mono_eq h ▸ h₁) (Scheme.instance_mono E σ) h₂
 
 /-- `twice = fun f -> fun x -> f (f x)` has type `(τ → τ) → τ → τ`, for any `τ`. -/
 theorem typ_twice (τ : Ty) :

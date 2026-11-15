@@ -305,7 +305,8 @@ inductive TypeTerm : SCtx → State → Term → SType → State → Prop where
   | extNil : TypeTerm Γ s t st s₁ → TypeTerm Γ s (.ext t []) st s₁
   | letIn : TypeTerm Γ s r str s₁ → TypeTerm ((x, str) :: Γ) s₁ b stb s₂ →
       TypeTerm Γ s (.letIn false x r b) stb s₂
-  | letRec : s.kind s.next = [] → TypeTerm ((x, .var s.next) :: Γ) s.fresh r inf s₁ →
+  /-- `let rec` binds a function (as `type_let_rhs` checks). -/
+  | letRec : r.IsFun → s.kind s.next = [] → TypeTerm ((x, .var s.next) :: Γ) s.fresh r inf s₁ →
       ConstrainTop s₁ inf (.var s.next) s₂ →
       TypeTerm ((x, .var s.next) :: Γ) s₂ b stb s₃ →
       TypeTerm Γ s (.letIn true x r b) stb s₃

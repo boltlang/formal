@@ -68,7 +68,7 @@ theorem TypeTerm.log_grows : TypeTerm Γ s t st s' → ∀ p, p ∈ s.log → p 
   | .ext _ h₁ h₂ _ hc => fun p hp => hc.log_grows p (h₂.log_grows p (h₁.log_grows p hp))
   | .extNil h => h.log_grows
   | .letIn h₁ h₂ => fun p hp => h₂.log_grows p (h₁.log_grows p hp)
-  | .letRec _ h₁ hc h₂ => fun p hp => h₂.log_grows p (hc.log_grows p (h₁.log_grows p hp))
+  | .letRec _ _ h₁ hc h₂ => fun p hp => h₂.log_grows p (hc.log_grows p (h₁.log_grows p hp))
 
 theorem TypeFields.log_grows : TypeFields Γ s fs F s' → ∀ p, p ∈ s.log → p ∈ s'.log
   | .nil => fun _ h => h
@@ -205,12 +205,12 @@ theorem TypeTerm.soundR {E : Defs} {f : Nat → Nat} {sf : State} (H : RenSound 
     have r₁ := h₁.nac hΓ i n
     exact Typ.letIn_mono (h₁.soundR H hΓ i n fun p hp => hlog p (h₂.log_grows p hp))
       (h₂.soundR H (hΓ.cons r₁.2.1 r₁.2.2) (h₁.inv₂ i) r₁.1 hlog)
-  | .letRec _ h₁ hc h₂, hΓ, i, n, hlog => by
+  | .letRec hf _ h₁ hc h₂, hΓ, i, n, hlog => by
     have r₁ := h₁.nac (hΓ.cons trivial (fun h => nomatch h)) i.fresh n
     have i₁ := h₁.inv₂ i.fresh
     have hlog₂ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog p (h₂.log_grows p hp)
     have hlog₁ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog₂ p (hc.log_grows p hp)
-    exact Typ.letRec_mono
+    exact Typ.letRec_mono hf
       (.sub (h₁.soundR H (hΓ.cons trivial (fun h => nomatch h)) i.fresh n hlog₁)
         (H hc.logged hlog₂ r₁.2.2))
       (h₂.soundR H (hΓ.cons trivial (fun h => nomatch h)) (hc.inv₂ i₁)

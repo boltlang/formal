@@ -563,7 +563,7 @@ theorem TypeTerm.inv : TypeTerm Γ s t st s' → Inv s → Inv s'
   | .ext _ h₁ h₂ _ hc, hi => (hc.sound (h₂.inv (h₁.inv hi)).fresh).1
   | .extNil h, hi => h.inv hi
   | .letIn h₁ h₂, hi => h₂.inv (h₁.inv hi)
-  | .letRec _ h₁ hc h₂, hi => h₂.inv (hc.sound (h₁.inv hi.fresh)).1
+  | .letRec _ _ h₁ hc h₂, hi => h₂.inv (hc.sound (h₁.inv hi.fresh)).1
 
 theorem TypeFields.inv : TypeFields Γ s fs F s' → Inv s → Inv s'
   | .nil, h => h

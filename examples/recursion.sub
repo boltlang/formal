@@ -12,7 +12,8 @@ let total = sum (produce 0)
 // A function that ignores its argument and returns itself: μa. ⊤ → a.
 let rec eat x = eat
 
-// Cyclic data.
+// Cyclic data is rejected: evaluation is eager, so `let rec` only binds
+// functions (`ones` would be read before it exists).
 let rec ones = {head = 1; tail = ones}
 let first = ones.tail.tail.head
 

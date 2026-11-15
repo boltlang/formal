@@ -56,11 +56,12 @@ simplified type is equivalent to the raw coalesced one.
   let sum : ({head: int, tail: 'a} as 'a) -> int
   let total : int
   let eat : (⊤ -> 'a as 'a)
-  let ones : ({head: int, tail: 'a} as 'a)
-  let first : int
+  let ones : type error: let rec ones: the right-hand side must be a function
+  let first : type error: identifier not found: ones
   let self : 'a ∧ ('a -> 'b) -> 'b
   let y : ('a -> 'a) -> 'a
   let yeat : (⊤ -> 'a as 'a)
+  [1]
   $ simplesub --self-check ../examples/unions.sub
   let either : bool -> int ∨ {a: int}
   let both : {f: 'a} ∧ (int -> 'b) -> {r: 'a, s: 'b}

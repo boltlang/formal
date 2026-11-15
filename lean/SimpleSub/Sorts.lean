@@ -234,7 +234,7 @@ theorem TypeTerm.nac : TypeTerm Γ s t st s' → CtxNAC Γ → Inv₂ s → LogN
   | .letIn h₁ h₂, hΓ, i, h =>
     have r₁ := h₁.nac hΓ i h
     h₂.nac (hΓ.cons r₁.2.1 r₁.2.2) (h₁.inv₂ i) r₁.1
-  | .letRec _ h₁ hc h₂, hΓ, i, h =>
+  | .letRec _ _ h₁ hc h₂, hΓ, i, h =>
     have hΓ' := hΓ.cons (st := .var _) trivial (fun h => nomatch h)
     have r₁ := h₁.nac hΓ' i.fresh h
     have i₁ := h₁.inv₂ i.fresh

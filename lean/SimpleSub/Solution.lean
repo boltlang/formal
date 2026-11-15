@@ -149,7 +149,7 @@ theorem TypeTerm.inv₂ : TypeTerm Γ s t st s' → Inv₂ s → Inv₂ s'
   | .ext _ h₁ h₂ _ hc, h => hc.inv₂ (h₂.inv₂ (h₁.inv₂ h)).fresh
   | .extNil h', h => h'.inv₂ h
   | .letIn h₁ h₂, h => h₂.inv₂ (h₁.inv₂ h)
-  | .letRec _ h₁ hc h₂, h => h₂.inv₂ (hc.inv₂ (h₁.inv₂ h.fresh))
+  | .letRec _ _ h₁ hc h₂, h => h₂.inv₂ (hc.inv₂ (h₁.inv₂ h.fresh))
 
 theorem TypeFields.inv₂ : TypeFields Γ s fs F s' → Inv₂ s → Inv₂ s'
   | .nil, h => h

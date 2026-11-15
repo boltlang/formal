@@ -117,6 +117,14 @@ expanded and memoized per label set. A few more rules apply:
 
 ## Deviations from the paper
 
+- **`let rec` only binds functions.** Evaluation is eager, so the
+  right-hand side of `let rec x = s` is evaluated before `x` exists; only a
+  function, whose body runs later, can refer to `x` safely. Other
+  right-hand sides, such as `let rec x = succ x` or the cyclic record
+  `let rec ones = {head = 1; tail = ones}`, are rejected
+  (`type_let_rhs` in `lib/typer.ml`, `Term.IsFun` in the Lean rules).
+  Cyclic data built through constructors could be allowed later, with a
+  guardedness check (see #4).
 - **No structural recursive types by default.** Like an occurs check,
   inference rejects a type variable that reaches itself through a type
   constructor, following both upper and lower bounds (`check_acyclic` in

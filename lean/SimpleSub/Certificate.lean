@@ -91,7 +91,7 @@ inductive CTyp (c : Certificate) : SCtx → Term → SType → Prop where
       c.Accepts st₀ (.record F.absOf ρ) → CTyp c Γ (.ext t fs) (.record F ρ)
   | extNil : CTyp c Γ t st → CTyp c Γ (.ext t []) st
   | letIn : CTyp c Γ r str → CTyp c ((x, str) :: Γ) b st → CTyp c Γ (.letIn false x r b) st
-  | letRec : CTyp c ((x, stx) :: Γ) r inf → inf ≠ .abs → c.Accepts inf stx →
+  | letRec : r.IsFun → CTyp c ((x, stx) :: Γ) r inf → inf ≠ .abs → c.Accepts inf stx →
       CTyp c ((x, stx) :: Γ) b st → CTyp c Γ (.letIn true x r b) st
 
 inductive CFields (c : Certificate) : SCtx → List (String × Term) → SFields → Prop where
@@ -196,7 +196,8 @@ theorem CTyp.soundI {c : Certificate} {E : Defs} {I : Nat → Ty} (H : c.HoldsUn
     exact .ext (.sub (h₁.soundI H) hs) (h₂.soundI H)
   | .extNil h => .extNil (h.soundI H)
   | .letIn h₁ h₂ => Typ.letIn_mono (h₁.soundI H) (h₂.soundI H)
-  | .letRec h₁ ha hc h₂ => Typ.letRec_mono (.sub (h₁.soundI H) (H _ _ hc ha)) (h₂.soundI H)
+  | .letRec hf h₁ ha hc h₂ =>
+    Typ.letRec_mono hf (.sub (h₁.soundI H) (H _ _ hc ha)) (h₂.soundI H)
 
 theorem CFields.soundI {c : Certificate} {E : Defs} {I : Nat → Ty} (H : c.HoldsUnder E I) :
     CFields c Γ fs F → TypFields E (Γ.toCtxI I) fs (F.interp I)
@@ -410,12 +411,12 @@ theorem TypeTerm.skeleton {c : Certificate} :
     have r₁ := h₁.nac hΓ i n
     exact .letIn (h₁.skeleton hΓ i n fun p hp => hlog p (h₂.log_grows p hp))
       (h₂.skeleton (hΓ.cons r₁.2.1 r₁.2.2) (h₁.inv₂ i) r₁.1 hlog)
-  | .letRec _ h₁ hc h₂, hΓ, i, n, hlog => by
+  | .letRec hf _ h₁ hc h₂, hΓ, i, n, hlog => by
     have r₁ := h₁.nac (hΓ.cons trivial (fun h => nomatch h)) i.fresh n
     have i₁ := h₁.inv₂ i.fresh
     have hlog₂ : ∀ p, p ∈ _ → p ∈ c.log := fun p hp => hlog p (h₂.log_grows p hp)
     have hlog₁ : ∀ p, p ∈ _ → p ∈ c.log := fun p hp => hlog₂ p (hc.log_grows p hp)
-    exact .letRec (h₁.skeleton (hΓ.cons trivial (fun h => nomatch h)) i.fresh n hlog₁)
+    exact .letRec hf (h₁.skeleton (hΓ.cons trivial (fun h => nomatch h)) i.fresh n hlog₁)
       r₁.2.2 (hc.logged.accepts hlog₂)
       (h₂.skeleton (hΓ.cons trivial (fun h => nomatch h)) (hc.inv₂ i₁)
         (hc.nac i₁ r₁.2.1 trivial r₁.1) hlog)
