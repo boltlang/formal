@@ -43,18 +43,30 @@ inductive FieldR (R : SType → SType → Prop) : SType → SType → Prop where
   | toAbs : FieldR R f .abs
   | pre : f₀ ≠ .abs → f₁ ≠ .abs → R f₀ f₁ → FieldR R f₀ f₁
 
+/-- Two field lists with the same labels, related field by field. -/
+inductive SFields.Rel (Q : SType → SType → Prop) : SFields → SFields → Prop where
+  | nil : SFields.Rel Q .nil .nil
+  | cons : Q f g → SFields.Rel Q fs gs → SFields.Rel Q (.cons n f fs) (.cons n g gs)
+
 /-- How the left tail provides missing labels (mirrors `Expand`). A row
 variable leaves the labels of *some* set `K` absent (in the algorithm, its
 kind) and is expanded for the others. The kind itself plays no role in
-soundness: an absent field is checked against `Abs`, the top field. -/
-inductive ExpandG (R : SType → SType → Prop) : SType → SFields → SType → Prop where
-  | none : ExpandG R t .nil t
-  | abs : ms ≠ .nil → (∀ p ∈ ms.absPairs, FieldR R p.1 p.2) → ExpandG R .abs ms .abs
+soundness: an absent field is checked against `Abs`, the top field.
+
+An expansion of `ρ` for fields `P` over `ρ'` is an *upper bound*
+`{P' | ρ'}` of `ρ` whose fields are below those of `P`. The algorithm
+model installs `P' = P`; an inferencer with levels installs the extrusion
+of `P` when `P` mentions variables of higher level than `ρ`. -/
+inductive ExpandG (σ : Nat → Bounds) (R : SType → SType → Prop) :
+    SType → SFields → SType → Prop where
+  | none : ExpandG σ R t .nil t
+  | abs : ms ≠ .nil → (∀ p ∈ ms.absPairs, FieldR R p.1 p.2) → ExpandG σ R .abs ms .abs
   | varAbsent (K : List String) : (∀ p ∈ (ms.absentIn K).absPairs, FieldR R p.1 p.2) →
-      ms.presentIn K = .nil → ExpandG R (.var v) ms (.var v)
+      ms.presentIn K = .nil → ExpandG σ R (.var v) ms (.var v)
   | var (K : List String) : ms ≠ .nil → (∀ p ∈ (ms.absentIn K).absPairs, FieldR R p.1 p.2) →
-      ms.presentIn K ≠ .nil → R (.var v) (.record (ms.presentIn K) (.var r)) →
-      ExpandG R (.var v) ms (.var r)
+      ms.presentIn K ≠ .nil → .record P' (.var r) ∈ (σ v).upper →
+      SFields.Rel (FieldR R) P' (ms.presentIn K) →
+      ExpandG σ R (.var v) ms (.var r)
 
 /-- One decomposition step of a constraint, as the algorithm performs it,
 relative to the bounds `σ` and the accepted constraints `R`. -/
@@ -65,11 +77,18 @@ inductive GStep (σ : Nat → Bounds) (R : SType → SType → Prop) : SType →
       GStep σ R .abs (.record fs t)
   | record : rowView (.record fa ta) = (fs₀, t₀) → rowView (.record fb tb) = (fs₁, t₁) →
       (∀ p ∈ fs₀.common fs₁, FieldR R p.1 p.2) →
-      ExpandG R t₀ (fs₀.missing fs₁) t₀' →
+      ExpandG σ R t₀ (fs₀.missing fs₁) t₀' →
       R (restRow (fs₁.missing fs₀) t₀') t₁ →
       GStep σ R (.record fa ta) (.record fb tb)
   | varL : b ∈ (σ v).upper → GStep σ R (.var v) b
   | varR : a ∈ (σ v).lower → GStep σ R a (.var v)
+  /-- Through an upper bound: `v ≤ b'` and `b' ≤ b`, between non-variables
+  (as extrusion produces: `b'` is the extrusion of `b` to `v`'s level). -/
+  | viaL : b' ∈ (σ v).upper → (∀ w, b' ≠ .var w) → b' ≠ .abs → (∀ w, b ≠ .var w) →
+      R b' b → GStep σ R (.var v) b
+  /-- Through a lower bound: `a ≤ a'` and `a' ≤ v`, between non-variables. -/
+  | viaR : a' ∈ (σ v).lower → (∀ w, a' ≠ .var w) → a' ≠ .abs → (∀ w, a ≠ .var w) →
+      a ≠ .abs → R a a' → GStep σ R a (.var v)
 
 /-! ## Growth of the state -/
 
@@ -178,11 +197,18 @@ theorem FieldR.mono (hR : ∀ x y, R x y → R' x y) : FieldR R a b → FieldR R
   | .toAbs => .toAbs
   | .pre h₀ h₁ h => .pre h₀ h₁ (hR _ _ h)
 
-theorem ExpandG.mono (hR : ∀ x y, R x y → R' x y) : ExpandG R t ms t' → ExpandG R' t ms t'
+theorem SFields.Rel.mono {Q Q' : SType → SType → Prop} (hQ : ∀ x y, Q x y → Q' x y) :
+    SFields.Rel Q fs gs → SFields.Rel Q' fs gs
+  | .nil => .nil
+  | .cons h r => .cons (hQ _ _ h) (r.mono hQ)
+
+theorem ExpandG.mono (hσ : ∀ v x, x ∈ (σ v).upper → x ∈ (σ' v).upper)
+    (hR : ∀ x y, R x y → R' x y) : ExpandG σ R t ms t' → ExpandG σ' R' t ms t'
   | .none => .none
   | .abs hm h => .abs hm (fun p hp => (h p hp).mono hR)
   | .varAbsent K h hp => .varAbsent K (fun p q => (h p q).mono hR) hp
-  | .var K hm h hp h' => .var K hm (fun p q => (h p q).mono hR) hp (hR _ _ h')
+  | .var K hm h hp hu hrel =>
+    .var K hm (fun p q => (h p q).mono hR) hp (hσ _ _ hu) (hrel.mono fun _ _ h => h.mono hR)
 
 theorem GStep.mono (g : Grows s s') :
     GStep s.bounds (Logged s) a b → GStep s'.bounds (Logged s') a b
@@ -191,30 +217,81 @@ theorem GStep.mono (g : Grows s s') :
   | .absRecord hf ht => .absRecord (fun p hp => (hf p hp).mono fun _ _ => Logged.mono g) (ht.mono g)
   | .record h₀ h₁ hf he ht =>
     .record h₀ h₁ (fun p hp => (hf p hp).mono fun _ _ => Logged.mono g)
-      (he.mono fun _ _ => Logged.mono g) (ht.mono g)
+      (he.mono g.upper fun _ _ => Logged.mono g) (ht.mono g)
   | .varL h => .varL (g.upper _ _ h)
   | .varR h => .varR (g.lower _ _ h)
+  | .viaL h h₁ h₂ h₃ h₄ => .viaL (g.upper _ _ h) h₁ h₂ h₃ (h₄.mono g)
+  | .viaR h h₁ h₂ h₃ h₄ h₅ => .viaR (g.lower _ _ h) h₁ h₂ h₃ h₄ (h₅.mono g)
 
 /-! ## Every accepted constraint is logged -/
 
-/-- Cache hits are uses of logged constraints. -/
-def CacheInLog (s : State) : Prop := ∀ p, p ∈ s.cache → p ∈ s.log
+/-- Cache hits are uses of logged constraints; a cached constraint with a
+variable on the left (and not `Abs` on the right) has installed its upper
+bound, since only `varL` caches such constraints. -/
+def CacheInLog (s : State) : Prop :=
+  (∀ p, p ∈ s.cache → p ∈ s.log) ∧
+  (∀ v b, (.var v, b) ∈ s.cache → b ≠ .abs → b ∈ (s.bounds v).upper)
 
-theorem CacheInLog.remember (h : CacheInLog s) : CacheInLog (s.remember a b) := by
-  intro p hp
-  simp only [State.remember, List.mem_cons] at hp ⊢
-  rcases hp with hp | hp
-  · exact Or.inl hp
-  · exact Or.inr (h p hp)
+theorem CacheInLog.remember (h : CacheInLog s)
+    (h' : (∀ w, a ≠ .var w) ∨ b = .abs := by
+      first | exact .inr rfl | exact .inl ‹_› | exact .inl (fun _ h => nomatch h)) :
+    CacheInLog (s.remember a b) := by
+  refine ⟨fun p hp => ?_, fun v x hx hxa => ?_⟩
+  · simp only [State.remember, List.mem_cons] at hp ⊢
+    rcases hp with hp | hp
+    · exact Or.inl hp
+    · exact Or.inr (h.1 p hp)
+  · simp only [State.remember, List.mem_cons] at hx
+    rcases hx with hx | hx
+    · cases hx
+      rcases h' with h' | h'
+      · exact absurd rfl (h' v)
+      · exact absurd h' hxa
+    · exact h.2 v x hx hxa
 
-theorem CacheInLog.addUpper (h : CacheInLog s) : CacheInLog (s.addUpper v t) := h
-theorem CacheInLog.addLower (h : CacheInLog s) : CacheInLog (s.addLower v t) := h
+theorem CacheInLog.addUpper (h : CacheInLog s) : CacheInLog (s.addUpper v t) :=
+  ⟨h.1, fun w x hx hxa => Grows.addUpper.upper w x (h.2 w x hx hxa)⟩
+
+theorem CacheInLog.addLower (h : CacheInLog s) : CacheInLog (s.addLower v t) :=
+  ⟨h.1, fun w x hx hxa => by rw [upper_addLower]; exact h.2 w x hx hxa⟩
+
+/-- Caching `v ≤ b` and installing the bound together. -/
+theorem CacheInLog.rememberUpper (h : CacheInLog s) :
+    CacheInLog ((s.remember (.var v) b).addUpper v b) := by
+  refine ⟨fun p hp => ?_, fun w x hx hxa => ?_⟩
+  · simp only [State.addUpper, State.remember, List.mem_cons] at hp ⊢
+    rcases hp with hp | hp
+    · exact Or.inl hp
+    · exact Or.inr (h.1 p hp)
+  · simp only [State.addUpper, State.remember, List.mem_cons] at hx
+    rcases hx with hx | hx
+    · simp only [Prod.mk.injEq, SType.var.injEq] at hx
+      obtain ⟨rfl, rfl⟩ := hx
+      exact mem_upper_addUpper
+    · exact Grows.addUpper.upper w x (Grows.remember.upper w x (h.2 w x hx hxa))
 
 theorem remember_logged {s : State} {a b : SType} : Logged (s.remember a b) a b := .inr (List.mem_cons_self ..)
 
+/-- Constraining a variable below a non-variable installs the bound. -/
+theorem Constrain.installs (h : Constrain s (.var v) b s') (hc : CacheInLog s) (hb : b ≠ .abs)
+    (hnv : ∀ w, b ≠ .var w) : b ∈ (s'.bounds v).upper := by
+  cases h with
+  | cached hm => exact hc.2 v b hm hb
+  | refl => exact absurd rfl (hnv v)
+  | absR => exact absurd rfl hb
+  | varL _ _ h' => exact h'.grows.upper _ _ mem_upper_addUpper
+  | varR _ hnv' _ => exact absurd rfl (hnv' v)
+
+theorem SFields.Rel.refl_logged {s : State} : ∀ fs : SFields, SFields.Rel (FieldR (Logged s)) fs fs
+  | .nil => .nil
+  | .cons _ f fs => .cons (by
+      by_cases h : f = .abs
+      · subst h; exact .toAbs
+      · exact .pre h h (.inl rfl)) (SFields.Rel.refl_logged fs)
+
 mutual
 theorem Constrain.logged : Constrain s a b s' → CacheInLog s → CacheInLog s' ∧ Logged s' a b
-  | .cached hm, hc => ⟨hc, .inr (hc _ hm)⟩
+  | .cached hm, hc => ⟨hc, .inr (hc.1 _ hm)⟩
   | .refl, hc => ⟨hc, .inl rfl⟩
   | .arrow _ h₁ h₂, hc =>
     have r₁ := h₁.logged hc.remember
@@ -231,7 +308,7 @@ theorem Constrain.logged : Constrain s a b s' → CacheInLog s → CacheInLog s'
     have r₃ := h₃.logged r₂.1
     ⟨r₃.1, remember_logged.mono (h₁.grows.trans (h₂.grows.trans h₃.grows))⟩
   | .varL _ _ h, hc =>
-    have r := h.logged hc.remember.addUpper
+    have r := h.logged hc.rememberUpper
     ⟨r.1, (remember_logged.mono Grows.addUpper).mono h.grows⟩
   | .varR _ _ h, hc =>
     have r := h.logged hc.remember.addLower
@@ -267,7 +344,7 @@ theorem FieldsEach.logged :
       · exact r₂.2 p hp⟩
 
 theorem Expand.logged :
-    Expand s t ms t' s' → CacheInLog s → CacheInLog s' ∧ ExpandG (Logged s') t ms t'
+    Expand s t ms t' s' → CacheInLog s → CacheInLog s' ∧ ExpandG s'.bounds (Logged s') t ms t'
   | .none, hc => ⟨hc, .none⟩
   | .abs hm h, hc => have r := h.logged hc; ⟨r.1, .abs hm r.2⟩
   | .allAbsent (s := s₀) (v := v) _ hp h, hc =>
@@ -275,12 +352,14 @@ theorem Expand.logged :
   | .memo (s := s₀) (v := v) hm hp h₁ _ h₂, hc =>
     have r₁ := h₁.logged hc
     have r₂ := h₂.logged r₁.1
-    ⟨r₂.1, .var (s₀.kind v) hm (fun p q => (r₁.2 p q).mono fun _ _ => Logged.mono h₂.grows) hp r₂.2⟩
+    ⟨r₂.1, .var (s₀.kind v) hm (fun p q => (r₁.2 p q).mono fun _ _ => Logged.mono h₂.grows) hp
+      (h₂.installs r₁.1 (fun h => nomatch h) (fun _ h => nomatch h)) (SFields.Rel.refl_logged _)⟩
   | .fresh (s := s₀) (v := v) hm hp h₁ _ _ h₂, hc =>
     have r₁ := h₁.logged hc
     have r₂ := h₂.logged r₁.1
     ⟨r₂.1, .var (s₀.kind v) hm
-      (fun p q => (r₁.2 p q).mono fun _ _ => Logged.mono (Grows.expand.trans h₂.grows)) hp r₂.2⟩
+      (fun p q => (r₁.2 p q).mono fun _ _ => Logged.mono (Grows.expand.trans h₂.grows)) hp
+      (h₂.installs r₁.1 (fun h => nomatch h) (fun _ h => nomatch h)) (SFields.Rel.refl_logged _)⟩
 end
 
 /-! ## Justification -/
@@ -334,9 +413,9 @@ theorem Constrain.just : Constrain s a b s' → CacheInLog s → JustExcept s P 
     have j₃ := h₃.just r₂.1 (h₂.just r₁.1 (h₁.just hc.remember h.remember))
     j₃.close (.record e₀ e₁
       (fun p hp => (r₁.2 p hp).mono fun _ _ => Logged.mono (h₂.grows.trans h₃.grows))
-      (r₂.2.mono fun _ _ => Logged.mono h₃.grows) (h₃.logged r₂.1).2)
+      (r₂.2.mono h₃.grows.upper fun _ _ => Logged.mono h₃.grows) (h₃.logged r₂.1).2)
   | .varL (s := s₀) (v := v) (b := b) _ _ h, hc, hj =>
-    have j := h.just hc.remember.addUpper
+    have j := h.just hc.rememberUpper
       ((hj.remember (a := .var v) (b := b)).grow .addUpper fun _ hp => hp)
     j.close (.varL (h.grows.upper _ _ mem_upper_addUpper))
   | .varR (s := s₀) (v := v) (a := a) _ _ h, hc, hj =>
@@ -417,7 +496,7 @@ theorem Constrain.consist :
   | .record _ _ _ h₁ h₂ h₃, hc, h =>
     have r₁ := h₁.logged hc.remember
     h₃.consist (h₂.logged r₁.1).1 (h₂.consist r₁.1 (h₁.consist hc.remember h.remember))
-  | .varL _ _ h, hc, hs => h.consist hc.remember.addUpper hs.remember.addUpper
+  | .varL _ _ h, hc, hs => h.consist hc.rememberUpper hs.remember.addUpper
   | .varR _ _ h, hc, hs => h.consist hc.remember.addLower hs.remember.addLower
 
 /-- Propagation: processing the pending pairs `ps` discharges them. -/
@@ -467,7 +546,7 @@ constraint it was asked to solve is accepted. -/
 theorem ConstrainTop.sound (h : ConstrainTop s a b s') (hi : Inv s) :
     Inv s' ∧ Logged s' a b := by
   obtain ⟨s₁, hc, rfl⟩ := h
-  have hc₀ : CacheInLog { s with cache := [] } := fun _ h => nomatch h
+  have hc₀ : CacheInLog { s with cache := [] } := ⟨(fun _ h => nomatch h), (fun _ _ h => nomatch h)⟩
   exact ⟨⟨hc.just hc₀ hi.just, hc.consist hc₀ hi.cons⟩, (hc.logged hc₀).2⟩
 
 theorem Inv.fresh (h : Inv s) : Inv s.fresh := ⟨h.just, h.cons⟩

@@ -50,7 +50,7 @@ theorem SFields.toFields_absOf : ∀ F : SFields, F.absOf.toFields = F.toFields.
 /-- A top-level `constrain` call accepts its constraint (no invariant needed). -/
 theorem ConstrainTop.logged {s s' : State} (h : ConstrainTop s a b s') : Logged s' a b := by
   obtain ⟨s₁, hc, rfl⟩ := h
-  exact (hc.logged fun _ h => nomatch h).2
+  exact (hc.logged ⟨(fun _ h => nomatch h), (fun _ _ h => nomatch h)⟩).2
 
 theorem ConstrainTop.log_grows {s s' : State} (h : ConstrainTop s a b s') :
     ∀ p, p ∈ s.log → p ∈ s'.log := by
@@ -81,7 +81,7 @@ end
 needs. -/
 structure Final (sf : State) (rank : Nat → Nat) : Prop where
   inv : Inv sf
-  inv₂ : Inv₂ sf
+  inLog : BoundsInLog sf
   nac : LogNAC sf
   ranked : TailRanked sf rank
 
@@ -95,7 +95,7 @@ theorem Logged.of_log {s s' : State} (hlog : ∀ p, p ∈ s.log → p ∈ s'.log
 theorem Final.sub {s sf : State} {rank : Nat → Nat} (hf : Final sf rank)
     (hl : Logged s a b) (hlog : ∀ p, p ∈ s.log → p ∈ sf.log) (ha : a ≠ .abs) :
     Sub (defsOf sf) a.toTy b.toTy :=
-  solution_rows hf.inv hf.inv₂ hf.nac hf.ranked (hl.of_log hlog) (.inl ha)
+  solution_rows hf.inv hf.nac hf.ranked (hl.of_log hlog) (.inl ha)
 
 /-! ## Renaming type variables
 
@@ -245,7 +245,7 @@ theorem soundness {K : Nat → List String} {rank : Nat → Nat}
     (h : TypeTerm builtins (State.initK K) t st s')
     (hr : TailRanked s' rank) : Typ (defsOf s') builtins.toCtx t st.toTy := by
   have hn := h.nac builtins_NAC Inv₂.init LogNAC.init
-  exact TypeTerm.sound ⟨h.inv_init, h.inv₂ Inv₂.init, hn.1, hr⟩ h builtins_NAC Inv₂.init
+  exact TypeTerm.sound ⟨h.inv_init, (h.inv₂ Inv₂.init).inLog, hn.1, hr⟩ h builtins_NAC Inv₂.init
     LogNAC.init fun _ hp => hp
 
 end SimpleSub.Alg

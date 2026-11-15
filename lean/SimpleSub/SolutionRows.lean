@@ -182,25 +182,69 @@ def tailRank (rank : Nat → Nat) (b : SType) : Nat :=
   | .var ρ => 2 * rank ρ + 1
   | _ => 0
 
-/-- Chains of row variables through the tails of upper bounds are acyclic:
-the tail variable of every (reachable) upper bound of `v` ranks below `v`.
-Kinds guarantee this (`kinds_tailRanked` in `Kinds.lean`). -/
-def TailRanked (s : State) (rank : Nat → Nat) : Prop :=
-  ∀ v u ρ, Clo s.bounds v u → (rowView u).2 = .var ρ → rank ρ < rank v
+/-- Chains of row variables through tails are acyclic, as kinds guarantee
+(`kinds_tailRanked` in `Kinds.lean`): the tail variable of a reachable
+upper bound of `v`, or of a non-variable lower bound of `v`, ranks below
+`v`, and a variable upper bound of `v` does not rank above it. -/
+structure TailRanked (s : State) (rank : Nat → Nat) : Prop where
+  clo : ∀ v u ρ, Clo s.bounds v u → (rowView u).2 = .var ρ → rank ρ < rank v
+  upVar : ∀ v m, SType.var m ∈ (s.bounds v).upper → rank m ≤ rank v
+  lower : ∀ v x ρ, x ∈ (s.bounds v).lower → (∀ w, x ≠ .var w) → (rowView x).2 = .var ρ →
+    rank ρ < rank v
 
 theorem tailRank_tail (rank : Nat → Nat) (x : SType) :
     tailRank rank (rowView x).2 = tailRank rank x := by
   simp only [tailRank]
   rw [rowView_of_ne_record _ (rowView_tail_ne_record x)]
 
+theorem tailRank_var (rank : Nat → Nat) (v : Nat) : tailRank rank (.var v) = 2 * rank v + 1 := by
+  simp [tailRank, rowView]
+
 theorem tailRank_var_lt {s : State} {rank : Nat → Nat} (hr : TailRanked s rank)
     (hc : Clo s.bounds v u) : tailRank rank u < tailRank rank (.var v) := by
-  simp only [tailRank, rowView]
+  rw [tailRank_var]
+  simp only [tailRank]
   split
-  · next ρ h => have := hr v u ρ hc h; omega
+  · next ρ h => have := hr.clo v u ρ hc h; omega
   · omega
 
-/-! ## One layer -/
+theorem tailRank_lower_lt {s : State} {rank : Nat → Nat} (hr : TailRanked s rank)
+    (hx : x ∈ (s.bounds v).lower) (hnv : ∀ w, x ≠ .var w) :
+    tailRank rank x < tailRank rank (.var v) := by
+  rw [tailRank_var]
+  simp only [tailRank]
+  split
+  · next ρ h => have := hr.lower v x ρ hx hnv h; omega
+  · omega
+
+theorem tailRank_upVar_le {s : State} {rank : Nat → Nat} (hr : TailRanked s rank)
+    (hm : SType.var m ∈ (s.bounds v).upper) : tailRank rank (.var m) ≤ tailRank rank (.var v) := by
+  rw [tailRank_var, tailRank_var]; have := hr.upVar v m hm; omega
+
+theorem SFields.Rel.lookup {Q : SType → SType → Prop} {l : String} {g : SType} :
+    ∀ {P' P : SFields}, SFields.Rel Q P' P → P.lookup l = some g →
+      ∃ f, P'.lookup l = some f ∧ Q f g
+  | _, _, .nil, h => by simp [SFields.lookup] at h
+  | _, _, @SFields.Rel.cons _ f g' _ _ n hq r, h => by
+    simp only [SFields.lookup] at h ⊢
+    by_cases hn : n = l
+    · simp only [hn, ite_true] at h ⊢; cases h; exact ⟨f, rfl, hq⟩
+    · simp only [hn, ite_false] at h ⊢; exact r.lookup h
+
+theorem SFields.Rel.lookup_none {Q : SType → SType → Prop} {l : String} :
+    ∀ {P' P : SFields}, SFields.Rel Q P' P → P.lookup l = none → P'.lookup l = none
+  | _, _, .nil, _ => rfl
+  | _, _, @SFields.Rel.cons _ _ _ _ _ n _ r, h => by
+    simp only [SFields.lookup] at h ⊢
+    by_cases hn : n = l
+    · simp [hn] at h
+    · simp only [hn, ite_false] at h ⊢; exact r.lookup_none h
+
+/-! ## One layer
+
+The coinduction is up to transitivity (`Sub.coind_trans`): a constraint
+justified through an extruded bound (`viaR`) only holds through a chain of
+accepted constraints, whose one-layer steps compose by cut elimination. -/
 
 /-- The relation used for the coinduction: accepted constraints, and the
 field projections of accepted constraints. -/
@@ -212,16 +256,24 @@ section Steps
 
 variable {s : State}
 
-theorem stepRefl : ∀ a : SType, Step (defsOf s) (SolR s) a.toTy a.toTy
+/-- One layer, with chains of the coinductive relation as hypotheses. -/
+abbrev St (s : State) (x y : Ty) : Prop := Step (defsOf s) (TC (SolR s)) x y
+
+/-- One-layer steps compose (cut elimination). -/
+theorem St.comp (h₁ : St s x y) (h₂ : St s y z) : St s x z :=
+  (cut h₁ _ h₂).mono fun _ _ h => match h with
+    | .inl h => h
+    | .inr ⟨_, h₁, h₂⟩ => .trans h₁ h₂
+
+theorem stepRefl : ∀ a : SType, St s a.toTy a.toTy
   | .var _ => .gvar
   | .prim _ => .prim
-  | .arrow _ _ => .arrow (.ty (.inl rfl) (.inr rfl)) (.ty (.inl rfl) (.inr rfl))
+  | .arrow _ _ => .arrow (.base (.ty (.inl rfl) (.inr rfl))) (.base (.ty (.inl rfl) (.inr rfl)))
   | .record fs t => .record fun l =>
-    SolR.fld (a := .record fs t) (b := .record fs t) (l := l) (.inl rfl)
+    .base (SolR.fld (a := .record fs t) (b := .record fs t) (l := l) (.inl rfl))
   | .abs => .abs
 
-theorem stepReflField (l : String) : ∀ a : SType,
-    Step (defsOf s) (SolR s) (a.toTy.field l) (a.toTy.field l)
+theorem stepReflField (l : String) : ∀ a : SType, St s (a.toTy.field l) (a.toTy.field l)
   | .record fs t => by
     rw [field_record]
     cases fs.lookup l with
@@ -236,31 +288,117 @@ theorem arrow_comps (hn : LogNAC s) (hl : (SType.arrow l₀ r₀, SType.arrow l�
 
 /-- One layer for an accepted constraint between non-variable types. -/
 theorem stepNonvar (hi : Inv s) (hn : LogNAC s) (hl : Logged s a b) (ha : a ≠ .abs)
-    (hav : ∀ w, a ≠ .var w) (hbv : ∀ w, b ≠ .var w) :
-    Step (defsOf s) (SolR s) a.toTy b.toTy := by
+    (hav : ∀ w, a ≠ .var w) (hbv : ∀ w, b ≠ .var w) : St s a.toTy b.toTy := by
   rcases hl with rfl | hl
   · exact stepRefl a
   · cases hi.just.step hl with
     | absR => exact .abs
     | arrow h₁ h₂ =>
-      exact .arrow (.ty h₁ (.inl (arrow_comps hn hl).1)) (.ty h₂ (.inl (arrow_comps hn hl).2))
+      exact .arrow (.base (.ty h₁ (.inl (arrow_comps hn hl).1)))
+        (.base (.ty h₂ (.inl (arrow_comps hn hl).2)))
     | absRecord => exact absurd rfl ha
-    | @record fa ta _ _ fb tb => exact .record (fun l => SolR.fld (a := .record fa ta) (b := .record fb tb) (l := l) (.inr hl))
+    | @record fa ta _ _ fb tb =>
+      exact .record fun l => .base (SolR.fld (a := .record fa ta) (b := .record fb tb) (l := l) (.inr hl))
     | varL => exact absurd rfl (hav _)
     | varR => exact absurd rfl (hbv _)
+    | viaL => exact absurd rfl (hav _)
+    | viaR => exact absurd rfl (hbv _)
+
+/-- A chain of accepted constraints between non-variable types, whose right
+sides satisfy `P` (a bound on their tail ranks, for fields). -/
+inductive Chain (s : State) (P : SType → Prop) : SType → SType → Prop where
+  | one : Logged s a b → (∀ w, a ≠ .var w) → (∀ w, b ≠ .var w) → P b → Chain s P a b
+  | cons : Logged s a b → (∀ w, a ≠ .var w) → (∀ w, b ≠ .var w) → b ≠ .abs → P b →
+      Chain s P b c → Chain s P a c
+
+theorem Chain.step (hi : Inv s) (hn : LogNAC s) {P : SType → Prop} :
+    Chain s P a u → a ≠ .abs → St s a.toTy u.toTy
+  | .one hl hav hbv _, ha => stepNonvar hi hn hl ha hav hbv
+  | .cons hl hav hbv hba _ c, ha => (stepNonvar hi hn hl ha hav hbv).comp (c.step hi hn hba)
+
+theorem Chain.fieldStep {P : SType → Prop} {l : String}
+    (ih : ∀ x y, Logged s x y → P y → St s (x.toTy.field l) (y.toTy.field l)) :
+    Chain s P a u → St s (a.toTy.field l) (u.toTy.field l)
+  | .one hl _ _ hp => ih _ _ hl hp
+  | .cons hl _ _ _ hp c => (ih _ _ hl hp).comp (c.fieldStep ih)
+
+/-- **Chains through lower bounds**: a non-variable lower bound `x` of `m`
+is below every upper bound `u` reachable from `m`, through a chain of
+accepted constraints. Consistency gives `x ≤ m'` for each variable upper
+bound `m'` on the way; that constraint installed `x` as a lower bound of
+`m'`, or (`viaR`) the extrusion `x'` of `x`, with `x ≤ x'` accepted. -/
+theorem lower_chain (hi : Inv s) {rank : Nat → Nat} (hr : TailRanked s rank)
+    (hc : Clo s.bounds m u) : ∀ x, x ∈ (s.bounds m).lower → (∀ w, x ≠ .var w) →
+      ∀ B, tailRank rank (.var m) ≤ B → Chain s (fun y => tailRank rank y < B) x u := by
+  induction hc with
+  | @here n u hu hnv =>
+    intro x hx hxv B hB
+    rcases hi.cons n x u hx hu with h | h
+    · exact .one h hxv hnv (Nat.lt_of_lt_of_le (tailRank_var_lt hr (.here hu hnv)) hB)
+    · exact nomatch h
+  | @step n m' u hm _ ih =>
+    intro x hx hxv B hB
+    have hB' := Nat.le_trans (tailRank_upVar_le hr hm) hB
+    rcases hi.cons n x (.var m') hx hm with h | h
+    · rcases h with h | h
+      · exact absurd h (hxv _)
+      · cases hi.just.step h with
+        | varR hl => exact ih x hl hxv B hB'
+        | viaR hl h₁ h₂ _ _ hR =>
+          exact .cons hR hxv h₁ h₂ (Nat.lt_of_lt_of_le (tailRank_lower_lt hr hl h₁) hB')
+            (ih _ hl h₁ B hB')
+        | varL => exact absurd rfl (hxv _)
+        | viaL => exact absurd rfl (hxv _)
+    · exact nomatch h
+
+/-- A variable below a non-variable, one layer. -/
+theorem stepVarNonvar (hi : Inv s) (hn : LogNAC s) (hl : Logged s (.var w) u)
+    (hnv : ∀ x, u ≠ .var x) : St s (.gvar w) u.toTy := by
+  rcases hl with h | h
+  · exact absurd h.symm (hnv w)
+  · cases hi.just.step h with
+    | absR => exact .abs
+    | varL hu => exact .defL ⟨u, .here hu hnv, rfl⟩ (stepRefl u)
+    | viaL hb hbv hba _ hR => exact .defL ⟨_, .here hb hbv, rfl⟩ (stepNonvar hi hn hR hba hbv hnv)
+    | varR => exact absurd rfl (hnv _)
+    | viaR => exact absurd rfl (hnv _)
+
+/-- **Variable lower bounds**: a variable lower bound `w` of `m` is below
+every upper bound reachable from `m`, one layer. -/
+theorem stepVarLower (hi : Inv s) (hn : LogNAC s) (hc : Clo s.bounds m u) :
+    ∀ w, SType.var w ∈ (s.bounds m).lower → St s (.gvar w) u.toTy := by
+  induction hc with
+  | @here n u hu hnv =>
+    intro w hw
+    rcases hi.cons n (.var w) u hw hu with h | h
+    · exact stepVarNonvar hi hn h hnv
+    · exact nomatch h
+  | @step n m' u hm hc ih =>
+    intro w hw
+    rcases hi.cons n (.var w) (.var m') hw hm with h | h
+    · rcases h with h | h
+      · cases h; exact .defL ⟨u, hc, rfl⟩ (stepRefl u)
+      · cases hi.just.step h with
+        | varL hu' => exact .defL ⟨u, .step hu' hc, rfl⟩ (stepRefl u)
+        | varR hl => exact ih w hl
+        | viaL _ _ _ hbv => exact absurd rfl (hbv _)
+        | viaR _ _ _ hav => exact absurd rfl (hav _)
+    · exact nomatch h
 
 /-- One layer for any accepted constraint between types whose left side is
 not `Abs` (or which is reflexive). -/
-theorem stepTy (hi : Inv s) (h₂ : Inv₂ s) (hn : LogNAC s) (hl : Logged s a b)
-    (ha : a ≠ .abs ∨ a = b) : Step (defsOf s) (SolR s) a.toTy b.toTy := by
+theorem stepTy (hi : Inv s) (hn : LogNAC s) {rank : Nat → Nat} (hr : TailRanked s rank)
+    (hl : Logged s a b) (ha : a ≠ .abs ∨ a = b) : St s a.toTy b.toTy := by
   rcases hl with rfl | hl
   · exact stepRefl a
   · cases hi.just.step hl with
     | absR => exact .abs
     | arrow h₁ h₂ =>
-      exact .arrow (.ty h₁ (.inl (arrow_comps hn hl).1)) (.ty h₂ (.inl (arrow_comps hn hl).2))
+      exact .arrow (.base (.ty h₁ (.inl (arrow_comps hn hl).1)))
+        (.base (.ty h₂ (.inl (arrow_comps hn hl).2)))
     | absRecord => rcases ha with ha | ha; exact absurd rfl ha; exact nomatch ha
-    | @record fa ta _ _ fb tb => exact .record (fun l => SolR.fld (a := .record fa ta) (b := .record fb tb) (l := l) (.inr hl))
+    | @record fa ta _ _ fb tb =>
+      exact .record fun l => .base (SolR.fld (a := .record fa ta) (b := .record fb tb) (l := l) (.inr hl))
     | varL hub =>
       match b with
       | .var w =>
@@ -270,35 +408,68 @@ theorem stepTy (hi : Inv s) (h₂ : Inv₂ s) (hn : LogNAC s) (hl : Logged s a b
       | .arrow _ _ => exact .defL ⟨_, .here hub (fun _ h => nomatch h), rfl⟩ (stepRefl _)
       | .record _ _ => exact .defL ⟨_, .here hub (fun _ h => nomatch h), rfl⟩ (stepRefl _)
       | .abs => exact .defL ⟨_, .here hub (fun _ h => nomatch h), rfl⟩ (stepRefl _)
-    | varR hlb =>
-      have hnv := h₂.lbNonVar _ a hlb
-      have ha' : a ≠ .abs := by
-        rcases ha with ha | ha
-        · exact ha
-        · exact absurd ha (hnv _)
-      exact .defR fun τ ⟨u, hc, hτ⟩ => by
-        subst hτ
-        exact stepNonvar hi hn (clo_logged hi h₂ hc a hlb) ha' hnv hc.nonvar
+    | @varR v _ hlb =>
+      refine .defR fun τ ⟨u, hc, hτ⟩ => ?_
+      subst hτ
+      cases a with
+      | var w => exact stepVarLower hi hn hc w hlb
+      | prim _ | arrow _ _ | record _ _ =>
+        exact (lower_chain hi hr hc _ hlb (fun _ h => nomatch h) _ (Nat.le_refl _)).step hi hn
+          (fun h => nomatch h)
+      | abs => rcases ha with ha | ha; exact absurd rfl ha; exact nomatch ha
+    | viaL hb hbv hba hnv hR =>
+      exact .defL ⟨_, .here hb hbv, rfl⟩ (stepNonvar hi hn hR hba hbv hnv)
+    | viaR hl' h₁ h₂ hav haa hR =>
+      refine .defR fun τ ⟨u, hc, hτ⟩ => ?_
+      subst hτ
+      exact (stepNonvar hi hn hR haa hav h₁).comp
+        ((lower_chain hi hr hc _ hl' h₁ _ (Nat.le_refl _)).step hi hn h₂)
 
-/-- The row variable `v` is below a record it was expanded against. -/
-theorem expansion_bound (hi : Inv s) (hv : Logged s (.var v) (.record ms t)) :
-    SType.record ms t ∈ (s.bounds v).upper := by
-  rcases hv with h | hv
-  · exact nomatch h
-  · cases hi.just.step hv with
-    | varL hub => exact hub
+/-- The field version of `stepVarLower`, given field steps for accepted
+constraints into right sides of smaller tail rank. -/
+theorem fieldVarLower (hi : Inv s) {rank : Nat → Nat} (hr : TailRanked s rank) {l : String}
+    {B : Nat} (ih : ∀ x y, Logged s x y → tailRank rank y < B →
+      St s (x.toTy.field l) (y.toTy.field l))
+    (hc : Clo s.bounds m u) : ∀ w, SType.var w ∈ (s.bounds m).lower →
+      tailRank rank (.var m) ≤ B → St s ((SType.var w).toTy.field l) (u.toTy.field l) := by
+  induction hc with
+  | @here n u hu hnv =>
+    intro w hw hB
+    rcases hi.cons n (.var w) u hw hu with h | h
+    · rcases h with h | h
+      · exact absurd h.symm (hnv w)
+      · cases hi.just.step h with
+        | absR => exact .abs
+        | varL hu' => exact .projDefL ⟨u, .here hu' hnv, rfl⟩ (stepReflField l u)
+        | viaL hb hbv _ _ hR =>
+          exact .projDefL ⟨_, .here hb hbv, rfl⟩
+            (ih _ _ hR (Nat.lt_of_lt_of_le (tailRank_var_lt hr (.here hu hnv)) hB))
+        | varR => exact absurd rfl (hnv _)
+        | viaR => exact absurd rfl (hnv _)
+    · exact nomatch h
+  | @step n m' u hm hc ih' =>
+    intro w hw hB
+    rcases hi.cons n (.var w) (.var m') hw hm with h | h
+    · rcases h with h | h
+      · cases h; exact .projDefL ⟨u, hc, rfl⟩ (stepReflField l u)
+      · cases hi.just.step h with
+        | varL hu' => exact .projDefL ⟨u, .step hu' hc, rfl⟩ (stepReflField l u)
+        | varR hl => exact ih' w hl (Nat.le_trans (tailRank_upVar_le hr hm) hB)
+        | viaL _ _ _ hbv => exact absurd rfl (hbv _)
+        | viaR _ _ _ hav => exact absurd rfl (hav _)
+    · exact nomatch h
 
-/-- One layer for a field pair of an accepted constraint, given the result
-for constraints whose right side has a smaller tail rank (`ihRank`), or the
-same tail rank and a smaller size (`ihSize`). -/
-theorem stepFieldCore (hi : Inv s) (h₂ : Inv₂ s) (hn : LogNAC s) {rank : Nat → Nat}
+/-- One layer for a field pair of an accepted constraint with a non-variable
+left side, given the result for constraints whose right side has a smaller
+tail rank (`ihRank`), or the same tail rank and a smaller size (`ihSize`). -/
+theorem stepFieldNV (hi : Inv s) (hn : LogNAC s) {rank : Nat → Nat}
     (hr : TailRanked s rank) (b : SType)
     (ihRank : ∀ u a l, tailRank rank u < tailRank rank b → Logged s a u →
-      Step (defsOf s) (SolR s) (a.toTy.field l) (u.toTy.field l))
+      St s (a.toTy.field l) (u.toTy.field l))
     (ihSize : ∀ b' a l, tailRank rank b' = tailRank rank b → sizeOf b' < sizeOf b →
-      Logged s a b' → Step (defsOf s) (SolR s) (a.toTy.field l) (b'.toTy.field l))
-    (a : SType) (l : String) (hl : Logged s a b) :
-    Step (defsOf s) (SolR s) (a.toTy.field l) (b.toTy.field l) := by
+      Logged s a b' → St s (a.toTy.field l) (b'.toTy.field l))
+    (a : SType) (hav : ∀ w, a ≠ .var w) (l : String) (hl : Logged s a b) :
+    St s (a.toTy.field l) (b.toTy.field l) := by
   rcases hl with rfl | hl
   · exact stepReflField l a
   · cases hi.just.step hl with
@@ -322,7 +493,7 @@ theorem stepFieldCore (hi : Inv s) (h₂ : Inv₂ s) (hn : LogNAC s) {rank : Nat
       rw [SFields.missing_lookup] at hrest_field
       have hmiss := SFields.missing_lookup fs₀ l fs₁
       -- the recursive call on the rest constraint, into the right tail `t₁`
-      have hrec : Step (defsOf s) (SolR s) ((restRow (fs₁.missing fs₀) t₀').toTy.field l)
+      have hrec : Step (defsOf s) (TC (SolR s)) ((restRow (fs₁.missing fs₀) t₀').toTy.field l)
           (t₁.toTy.field l) := by
         have ht : t₁ = (rowView (.record fb tb)).2 := by rw [e₁]
         refine ihSize t₁ _ l ?_ ?_ hrest
@@ -336,7 +507,7 @@ theorem stepFieldCore (hi : Inv s) (h₂ : Inv₂ s) (hn : LogNAC s) {rank : Nat
           dsimp only
           cases hcom _ (SFields.common_mem fs₁ h₁ h₀) with
           | toAbs => exact .abs
-          | pre h₀' _ h => exact stepTy hi h₂ hn h (.inl h₀')
+          | pre h₀' _ h => exact stepTy hi hn hr h (.inl h₀')
         | none =>
           dsimp only
           simp only [h₀, h₁, Option.isSome, Bool.false_eq_true, ite_false] at hmiss
@@ -358,17 +529,22 @@ theorem stepFieldCore (hi : Inv s) (h₂ : Inv₂ s) (hn : LogNAC s) {rank : Nat
             cases hab _ (SFields.absPairs_mem _ hal) with
             | toAbs => exact .abs
             | pre h₀' => exact absurd rfl h₀'
-          | var K _ hab _ hv =>
+          | var K _ hab _ hu hrel =>
             by_cases hk : l ∈ K
             · have hal : (ms.absentIn K).lookup l = some f₁ := by
                 rw [SFields.absentIn_lookup]; simp [hk, hmiss]
               cases hab _ (SFields.absPairs_mem _ hal) with
               | toAbs => exact .abs
               | pre h₀' => exact absurd rfl h₀'
-            · refine .projDefL ⟨_, .here (expansion_bound hi hv) (fun _ h => nomatch h), rfl⟩ ?_
-              rw [field_record, SFields.presentIn_lookup]
-              simp only [hk, hmiss, ite_false]
-              exact stepRefl f₁
+            · -- the expansion's upper bound provides `l`, below the expanded field
+              have hp : (ms.presentIn K).lookup l = some f₁ := by
+                rw [SFields.presentIn_lookup]; simp [hk, hmiss]
+              obtain ⟨f', hf', hq⟩ := hrel.lookup hp
+              refine .projDefL ⟨_, .here hu (fun _ h => nomatch h), rfl⟩ ?_
+              rw [field_record, hf']
+              cases hq with
+              | toAbs => exact .abs
+              | pre h₀' _ h => exact stepTy hi hn hr h (.inl h₀')
       | none =>
         simp only [h₁, Option.isSome, Bool.false_eq_true, ite_false] at hrest_field
         cases h₀ : fs₀.lookup l with
@@ -387,34 +563,73 @@ theorem stepFieldCore (hi : Inv s) (h₂ : Inv₂ s) (hn : LogNAC s) {rank : Nat
           | none => rw [← hrest_field]; exact hrec
           | abs => rw [← hrest_field]; exact hrec
           | varAbsent => rw [← hrest_field]; exact hrec
-          | var K _ _ _ hv =>
-            refine .projDefL ⟨_, .here (expansion_bound hi hv) (fun _ h => nomatch h), rfl⟩ ?_
-            rw [field_record, SFields.presentIn_lookup]
-            simp only [hmiss, ite_self]
+          | var K _ _ _ hu hrel =>
+            refine .projDefL ⟨_, .here hu (fun _ h => nomatch h), rfl⟩ ?_
+            have hp : (ms.presentIn K).lookup l = none := by
+              rw [SFields.presentIn_lookup]; simp [hmiss]
+            rw [field_record, hrel.lookup_none hp]
+            dsimp only
             rw [← hrest_field]
             exact hrec
-    | @varL v _ hub =>
-      cases b with
-      | var w =>
-        exact .projDefR fun τ ⟨u, hc, hτ⟩ => by
-          subst hτ; exact .projDefL ⟨u, .step hub hc, rfl⟩ (stepReflField l u)
-      | prim _ => exact .projDefL ⟨_, .here hub (fun _ h => nomatch h), rfl⟩ (stepReflField l _)
-      | arrow _ _ => exact .projDefL ⟨_, .here hub (fun _ h => nomatch h), rfl⟩ (stepReflField l _)
-      | record _ _ => exact .projDefL ⟨_, .here hub (fun _ h => nomatch h), rfl⟩ (stepReflField l _)
-      | abs => exact .projDefL ⟨_, .here hub (fun _ h => nomatch h), rfl⟩ (stepReflField l _)
+    | varL => exact absurd rfl (hav _)
+    | viaL => exact absurd rfl (hav _)
     | @varR v _ hlb =>
       exact .projDefR fun τ ⟨u, hc, hτ⟩ => by
         subst hτ
-        exact ihRank u a l (tailRank_var_lt hr hc) (clo_logged hi h₂ hc a hlb)
+        exact (lower_chain hi hr hc a hlb hav _ (Nat.le_refl _)).fieldStep
+          fun x y hxy hy => ihRank y x l hy hxy
+    | viaR hl' h₁ h₂ _ _ hR =>
+      exact .projDefR fun τ ⟨u, hc, hτ⟩ => by
+        subst hτ
+        exact (Chain.cons hR hav h₁ h₂ (tailRank_lower_lt hr hl' h₁)
+          (lower_chain hi hr hc _ hl' h₁ _ (Nat.le_refl _))).fieldStep
+            fun x y hxy hy => ihRank y x l hy hxy
+
+/-- One layer for a field pair of an accepted constraint (see `stepFieldNV`;
+a variable on the left goes through its bounds). -/
+theorem stepFieldCore (hi : Inv s) (hn : LogNAC s) {rank : Nat → Nat}
+    (hr : TailRanked s rank) (b : SType)
+    (ihRank : ∀ u a l, tailRank rank u < tailRank rank b → Logged s a u →
+      St s (a.toTy.field l) (u.toTy.field l))
+    (ihSize : ∀ b' a l, tailRank rank b' = tailRank rank b → sizeOf b' < sizeOf b →
+      Logged s a b' → St s (a.toTy.field l) (b'.toTy.field l))
+    (a : SType) (l : String) (hl : Logged s a b) :
+    St s (a.toTy.field l) (b.toTy.field l) := by
+  cases a with
+  | prim _ => exact stepFieldNV hi hn hr b ihRank ihSize (.prim _) (fun _ h => nomatch h) l hl
+  | arrow _ _ => exact stepFieldNV hi hn hr b ihRank ihSize (.arrow _ _) (fun _ h => nomatch h) l hl
+  | record _ _ => exact stepFieldNV hi hn hr b ihRank ihSize (.record _ _) (fun _ h => nomatch h) l hl
+  | abs => exact stepFieldNV hi hn hr b ihRank ihSize .abs (fun _ h => nomatch h) l hl
+  | var w =>
+    rcases hl with rfl | hl
+    · exact stepReflField l _
+    · cases hi.just.step hl with
+      | absR => exact .abs
+      | varL hub =>
+        cases b with
+        | var w =>
+          exact .projDefR fun τ ⟨u, hc, hτ⟩ => by
+            subst hτ; exact .projDefL ⟨u, .step hub hc, rfl⟩ (stepReflField l u)
+        | prim _ => exact .projDefL ⟨_, .here hub (fun _ h => nomatch h), rfl⟩ (stepReflField l _)
+        | arrow _ _ => exact .projDefL ⟨_, .here hub (fun _ h => nomatch h), rfl⟩ (stepReflField l _)
+        | record _ _ => exact .projDefL ⟨_, .here hub (fun _ h => nomatch h), rfl⟩ (stepReflField l _)
+        | abs => exact .projDefL ⟨_, .here hub (fun _ h => nomatch h), rfl⟩ (stepReflField l _)
+      | @varR v _ hlb =>
+        exact .projDefR fun τ ⟨u, hc, hτ⟩ => by
+          subst hτ
+          exact fieldVarLower hi hr (fun x y hxy hy => ihRank y x l hy hxy) hc w hlb (Nat.le_refl _)
+      | viaL hb hbv _ _ hR =>
+        exact .projDefL ⟨_, .here hb hbv, rfl⟩ (stepFieldNV hi hn hr b ihRank ihSize _ hbv l hR)
+      | viaR _ _ _ hav => exact absurd rfl (hav _)
 
 /-- One layer for a field pair of an accepted constraint, by nested
 induction: on a bound for the tail rank of the right side, then on a bound
 for its size. -/
-theorem stepField (hi : Inv s) (h₂ : Inv₂ s) (hn : LogNAC s) {rank : Nat → Nat}
+theorem stepField (hi : Inv s) (hn : LogNAC s) {rank : Nat → Nat}
     (hr : TailRanked s rank) (b a : SType) (l : String) (hl : Logged s a b) :
-    Step (defsOf s) (SolR s) (a.toTy.field l) (b.toTy.field l) := by
+    St s (a.toTy.field l) (b.toTy.field l) := by
   suffices h : ∀ n, ∀ b, tailRank rank b < n → ∀ m, sizeOf b < m → ∀ a l, Logged s a b →
-      Step (defsOf s) (SolR s) (a.toTy.field l) (b.toTy.field l) from
+      St s (a.toTy.field l) (b.toTy.field l) from
     h _ b (Nat.lt_succ_self _) _ (Nat.lt_succ_self _) a l hl
   intro n
   induction n with
@@ -425,7 +640,7 @@ theorem stepField (hi : Inv s) (h₂ : Inv₂ s) (hn : LogNAC s) {rank : Nat →
     | zero => intro h; exact absurd h (Nat.not_lt_zero _)
     | succ m ihm =>
       intro hm
-      exact stepFieldCore hi h₂ hn hr b
+      exact stepFieldCore hi hn hr b
         (fun u a l hu hl => ihn u (by omega) _ (Nat.lt_succ_self _) a l hl)
         (fun b' a l hb' hs hl => ihm b' (by omega) (by omega) a l hl)
 
@@ -433,19 +648,19 @@ end Steps
 
 /-! ## The solution theorem -/
 
-/-- **Solution theorem**: in a state reached by the algorithm, every
+/-- **Solution theorem**: in a state satisfying the invariants, every
 accepted constraint `a ≤ b` whose left side is not `Abs` holds of the
 solution: `θ(a) ≤ θ(b)`, where each type variable is the intersection of
 its reachable upper bounds, provided chains of row-variable tails are
 acyclic. (Constraints with `Abs` on the left are row constraints; their
 fields are related instead, see `stepField`.) -/
-theorem solution_rows {s : State} {rank : Nat → Nat} (hi : Inv s) (h₂ : Inv₂ s)
+theorem solution_rows {s : State} {rank : Nat → Nat} (hi : Inv s)
     (hn : LogNAC s) (hr : TailRanked s rank) (hl : Logged s a b) (ha : a ≠ .abs ∨ a = b) :
     Sub (defsOf s) a.toTy b.toTy :=
-  Sub.coind (SolR s)
+  Sub.coind_trans (SolR s)
     (fun _ _ h => match h with
-      | .ty h ha => stepTy hi h₂ hn h ha
-      | .fld h => stepField hi h₂ hn hr _ _ _ h)
+      | .ty h ha => stepTy hi hn hr h ha
+      | .fld h => stepField hi hn hr _ _ _ h)
     (.ty hl ha)
 
 end SimpleSub.Alg

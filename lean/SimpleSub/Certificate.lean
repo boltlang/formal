@@ -61,7 +61,7 @@ def Accepts (c : Certificate) (a b : SType) : Prop := a = b ∨ (a, b) ∈ c.log
 
 structure Valid (c : Certificate) : Prop where
   inv : Inv c.state
-  inv₂ : Inv₂ c.state
+  inLog : BoundsInLog c.state
   nac : LogNAC c.state
   kinds : KLog c.kind c.state
 
@@ -98,8 +98,8 @@ end
 needs; the kinds give the tail ranking. -/
 theorem Certificate.Valid.final {c : Certificate} (hv : c.Valid) :
     Final c.state (kindRank (loggedLabels c.state) c.kind) :=
-  ⟨hv.inv, hv.inv₂, hv.nac,
-    kinds_tailRanked ⟨rfl, hv.kinds, fun _ _ _ h => nomatch h⟩ hv.inv₂⟩
+  ⟨hv.inv, hv.inLog, hv.nac,
+    kinds_tailRanked ⟨rfl, hv.kinds, fun _ _ _ h => nomatch h⟩ hv.inLog⟩
 
 theorem Certificate.Valid.sub {c : Certificate} (hv : c.Valid) (h : c.Accepts a b)
     (ha : a ≠ .abs) : Sub (defsOf c.state) a.toTy b.toTy :=
@@ -265,7 +265,7 @@ theorem State.certificate_valid {s : State} (hi : Inv s) (i : Inv₂ s) (hn : Lo
     (hk : KInv K s) : s.certificate.Valid := by
   have hb := State.certificate_bounds i
   refine ⟨Inv.congr hb rfl hi, ?_, ?_, ?_⟩
-  · exact i.of_bounds hb (fun _ hp => hp)
+  · exact (Inv₂.of_bounds (s' := s.certificate.state) i hb (fun _ hp => hp)).inLog
   · exact hn
   · intro p hp
     have hv := mem_logVars hp

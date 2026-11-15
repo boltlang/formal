@@ -205,24 +205,28 @@ apart on the left, so those cases are vacuous.
 Contractiveness is not needed: every cut is between finite (inductive)
 derivations. -/
 
-/-- Subtyping, or the composition of subtyping with itself. Including
-`Sub E` itself lets a cut against the reflexive atom rule of a *defined*
-variable reuse the original derivation. -/
-def Comp (E : Defs) (x z : Ty) : Prop := Sub E x z ∨ ∃ y, Sub E x y ∧ Sub E y z
+/-- A relation, or its composition with itself. Including `R` itself lets
+a cut against the reflexive atom rule of a *defined* variable reuse the
+original derivation. The cut works for any relation `R` in the guarded
+premises; transitivity of `Sub` is the case `R = Sub E`. -/
+def RComp (R : Ty → Ty → Prop) (x z : Ty) : Prop := R x z ∨ ∃ y, R x y ∧ R y z
+
+/-- Subtyping, or the composition of subtyping with itself. -/
+abbrev Comp (E : Defs) : Ty → Ty → Prop := RComp (Sub E)
 
 section Cut
 
-variable {x : Ty}
+variable {x : Ty} {R : Ty → Ty → Prop}
 
 /- Each `cut_*` lemma handles one shape of the middle type `y`, by
 induction on the right derivation. Rules that take `z` apart commute
 outward; the rule that takes `y` apart must be the matching one. -/
 
 /-- Lift a subtyping derivation into the hypothesis of the cut. -/
-theorem Step.toComp (h : Step E (Sub E) a b) : Step E (Comp E) a b :=
+theorem Step.toComp (h : Step E R a b) : Step E (RComp R) a b :=
   h.mono fun _ _ h => .inl h
 
-theorem cut_top : ∀ y z, Step E (Sub E) y z → y = .top → Step E (Comp E) x z := by
+theorem cut_top : ∀ y z, Step E R y z → y = .top → Step E (RComp R) x z := by
   intro y z h
   induction h with
   | top => intro _; exact .top
@@ -236,7 +240,7 @@ theorem cut_top : ∀ y z, Step E (Sub E) y z → y = .top → Step E (Comp E) x
   | bot | prim | fvar | proj | gvar | unionL | interL₁ | interL₂ | muL | arrow | record | defL | projDefL =>
     intro hy; cases hy
 
-theorem cut_abs : ∀ y z, Step E (Sub E) y z → y = .abs → Step E (Comp E) x z := by
+theorem cut_abs : ∀ y z, Step E R y z → y = .abs → Step E (RComp R) x z := by
   intro y z h
   induction h with
   | top => intro _; exact .top
@@ -256,7 +260,7 @@ already a derivation from `x`. -/
 theorem cut_atom
     (hatom : (∃ n, x = .prim n) ∨ (∃ v, x = .fvar v) ∨ (∃ l t, x = .proj l t) ∨
       (∃ n, x = .gvar n)) :
-    ∀ y z, Step E (Sub E) y z → y = x → Step E (Comp E) x z := by
+    ∀ y z, Step E R y z → y = x → Step E (RComp R) x z := by
   intro y z h
   induction h with
   | top => intro _; exact .top
@@ -277,8 +281,8 @@ theorem cut_atom
     intro hy; subst hy
     rcases hatom with ⟨_, h⟩ | ⟨_, h⟩ | ⟨_, _, h⟩ | ⟨_, h⟩ <;> cases h
 
-theorem cut_unionR₁ (ih : ∀ z, Step E (Sub E) y₁ z → Step E (Comp E) x z) :
-    ∀ y z, Step E (Sub E) y z → y = .union y₁ y₂ → Step E (Comp E) x z := by
+theorem cut_unionR₁ (ih : ∀ z, Step E R y₁ z → Step E (RComp R) x z) :
+    ∀ y z, Step E R y z → y = .union y₁ y₂ → Step E (RComp R) x z := by
   intro y z h
   induction h with
   | top => intro _; exact .top
@@ -293,8 +297,8 @@ theorem cut_unionR₁ (ih : ∀ z, Step E (Sub E) y₁ z → Step E (Comp E) x z
   | bot | prim | fvar | proj | gvar | interL₁ | interL₂ | muL | arrow | record | defL | projDefL =>
     intro hy; cases hy
 
-theorem cut_unionR₂ (ih : ∀ z, Step E (Sub E) y₂ z → Step E (Comp E) x z) :
-    ∀ y z, Step E (Sub E) y z → y = .union y₁ y₂ → Step E (Comp E) x z := by
+theorem cut_unionR₂ (ih : ∀ z, Step E R y₂ z → Step E (RComp R) x z) :
+    ∀ y z, Step E R y z → y = .union y₁ y₂ → Step E (RComp R) x z := by
   intro y z h
   induction h with
   | top => intro _; exact .top
@@ -309,9 +313,9 @@ theorem cut_unionR₂ (ih : ∀ z, Step E (Sub E) y₂ z → Step E (Comp E) x z
   | bot | prim | fvar | proj | gvar | interL₁ | interL₂ | muL | arrow | record | defL | projDefL =>
     intro hy; cases hy
 
-theorem cut_interR (ih₁ : ∀ z, Step E (Sub E) y₁ z → Step E (Comp E) x z)
-    (ih₂ : ∀ z, Step E (Sub E) y₂ z → Step E (Comp E) x z) :
-    ∀ y z, Step E (Sub E) y z → y = .inter y₁ y₂ → Step E (Comp E) x z := by
+theorem cut_interR (ih₁ : ∀ z, Step E R y₁ z → Step E (RComp R) x z)
+    (ih₂ : ∀ z, Step E R y₂ z → Step E (RComp R) x z) :
+    ∀ y z, Step E R y z → y = .inter y₁ y₂ → Step E (RComp R) x z := by
   intro y z h
   induction h with
   | top => intro _; exact .top
@@ -327,8 +331,8 @@ theorem cut_interR (ih₁ : ∀ z, Step E (Sub E) y₁ z → Step E (Comp E) x z
   | bot | prim | fvar | proj | gvar | unionL | muL | arrow | record | defL | projDefL =>
     intro hy; cases hy
 
-theorem cut_muR (ih : ∀ z, Step E (Sub E) (b.open (.mu b)) z → Step E (Comp E) x z) :
-    ∀ y z, Step E (Sub E) y z → y = .mu b → Step E (Comp E) x z := by
+theorem cut_muR (ih : ∀ z, Step E R (b.open (.mu b)) z → Step E (RComp R) x z) :
+    ∀ y z, Step E R y z → y = .mu b → Step E (RComp R) x z := by
   intro y z h
   induction h with
   | top => intro _; exact .top
@@ -347,9 +351,9 @@ theorem cut_muR (ih : ∀ z, Step E (Sub E) (b.open (.mu b)) z → Step E (Comp 
 `x` is below all its upper bounds): against the right's atom rule the left
 derivation itself is the result; against `defL` (one upper bound below `z`)
 the two cut on that upper bound. -/
-theorem cut_defR (hl : ∀ u, E n u → Step E (Sub E) x u)
-    (ih : ∀ u, E n u → ∀ z, Step E (Sub E) u z → Step E (Comp E) x z) :
-    ∀ y z, Step E (Sub E) y z → y = .gvar n → Step E (Comp E) x z := by
+theorem cut_defR (hl : ∀ u, E n u → Step E R x u)
+    (ih : ∀ u, E n u → ∀ z, Step E R u z → Step E (RComp R) x z) :
+    ∀ y z, Step E R y z → y = .gvar n → Step E (RComp R) x z := by
   intro y z h
   induction h with
   | top => intro _; exact .top
@@ -365,9 +369,9 @@ theorem cut_defR (hl : ∀ u, E n u → Step E (Sub E) x u)
   | bot | prim | fvar | proj | unionL | interL₁ | interL₂ | muL | arrow | record | projDefL =>
     intro hy; cases hy
 
-theorem cut_projDefR (hl : ∀ u, E n u → Step E (Sub E) x (u.field l))
-    (ih : ∀ u, E n u → ∀ z, Step E (Sub E) (u.field l) z → Step E (Comp E) x z) :
-    ∀ y z, Step E (Sub E) y z → y = .proj l (.gvar n) → Step E (Comp E) x z := by
+theorem cut_projDefR (hl : ∀ u, E n u → Step E R x (u.field l))
+    (ih : ∀ u, E n u → ∀ z, Step E R (u.field l) z → Step E (RComp R) x z) :
+    ∀ y z, Step E R y z → y = .proj l (.gvar n) → Step E (RComp R) x z := by
   intro y z h
   induction h with
   | top => intro _; exact .top
@@ -383,8 +387,8 @@ theorem cut_projDefR (hl : ∀ u, E n u → Step E (Sub E) x (u.field l))
   | bot | prim | fvar | gvar | unionL | interL₁ | interL₂ | muL | arrow | record | defL =>
     intro hy; cases hy
 
-theorem cut_arrow (h₁ : Sub E b₁ a₁) (h₂ : Sub E a₂ b₂) :
-    ∀ y z, Step E (Sub E) y z → y = .arrow b₁ b₂ → Step E (Comp E) (.arrow a₁ a₂) z := by
+theorem cut_arrow (h₁ : R b₁ a₁) (h₂ : R a₂ b₂) :
+    ∀ y z, Step E R y z → y = .arrow b₁ b₂ → Step E (RComp R) (.arrow a₁ a₂) z := by
   intro y z h
   induction h with
   | top => intro _; exact .top
@@ -400,8 +404,8 @@ theorem cut_arrow (h₁ : Sub E b₁ a₁) (h₂ : Sub E a₂ b₂) :
     intro hy; cases hy
 
 theorem cut_record
-    (hf : ∀ l, Sub E ((Ty.record fs t).field l) ((Ty.record gs u).field l)) :
-    ∀ y z, Step E (Sub E) y z → y = .record gs u → Step E (Comp E) (.record fs t) z := by
+    (hf : ∀ l, R ((Ty.record fs t).field l) ((Ty.record gs u).field l)) :
+    ∀ y z, Step E R y z → y = .record gs u → Step E (RComp R) (.record fs t) z := by
   intro y z h
   induction h with
   | top => intro _; exact .top
@@ -420,7 +424,7 @@ end Cut
 
 /-- **Cut elimination for one layer**: `x ≤ y` and `y ≤ z` give `x ≤ z`,
 with guarded premises that are subtyping facts or compositions. -/
-theorem cut : Step E (Sub E) x y → ∀ z, Step E (Sub E) y z → Step E (Comp E) x z := by
+theorem cut : Step E R x y → ∀ z, Step E R y z → Step E (RComp R) x z := by
   intro hl
   induction hl with
   | top => intro z hr; exact cut_top _ z hr rfl
@@ -451,6 +455,31 @@ theorem Sub.trans (hab : Sub E a b) (hbc : Sub E b c) : Sub E a c := by
   rintro x z (h | ⟨_, hxy, hyz⟩)
   · exact h.step.toComp
   · exact cut hxy.step z hyz.step
+
+/-! ## Coinduction up to transitivity -/
+
+/-- The transitive closure of a relation. -/
+inductive TC (R : Ty → Ty → Prop) : Ty → Ty → Prop where
+  | base : R x y → TC R x y
+  | trans : TC R x y → TC R y z → TC R x z
+
+theorem TC.step {R : Ty → Ty → Prop} (hR : ∀ x y, R x y → Step E (TC R) x y) :
+    TC R a b → Step E (TC R) a b := by
+  intro h
+  induction h with
+  | base h => exact hR _ _ h
+  | trans _ _ ih₁ ih₂ =>
+    refine (cut ih₁ _ ih₂).mono fun _ _ h => ?_
+    rcases h with h | ⟨_, h₁, h₂⟩
+    · exact h
+    · exact .trans h₁ h₂
+
+/-- **Coinduction up to transitivity**: if every pair of `R` takes a step
+whose guarded premises are chains of `R`, then `R` is contained in
+subtyping. -/
+theorem Sub.coind_trans (R : Ty → Ty → Prop) (hR : ∀ x y, R x y → Step E (TC R) x y)
+    (h : R a b) : Sub E a b :=
+  Sub.coind (TC R) (fun _ _ h => TC.step hR h) (.base h)
 
 /-! ## Recursive types equal their unfolding (S-Rec) -/
 

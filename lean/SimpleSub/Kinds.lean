@@ -541,8 +541,9 @@ theorem builtins_K : CtxK K builtins := by
 
 /-! ## Ranking tails by kinds -/
 
-/-- The labels of the rows the algorithm accepted as right sides. -/
-def loggedLabels (s : State) : List String := s.log.flatMap fun p => (rowView p.2).1.labels
+/-- The labels of the rows in accepted constraints. -/
+def loggedLabels (s : State) : List String :=
+  s.log.flatMap fun p => (rowView p.1).1.labels ++ (rowView p.2).1.labels
 
 /-- The rank of a variable: how many logged labels it does not lack. -/
 def kindRank (U : List String) (K : Nat → List String) (v : Nat) : Nat :=
@@ -568,12 +569,12 @@ theorem countP_lt {U A B : List String} {l : String} (hsub : ∀ x, x ∈ A → 
 
 /-- Along a chain of variable bounds, kinds stay the same; the tail of the
 record at its end lacks strictly more, including a logged label. -/
-theorem clo_kinds {s : State} (k : KInv K s) (i : Inv₂ s) {v : Nat} {u : SType} {ρ : Nat}
+theorem clo_kinds {s : State} (k : KInv K s) (i : BoundsInLog s) {v : Nat} {u : SType} {ρ : Nat}
     (hc : Clo s.bounds v u) (hρ : (rowView u).2 = .var ρ) :
     (∀ x, x ∈ K v → x ∈ K ρ) ∧ ∃ l, l ∈ loggedLabels s ∧ l ∈ K ρ ∧ l ∉ K v := by
   induction hc with
   | @here n u hub hnv =>
-    have hlog := i.inLog.1 _ _ hub
+    have hlog := i.1 _ _ hub
     have hw := (k.log _ hlog).2.1
     have hk := (k.log _ hlog).2.2 n ρ rfl hρ
     simp only [RowKind, rowView, SFields.labels, List.not_mem_nil, not_false_eq_true,
@@ -589,19 +590,54 @@ theorem clo_kinds {s : State} (k : KInv K s) (i : Inv₂ s) {v : Nat} {u : SType
         have hl : l ∈ (rowView (.record fs t)).1.labels := by
           rw [hfs]; simp [SFields.labels]
         refine ⟨fun x hx => ((hk x).1 hx).1, l, ?_, hr.2 l (by simp [SFields.labels]), fun hv => ((hk l).1 hv).2 hl⟩
-        exact List.mem_flatMap.mpr ⟨_, hlog, hl⟩
+        exact List.mem_flatMap.mpr ⟨_, hlog, List.mem_append_right _ hl⟩
   | @step n m u hm _ ih =>
-    have hk := (k.log _ (i.inLog.1 _ _ hm)).2.2 n m rfl rfl
+    have hk := (k.log _ (i.1 _ _ hm)).2.2 n m rfl rfl
     simp only [RowKind, rowView, SFields.labels, List.not_mem_nil, not_false_eq_true,
       and_true] at hk
     obtain ⟨h₁, l, h₂, h₃, h₄⟩ := ih hρ
     exact ⟨fun x hx => h₁ x ((hk x).1 hx), l, h₂, h₃, fun hl => h₄ ((hk l).1 hl)⟩
 
+/-- A non-variable lower bound lacks what its variable lacks; its tail lacks
+strictly more, including a logged label. -/
+theorem lower_kinds {s : State} (k : KInv K s) (i : BoundsInLog s) {v ρ : Nat} {x : SType}
+    (hx : x ∈ (s.bounds v).lower) (hnv : ∀ w, x ≠ .var w) (hρ : (rowView x).2 = .var ρ) :
+    (∀ y, y ∈ K v → y ∈ K ρ) ∧ ∃ l, l ∈ loggedLabels s ∧ l ∈ K ρ ∧ l ∉ K v := by
+  have hlog := i.2 _ _ hx
+  have hw := (k.log _ hlog).1
+  have hk := (k.log _ hlog).2.2 ρ v hρ rfl
+  simp only [RowKind, rowView, SFields.labels, List.not_mem_nil, not_false_eq_true,
+    and_true] at hk
+  cases x with
+  | var w => exact absurd rfl (hnv w)
+  | prim _ | arrow _ _ | abs => simp [rowView] at hρ
+  | record fs t =>
+    have hr := hw.2.2 ρ hρ
+    match hfs : (rowView (.record fs t)).1, hr with
+    | .nil, hr => exact absurd rfl hr.1
+    | .cons l f rest, hr =>
+      have hl : l ∈ (rowView (.record fs t)).1.labels := by
+        rw [hfs]; simp [SFields.labels]
+      refine ⟨fun y hy => ((hk y).2 hy).1, l, ?_, hr.2 l (by simp [SFields.labels]),
+        fun hv => ((hk l).2 hv).2 hl⟩
+      exact List.mem_flatMap.mpr ⟨_, hlog, List.mem_append_left _ hl⟩
+
 /-- **Kinds rank tails**: the kind invariant implies `TailRanked`. -/
-theorem kinds_tailRanked {s : State} (k : KInv K s) (i : Inv₂ s) :
-    TailRanked s (kindRank (loggedLabels s) K) := fun _ _ _ hc hρ =>
-  let ⟨h₁, _, h₂, h₃, h₄⟩ := clo_kinds k i hc hρ
-  countP_lt h₁ h₂ h₃ h₄
+theorem kinds_tailRanked {s : State} (k : KInv K s) (i : BoundsInLog s) :
+    TailRanked s (kindRank (loggedLabels s) K) where
+  clo := fun _ _ _ hc hρ =>
+    let ⟨h₁, _, h₂, h₃, h₄⟩ := clo_kinds k i hc hρ
+    countP_lt h₁ h₂ h₃ h₄
+  upVar := fun v m hm => by
+    have hk := (k.log _ (i.1 _ _ hm)).2.2 v m rfl rfl
+    simp only [RowKind, rowView, SFields.labels, List.not_mem_nil, not_false_eq_true,
+      and_true] at hk
+    exact List.countP_mono_left fun x _ h => by
+      simp only [Bool.not_eq_true', decide_eq_false_iff_not] at h ⊢
+      exact fun hx => h ((hk x).1 hx)
+  lower := fun _ _ _ hx hnv hρ =>
+    let ⟨h₁, _, h₂, h₃, h₄⟩ := lower_kinds k i hx hnv hρ
+    countP_lt h₁ h₂ h₃ h₄
 
 /-! ## Theorem 1 -/
 
@@ -611,6 +647,7 @@ if the algorithm types `t` with `st` in the built-in context, for the kinds
 system, where `θ` is the solution of `s'`. -/
 theorem theorem1 (h : TypeTerm builtins (State.initK K) t st s') :
     Typ (defsOf s') builtins.toCtx t st.toTy :=
-  soundness h (kinds_tailRanked (h.kinds builtins_K Inv₂.init KInv.init).1 (h.inv₂ Inv₂.init))
+  soundness h (kinds_tailRanked (h.kinds builtins_K Inv₂.init KInv.init).1
+    (h.inv₂ Inv₂.init).inLog)
 
 end SimpleSub.Alg

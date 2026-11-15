@@ -241,21 +241,21 @@ in `lean/`. Everything below is proved; there are no `sorry`s.
   while a new bound propagates. `ConstrainTop.sound`: a successful
   `constrain` call preserves the invariant and accepts its constraint.
   `TypeTerm.inv_init`: the invariant holds after typing any term.
-- `SimpleSub/Solution.lean`: from the invariant to `Sub` (the paper's
-  unifying coalescing), proved for the record-free fragment. Each type
-  variable `v` becomes a *graph variable* `gvar v`, defined as the
-  intersection of the non-variable upper bounds reachable from `v` through
-  variable-to-variable bounds (`Clo`, an inductive predicate, so cycles
-  need no special treatment). `clo_logged` closes chains of variable
-  bounds. `solution`: every accepted constraint `a ≤ b` gives
-  `θ(a) ≤ θ(b)`.
-- `SimpleSub/SolutionRows.lean`: the same for all simple types, rows
-  included (`solution_rows`). The coinductive relation also holds the
+- `SimpleSub/Solution.lean`: the solution (the paper's unifying
+  coalescing). Each type variable `v` becomes a *graph variable* `gvar v`,
+  defined as the intersection of the non-variable upper bounds reachable
+  from `v` through variable-to-variable bounds (`Clo`, an inductive
+  predicate, so cycles need no special treatment).
+- `SimpleSub/SolutionRows.lean`: every accepted constraint `a ≤ b` gives
+  `θ(a) ≤ θ(b)` (`solution_rows`). The coinductive relation also holds the
   *field projections* of accepted constraints. Proving a field pair follows
   the algorithm's record case: common fields, labels supplied by row
-  expansion, extra fields flowing into the right tail. It assumes chains of
-  row-variable tails through upper bounds are acyclic (`TailRanked`), which
-  kinds guarantee (`Kinds.lean`).
+  expansion, extra fields flowing into the right tail. The coinduction is
+  up to transitivity (`Sub.coind_trans`), because a constraint justified
+  through an extruded bound only holds through a chain of accepted
+  constraints. Variables may be lower bounds. It assumes chains of
+  row-variable tails are acyclic (`TailRanked`), which kinds guarantee
+  (`Kinds.lean`).
 - `SimpleSub/Theorem1.lean`: **soundness of type inference** (the paper's
   Theorem 1, for our model). If the algorithm types `t` with `st` from the
   built-in context, then `t : θ(st)` in the declarative system, where `θ`
@@ -311,13 +311,20 @@ proof, where they are needed.
      So this step relates the graph solution to coalesced types (the
      paper's Lemma relating constraints and coalescing). That is also
      what makes the theorem speak about the types the checker prints.
-   - 4d, instantiation and extrusion, as certificates: to do. Levels and
+   - 4d, instantiation and extrusion, as certificates. Levels and
      extrusion are how the inferencer keeps generalization correct; the
-     checker does not need them as an algorithm. A certificate records
-     each instantiation, and the checker validates it. Justification
-     gains the constraint shapes extrusion produces: variables as lower
-     bounds, and `v ≤ b` justified by an upper bound `b'` of `v` with
-     `b' ≤ b` accepted.
+     checker does not need them as an algorithm.
+     - Extrusion: done. Justification accepts what extrusion produces:
+       variables as lower bounds; `v ≤ b` through an upper bound `b'` of
+       `v` with `b' ≤ b` accepted (`viaL`), and dually `a ≤ v` through a
+       lower bound `a'` with `a ≤ a'` accepted (`viaR`), both between
+       non-variables so they stay guarded; and row expansion through an
+       installed upper bound whose fields are below the expanded ones.
+       The solution theorem holds for all of these (coinduction up to
+       transitivity), so certificates no longer need "no variable lower
+       bounds".
+     - Instantiation: to do. A certificate records each instantiation,
+       and the checker validates it.
 5. The MLsub equations and the simplifier, sequent-style (see
    `Lattice.lean`).
 6. A certificate checker. The inferencer (`lib/typer.ml` now, Bolt's
