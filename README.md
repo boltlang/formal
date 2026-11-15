@@ -324,10 +324,16 @@ proof, where they are needed.
    compiler later) emits its result: the type of each node, and the final
    bounds and accepted constraints. A Lean checker decides the invariants
    the soundness proofs rely on (justification, consistency, kinds, `Abs`
-   only in rows), so Theorem 1 applies to every accepted certificate. The
-   proofs come first: Theorem 1 restated for certificates, with the
-   invariants as decidable predicates. The executable checker and the
-   certificate output come later.
+   only in rows), so Theorem 1 applies to every accepted certificate.
+   - 6a, proofs: done (`Certificate.lean`). A certificate lists the
+     accepted constraints, the bounds and the kinds; validity is the
+     invariants over those finite lists. Soundness (`CTyp.sound`): a
+     valid certificate with a typing skeleton for a term gives its
+     declarative typing. Adequacy (`TypeTerm.certificate`): every run of
+     the model yields a valid certificate and skeleton, so a correct
+     inferencer is never rejected.
+   - 6b, programs: to do. Boolean checks with proofs that they decide
+     validity and skeletons, and certificate output from `lib/typer.ml`.
 
 ## Not yet implemented
 
