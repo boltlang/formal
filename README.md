@@ -359,9 +359,13 @@ proof, where they are needed.
        checker verifies `ρ` fixes every non-generalized variable and that
        the copies' renamed bounds are accepted (`InstOK`). The copies'
        solution is then an instance of the scheme.
+     - Examples (`Examples.lean`): certificates and skeletons for
+       `let id = fun x -> x in id 1` (`∀0. 0 → 0`) and
+       `let inc = fun x -> succ x in inc 1`
+       (`∀0 3. 0 ≤ int, int ≤ 3 ⇒ 0 → 3`, used at copies carrying the
+       renamed bounds), checked by hand and typed by `PTyp.sound_top`.
      - Still to do: adequacy for polymorphic skeletons (the model has no
-       levels or instantiation yet), and an example certificate with a
-       non-trivial generalization.
+       levels or instantiation yet).
    - Presentation: closed `∀`-types (MLsub's, as printed) are equivalent
      to the constrained schemes by coalescing. This needs the MLsub
      equations, so it comes with step 5.

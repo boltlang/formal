@@ -14,3 +14,4 @@ import SimpleSub.Kinds
 import SimpleSub.Certificate
 import SimpleSub.SolutionGen
 import SimpleSub.PolyLet
+import SimpleSub.Examples
