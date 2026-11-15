@@ -648,6 +648,16 @@ end Steps
 
 /-! ## The solution theorem -/
 
+/-- Every pair of the coinductive relation holds, field pairs included. -/
+theorem SolR.sub {s : State} {rank : Nat → Nat} (hi : Inv s) (hn : LogNAC s)
+    (hr : TailRanked s rank) (h : SolR s x y) : Sub (defsOf s) x y :=
+  Sub.coind_trans (SolR s)
+    (fun _ _ h => match h with
+      | .ty h ha => stepTy hi hn hr h ha
+      | .fld h => stepField hi hn hr _ _ _ h)
+    h
+
+
 /-- **Solution theorem**: in a state satisfying the invariants, every
 accepted constraint `a ≤ b` whose left side is not `Abs` holds of the
 solution: `θ(a) ≤ θ(b)`, where each type variable is the intersection of
@@ -657,10 +667,6 @@ fields are related instead, see `stepField`.) -/
 theorem solution_rows {s : State} {rank : Nat → Nat} (hi : Inv s)
     (hn : LogNAC s) (hr : TailRanked s rank) (hl : Logged s a b) (ha : a ≠ .abs ∨ a = b) :
     Sub (defsOf s) a.toTy b.toTy :=
-  Sub.coind_trans (SolR s)
-    (fun _ _ h => match h with
-      | .ty h ha => stepTy hi hn hr h ha
-      | .fld h => stepField hi hn hr _ _ _ h)
-    (.ty hl ha)
+  SolR.sub hi hn hr (.ty hl ha)
 
 end SimpleSub.Alg

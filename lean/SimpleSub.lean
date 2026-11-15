@@ -12,3 +12,4 @@ import SimpleSub.SolutionRows
 import SimpleSub.Theorem1
 import SimpleSub.Kinds
 import SimpleSub.Certificate
+import SimpleSub.SolutionGen
