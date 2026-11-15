@@ -22,6 +22,8 @@ lake build
 | `SimpleSub/Theorem1.lean` | soundness of type inference (`soundness`), assuming acyclic row-variable tails; generalized over renamings of type variables (`soundR`), for instantiation |
 | `SimpleSub/Kinds.lean` | kinds for row variables: the algorithm keeps rows well-kinded, so tails are acyclic; **Theorem 1** with no assumptions (`theorem1`) |
 | `SimpleSub/Certificate.lean` | certificates (accepted constraints, bounds, kinds, ranks) and typing skeletons: a valid certificate gives a declarative typing over a solution without recursive types (`CTyp.sound`, `Valid.nonrec`), and every accepted run yields one (`TypeTerm.certificate`) |
+| `SimpleSub/SolutionGen.lean` | the solution under a generalization: accepted constraints hold when generalized variables are read as an instance of their bounds (`solution_gen`) |
+| `SimpleSub/PolyLet.lean` | certificates with let-polymorphism: schemes from generalized variables and their bounds (`mkScheme`), checked generalization (`GenOK`) and instantiation (`InstOK`), soundness (`PTyp.sound_top`; uses classical logic) |
 | `SimpleSub/Sub.lean` | guarded coinductive subtyping, rows compared as label maps; reflexivity, transitivity (cut elimination, for any relation), coinduction up to transitivity, ranked (non-recursive) definitions, the paper's §5.1.3 example with graph variables, row examples |
 | `SimpleSub/Rows.lean` | row algebra; exactness of the row rewrites in `lib/simplify.ml` and `lib/subsume.ml` |
 

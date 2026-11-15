@@ -2,7 +2,7 @@
 # Types
 
 The user-facing type language of the OCaml implementation (`Types.typ`),
-including rows. Free type and row variables are named (`fvar`); graph
+including rows. Free type and row variables are numbered (`fvar`); graph
 variables (`gvar`) are the variables of the algorithm's state, whose
 meaning is given by definitions (`Defs` in `Sub.lean`).
 
@@ -39,8 +39,9 @@ inductive Ty where
   /-- The absent field, and the top row in tail position. -/
   | abs
   | prim : String → Ty
-  /-- A free (named) type or row variable. -/
-  | fvar : String → Ty
+  /-- A free type or row variable (numbered, so fresh ones are easy to
+  pick: larger than every number in sight). -/
+  | fvar : Nat → Ty
   /-- Field `l` of an opaque row, such as a row variable: `ρ.l`. -/
   | proj : String → Ty → Ty
   /-- A *graph variable*: a type variable of the algorithm's state, whose

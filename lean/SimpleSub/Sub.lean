@@ -481,12 +481,12 @@ private def int : Ty := .prim "int"
 /-- A field hidden in a compound tail: `{ | 'b ∧ {done: bool}} ≤ {done: bool}`.
 This is the shape the simplifier produces for `count`. -/
 theorem field_in_compound_tail :
-    Sub E (.record .nil (.inter (.fvar "b") (.record (.cons "done" bool .nil) .abs)))
+    Sub E (.record .nil (.inter (.fvar 0) (.record (.cons "done" bool .nil) .abs)))
         (.record (.cons "done" bool .nil) .abs) := by
   refine Sub.of_step (.record fun l => ?_)
   by_cases h : l = "done"
   · subst h
-    exact Sub.of_step (show Step E (Sub E) (.inter (.proj "done" (.fvar "b")) bool) bool from
+    exact Sub.of_step (show Step E (Sub E) (.inter (.proj "done" (.fvar 0)) bool) bool from
       .interL₂ .prim)
   · have h' : ¬ "done" = l := fun e => h e.symm
     simp only [Ty.field, Fields.lookup, h']
@@ -504,8 +504,8 @@ theorem bottom_tail : Sub E (.record .nil .bot) (.record (.cons "x" int .nil) .a
 /-- A flat row and the same row nested in a tail:
 `{x: int | ρ} ≤ { | {x: int | ρ}}`. -/
 theorem nested_tail :
-    Sub E (.record (.cons "x" int .nil) (.fvar "ρ"))
-        (.record .nil (.record (.cons "x" int .nil) (.fvar "ρ"))) := by
+    Sub E (.record (.cons "x" int .nil) (.fvar 0))
+        (.record .nil (.record (.cons "x" int .nil) (.fvar 0))) := by
   refine Sub.of_step (.record fun l => ?_)
   by_cases h : l = "x"
   · subst h; exact Sub.of_step (show Step E (Sub E) int int from .prim)

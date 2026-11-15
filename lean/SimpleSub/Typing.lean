@@ -43,7 +43,7 @@ namespace SimpleSub
 
 mutual
 /-- Simultaneous substitution of free type variables. -/
-def Ty.substM : Ty → (String → Option Ty) → Ty
+def Ty.substM : Ty → (Nat → Option Ty) → Ty
   | .fvar x, m => (m x).getD (.fvar x)
   | .top, _ => .top
   | .bot, _ => .bot
@@ -56,7 +56,7 @@ def Ty.substM : Ty → (String → Option Ty) → Ty
   | .proj l t, m => .proj l (t.substM m)
   | .gvar n, _ => .gvar n
 
-def Fields.substM : Fields → (String → Option Ty) → Fields
+def Fields.substM : Fields → (Nat → Option Ty) → Fields
   | .nil, _ => .nil
   | .cons l f fs, m => .cons l (f.substM m) (fs.substM m)
 end
@@ -76,12 +76,22 @@ end
 
 /-! ## Schemes and contexts -/
 
-/-- `∀ vars. cs ⇒ body`, with `cs` constraints `a ≤ b` on the quantified
-variables. -/
+/-- A constraint `lhs ≤ rhs` of a scheme. It always holds field by field;
+`typeLevel` says whether it also holds as subtyping. A constraint
+`Abs ≤ ρ` (the row `ρ` guarantees no field) is a row constraint, only
+meaningful field by field, since `Abs` is the top type. The flag is part
+of the constraint, not computed from `lhs` after substitution, so
+instantiating a variable with `Abs` cannot discharge a constraint. -/
+structure Cstr where
+  lhs : Ty
+  rhs : Ty
+  typeLevel : Bool := true
+
+/-- `∀ vars. cs ⇒ body`, with constraints `cs` on the quantified variables. -/
 structure Scheme where
   poly ::
-  vars : List String
-  cs : List (Ty × Ty)
+  vars : List Nat
+  cs : List Cstr
   body : Ty
 
 /-- A monomorphic scheme. -/
@@ -91,20 +101,15 @@ def Scheme.mono (t : Ty) : Scheme := .poly [] [] t
 variable may stand for a row). -/
 def Holds (E : Defs) (a b : Ty) : Prop := Sub E a b ∧ ∀ l, Sub E (a.field l) (b.field l)
 
-/-- A constraint `a ≤ b` of a scheme holds after substituting `m`: field
-by field, and also as subtyping unless `a` is `Abs`. A constraint with
-`Abs` on the left (`Abs ≤ ρ`: the row `ρ` guarantees no field) is a row
-constraint, only meaningful field by field, since `Abs` is the top type.
-The condition is on `a` before substitution, so instantiating a variable
-with `Abs` does not discharge its constraints. -/
-def SatAfter (E : Defs) (m : String → Option Ty) (p : Ty × Ty) : Prop :=
-  (p.1 ≠ .abs → Sub E (p.1.substM m) (p.2.substM m)) ∧
-    ∀ l, Sub E ((p.1.substM m).field l) ((p.2.substM m).field l)
+/-- A constraint of a scheme holds after substituting `m`. -/
+def SatAfter (E : Defs) (m : Nat → Option Ty) (c : Cstr) : Prop :=
+  (c.typeLevel = true → Sub E (c.lhs.substM m) (c.rhs.substM m)) ∧
+    ∀ l, Sub E ((c.lhs.substM m).field l) ((c.rhs.substM m).field l)
 
 /-- `τ` is an instance of `σ`: substitute types for (some of) its
 quantified variables, such that its constraints hold. -/
 def Scheme.Instance (E : Defs) (σ : Scheme) (τ : Ty) : Prop :=
-  ∃ m : String → Option Ty, (∀ x, (m x).isSome → x ∈ σ.vars) ∧
+  ∃ m : Nat → Option Ty, (∀ x, (m x).isSome → x ∈ σ.vars) ∧
     (∀ p ∈ σ.cs, SatAfter E m p) ∧ τ = σ.body.substM m
 
 theorem Scheme.instance_mono (E : Defs) (t : Ty) : (Scheme.mono t).Instance E t :=
@@ -181,7 +186,7 @@ def builtins : Ctx :=
     ("not", .mono (.arrow bool bool)),
     ("succ", .mono (.arrow int int)),
     ("add", .mono (.arrow int (.arrow int int))),
-    ("if", .poly ["a"] [] (.arrow bool (.arrow (.fvar "a") (.arrow (.fvar "a") (.fvar "a"))))) ]
+    ("if", .poly [0] [] (.arrow bool (.arrow (.fvar 0) (.arrow (.fvar 0) (.fvar 0))))) ]
 
 /-! ## Examples -/
 
@@ -212,11 +217,11 @@ theorem typ_twice (τ : Ty) :
 theorem typ_if : Typ E builtins
     (.app (.app (.app (.var "if") (.var "true")) (.lit 1)) (.lit 2)) int := by
   have hif : (builtins.lookup "if").isSome := rfl
-  refine .app (.app (.app (.var rfl ⟨fun x => if x = "a" then some int else none, ?_,
+  refine .app (.app (.app (.var rfl ⟨fun x => if x = 0 then some int else none, ?_,
     (fun _ h => nomatch h), ?_⟩)
     (.var_mono rfl)) .lit) .lit
   · intro x hx
-    by_cases h : x = "a"
+    by_cases h : x = 0
     · simp [h]
     · simp [h] at hx
   · rfl
@@ -261,10 +266,10 @@ theorem typ_letPoly :
       (.letIn false "id" (.lam "x" (.var "x"))
         (.rcd [("a", .app (.var "id") (.lit 1)), ("b", .app (.var "id") (.var "true"))]))
       (.record (.cons "a" int (.cons "b" bool .nil)) .abs) := by
-  have inst : ∀ τ : Ty, (Scheme.poly ["a"] [] (.arrow (.fvar "a") (.fvar "a"))).Instance E
+  have inst : ∀ τ : Ty, (Scheme.poly [0] [] (.arrow (.fvar 0) (.fvar 0))).Instance E
       (.arrow τ τ) := fun τ =>
-    ⟨fun y => if y = "a" then some τ else none,
-      fun y hy => by by_cases h : y = "a" <;> simp_all, (fun _ h => nomatch h),
+    ⟨fun y => if y = 0 then some τ else none,
+      fun y hy => by by_cases h : y = 0 <;> simp_all, (fun _ h => nomatch h),
       by simp [Ty.substM]⟩
   refine .letIn (fun τ' ⟨m, _, _, h⟩ => ?_) (inst int)
     (.rcd (.cons (.app (.var rfl (inst int)) .lit)
@@ -280,11 +285,11 @@ theorem typ_letConstrained :
       (.letIn false "inc" (.lam "x" (.app (.var "succ") (.var "x")))
         (.app (.var "inc") (.lit 1)))
       int := by
-  let σ : Scheme := .poly ["a"] [(.fvar "a", int)] (.arrow (.fvar "a") int)
+  let σ : Scheme := .poly [0] [⟨.fvar 0, int, true⟩] (.arrow (.fvar 0) int)
   have hint : Holds E int int := ⟨Sub.of_step .prim, fun _ => by simp [int, Ty.field]; exact Sub.abs⟩
   have inst : σ.Instance E (.arrow int int) :=
-    ⟨fun y => if y = "a" then some int else none,
-      fun y hy => by by_cases h : y = "a" <;> simp_all [σ],
+    ⟨fun y => if y = 0 then some int else none,
+      fun y hy => by by_cases h : y = 0 <;> simp_all [σ],
       fun p hp => by
         simp only [σ, List.mem_singleton] at hp; subst hp
         exact ⟨fun _ => by simpa [Ty.substM, int] using hint.1,
@@ -292,7 +297,7 @@ theorem typ_letConstrained :
       by simp [σ, Ty.substM, int]⟩
   refine .letIn (σ := σ) (fun τ' ⟨m, _, hcs, h⟩ => ?_) inst (.app (.var rfl inst) .lit)
   subst h
-  have hc := (hcs _ (List.mem_singleton.mpr rfl)).1 (fun h => nomatch h)
+  have hc := (hcs _ (List.mem_singleton.mpr rfl)).1 rfl
   simp only [Ty.substM] at hc ⊢
   exact .lam (.app (.var_mono rfl) (.sub (.var_mono rfl) hc))
 

@@ -327,17 +327,21 @@ proof, where they are needed.
      for any renaming of graph variables (`TypeTerm.soundR`), and
      certificate soundness for any interpretation of the variables
      under which the constraints hold (`CTyp.soundI`).
-   - 4c, generalization: to do. The certificate lists the generalized
-     variables `A` of each `let`. The scheme is the inferred type with
-     `A` read as free variables, constrained by their bounds. For each
-     instance `φ` satisfying those bounds, the accepted constraints hold
-     under the interpretation that reads `α ∈ A` as `φ(α)` and every
-     other variable as its graph variable. This generalizes the solution
-     theorem: variables of `A` are related through the bounds `φ`
-     satisfies instead of through definitions. It needs the bounds of
-     variables outside `A` not to mention `A`, which the checker
-     verifies. `CTyp.soundI` then types the right-hand side at each
-     instance. No recursive types or coalescing are needed.
+   - 4c, generalization: done (`SolutionGen.lean`, `PolyLet.lean`).
+     `solution_gen`: if an instance reads a `let`'s generalized variables
+     as types satisfying their bounds, and every other variable as its
+     graph variable, every accepted constraint still holds. It needs the
+     bounds of other variables not to mention the generalized ones.
+     `PTyp` is the typing skeleton with let-polymorphism: contexts hold
+     schemes (`mkScheme`: the generalized variables as fresh free type
+     variables, constrained by their bounds), and `let`/`let rec`
+     generalize a list of variables the checker vets (`GenOK`).
+     `PTyp.sound_top`: a valid certificate with such a skeleton gives a
+     declarative typing with constrained schemes. Nested generalizations
+     are handled by proving soundness under an instance of the enclosing
+     ones; scheme variables are numbered above every free type variable
+     in sight, so substitution captures nothing. Free type variables are
+     numbered (`fvar : Nat → Ty`) for this.
    - 4d, instantiation and extrusion, as certificates. Levels and
      extrusion are how the inferencer keeps generalization correct; the
      checker does not need them as an algorithm.
@@ -350,11 +354,14 @@ proof, where they are needed.
        The solution theorem holds for all of these (coinduction up to
        transitivity), so certificates no longer need "no variable lower
        bounds".
-     - Instantiation: to do. A certificate records each instantiation's
-       renaming `ρ`, and the checker verifies the copies carry the
-       renamed bounds. Then `α ↦ θ(ρα)` satisfies the scheme's
-       constraints by the solution theorem, so the type the use needs,
-       `θ(ρ st)`, is an instance.
+     - Instantiation: done (`PolyLet.lean`). A use of a let-bound name
+       carries the renaming `ρ` (`freshen_above`'s copies), and the
+       checker verifies `ρ` fixes every non-generalized variable and that
+       the copies' renamed bounds are accepted (`InstOK`). The copies'
+       solution is then an instance of the scheme.
+     - Still to do: adequacy for polymorphic skeletons (the model has no
+       levels or instantiation yet), and an example certificate with a
+       non-trivial generalization.
    - Presentation: closed `∀`-types (MLsub's, as printed) are equivalent
      to the constrained schemes by coalescing. This needs the MLsub
      equations, so it comes with step 5.
