@@ -296,21 +296,30 @@ proof, where they are needed.
    - 3c, Theorem 1: done (`Theorem1.lean`, and `Kinds.lean`, where kinds
      discharge `TailRanked`).
 4. Let-polymorphism.
-   - 4a, declarative: done (`Typing.lean`). ML-style `∀`-schemes: `let`
-     generalizes variables that are free neither in the context nor in
-     the definitions of graph variables (`Gen`). The monomorphic `let` is
-     the case of no variables. No value restriction (no mutable state).
-   - 4b, renaming: done (`TypeTerm.soundR` in `Theorem1.lean`). The
-     soundness proof holds for any renaming `f` of graph variables, given
-     that the accepted constraints hold renamed by `f` (`RenSound`).
-   - 4c, generalization: to do. A scheme quantifies over *free* type
-     variables, while the solution expresses inferred types with graph
-     variables, whose bounds are global definitions. To generalize a
-     let-bound type, its generalizable variables must become free
-     variables, with their bounds folded into the type: coalescing.
-     So this step relates the graph solution to coalesced types (the
-     paper's Lemma relating constraints and coalescing). That is also
-     what makes the theorem speak about the types the checker prints.
+   - 4a, declarative: done (`Typing.lean`). Constrained schemes
+     `∀ᾱ. D ⇒ σ`, as in HM(X): an instance substitutes types for `ᾱ` such
+     that the constraints `D` hold. `let` gives `x` a scheme when `s` has
+     every instance of it, and it has one. The constraints are read
+     through their instances, as HM(X) defines entailment, instead of
+     typing `s` under them as hypotheses: subtyping under both lower and
+     upper bounds is not transitive in general ("bad bounds"). A
+     monomorphic `let` is the scheme with no variables. No value
+     restriction (no mutable state).
+   - 4b, renaming and interpretations: done. The soundness proof holds
+     for any renaming of graph variables (`TypeTerm.soundR`), and
+     certificate soundness for any interpretation of the variables
+     under which the constraints hold (`CTyp.soundI`).
+   - 4c, generalization: to do. The certificate lists the generalized
+     variables `A` of each `let`. The scheme is the inferred type with
+     `A` read as free variables, constrained by their bounds. For each
+     instance `φ` satisfying those bounds, the accepted constraints hold
+     under the interpretation that reads `α ∈ A` as `φ(α)` and every
+     other variable as its graph variable. This generalizes the solution
+     theorem: variables of `A` are related through the bounds `φ`
+     satisfies instead of through definitions. It needs the bounds of
+     variables outside `A` not to mention `A`, which the checker
+     verifies. `CTyp.soundI` then types the right-hand side at each
+     instance. No recursive types or coalescing are needed.
    - 4d, instantiation and extrusion, as certificates. Levels and
      extrusion are how the inferencer keeps generalization correct; the
      checker does not need them as an algorithm.
@@ -323,8 +332,14 @@ proof, where they are needed.
        The solution theorem holds for all of these (coinduction up to
        transitivity), so certificates no longer need "no variable lower
        bounds".
-     - Instantiation: to do. A certificate records each instantiation,
-       and the checker validates it.
+     - Instantiation: to do. A certificate records each instantiation's
+       renaming `ρ`, and the checker verifies the copies carry the
+       renamed bounds. Then `α ↦ θ(ρα)` satisfies the scheme's
+       constraints by the solution theorem, so the type the use needs,
+       `θ(ρ st)`, is an instance.
+   - Presentation: closed `∀`-types (MLsub's, as printed) are equivalent
+     to the constrained schemes by coalescing. This needs the MLsub
+     equations, so it comes with step 5.
 5. The MLsub equations and the simplifier, sequent-style (see
    `Lattice.lean`).
 6. A certificate checker. The inferencer (`lib/typer.ml` now, Bolt's

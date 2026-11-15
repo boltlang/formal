@@ -12,15 +12,23 @@ instantiated, and let-bound variables can be polymorphic (below). The
 algorithm model is still monomorphic in `let`, as in the paper's proof
 (Sec. 5).
 
-Quantified variables are free type variables (`fvar`) listed in the scheme;
-instantiation substitutes them simultaneously (`Ty.substM`).
+**Schemes are constrained**, as in HM(X): `∀ᾱ. D ⇒ σ`, where `D` is a
+list of subtyping constraints on the quantified variables `ᾱ` (free type
+variables, `fvar`). An instance substitutes types for `ᾱ` (`Ty.substM`)
+such that the constraints hold (`Scheme.Instance`). A constraint holds when
+it holds as subtyping and field by field, since a constrained variable may
+stand for a row.
 
-**Let-polymorphism** is ML's: `let x = s in t` gives `x` the scheme
-`∀ᾱ. σ` for a type `σ` of `s`, provided the variables `ᾱ` are free
-neither in the context nor in the definitions `E` of graph variables
-(`Gen`); `let rec` does the same after typing `s` with `x` monomorphic.
-A monomorphic `let` is the case `ᾱ = []` (`Typ.letIn_mono`). There is no
-value restriction: the language has no mutable state (Bolt will need one).
+**Let-polymorphism**: `let x = s in t` gives `x` a scheme when `s` has
+*every* instance of it, and it has at least one instance (`s` is
+evaluated). This reads the constraints semantically, through their
+instances, as HM(X) defines constraint entailment, instead of typing `s`
+under the constraints as hypotheses: subtyping under hypotheses with both
+lower and upper bounds is not transitive in general (the "bad bounds" of
+DOT), while instances inherit transitivity from `Sub`. `let rec` is the
+same with `x` monomorphic in `s`. A monomorphic `let` is the scheme with no
+variables and no constraints (`Typ.letIn_mono`). There is no value
+restriction: the language has no mutable state (Bolt will need one).
 
 `t with {l₁ = e₁, …}` is typed like the OCaml type checker types it: `t`
 must be a record whose fields `lᵢ` may be anything (`Abs`) and whose other
@@ -71,57 +79,46 @@ end
 
 /-! ## Schemes and contexts -/
 
-/-- `∀ vars. body`. -/
+/-- `∀ vars. cs ⇒ body`, with `cs` constraints `a ≤ b` on the quantified
+variables. -/
 structure Scheme where
   poly ::
   vars : List String
+  cs : List (Ty × Ty)
   body : Ty
 
 /-- A monomorphic scheme. -/
-def Scheme.mono (t : Ty) : Scheme := .poly [] t
+def Scheme.mono (t : Ty) : Scheme := .poly [] [] t
+
+/-- A constraint holds: as subtyping, and field by field (a constrained
+variable may stand for a row). -/
+def Holds (E : Defs) (a b : Ty) : Prop := Sub E a b ∧ ∀ l, Sub E (a.field l) (b.field l)
 
 /-- `τ` is an instance of `σ`: substitute types for (some of) its
-quantified variables. -/
-def Scheme.Instance (σ : Scheme) (τ : Ty) : Prop :=
-  ∃ m : String → Option Ty, (∀ x, (m x).isSome → x ∈ σ.vars) ∧ τ = σ.body.substM m
+quantified variables, such that its constraints hold. -/
+def Scheme.Instance (E : Defs) (σ : Scheme) (τ : Ty) : Prop :=
+  ∃ m : String → Option Ty, (∀ x, (m x).isSome → x ∈ σ.vars) ∧
+    (∀ p ∈ σ.cs, Holds E (p.1.substM m) (p.2.substM m)) ∧ τ = σ.body.substM m
 
-theorem Scheme.instance_mono (t : Ty) : (Scheme.mono t).Instance t :=
-  ⟨fun _ => none, by simp, (Ty.substM_none t).symm⟩
+theorem Scheme.instance_mono (E : Defs) (t : Ty) : (Scheme.mono t).Instance E t :=
+  ⟨fun _ => none, by simp, (fun _ h => nomatch h), (Ty.substM_none t).symm⟩
+
+/-- The only instance of a monomorphic scheme is its type. -/
+theorem Scheme.instance_mono_eq {E : Defs} {t τ : Ty} (h : (Scheme.mono t).Instance E τ) :
+    τ = t := by
+  obtain ⟨m, hdom, _, rfl⟩ := h
+  have : m = fun _ => none := funext fun x => by
+    cases hx : m x with
+    | none => rfl
+    | some _ => exact absurd (hdom x (by simp [hx])) (by simp [Scheme.mono])
+  subst this
+  exact Ty.substM_none t
 
 /-- Contexts: the most recent binding of a name comes first. -/
 abbrev Ctx := List (String × Scheme)
 
 def Ctx.lookup (Γ : Ctx) (x : String) : Option Scheme :=
   (Γ.find? (·.1 = x)).map (·.2)
-
-/-! ## Free variables and generalization -/
-
-mutual
-/-- The free type variables of a type. -/
-def Ty.fv : Ty → List String
-  | .fvar x => [x]
-  | .top | .bot | .abs | .prim _ | .bvar _ | .gvar _ => []
-  | .union a b | .inter a b | .arrow a b => a.fv ++ b.fv
-  | .record fs t => fs.fv ++ t.fv
-  | .mu a | .proj _ a => a.fv
-
-def Fields.fv : Fields → List String
-  | .nil => []
-  | .cons _ f fs => f.fv ++ fs.fv
-end
-
-/-- `a` is free in the scheme `σ`. -/
-def Scheme.FreeIn (a : String) (σ : Scheme) : Prop := a ∈ σ.body.fv ∧ a ∉ σ.vars
-
-/-- `a` is free in no scheme of `Γ`. -/
-def Ctx.Avoids (Γ : Ctx) (a : String) : Prop := ∀ p ∈ Γ, ¬ p.2.FreeIn a
-
-/-- `a` occurs in no definition of a graph variable. -/
-def Defs.Avoids (E : Defs) (a : String) : Prop := ∀ n u, E n u → a ∉ u.fv
-
-/-- The variables `vars` may be generalized in `Γ` (and `E`). -/
-def Gen (E : Defs) (Γ : Ctx) (vars : List String) : Prop :=
-  ∀ a ∈ vars, Γ.Avoids a ∧ Defs.Avoids E a
 
 /-! ## Typing rules
 
@@ -139,7 +136,7 @@ def Fields.absOf : Fields → Fields
 mutual
 inductive Typ (E : Defs) : Ctx → Term → Ty → Prop where
   | lit : Typ E Γ (.lit n) (.prim "int")
-  | var : Γ.lookup x = some σ → σ.Instance τ → Typ E Γ (.var x) τ
+  | var : Γ.lookup x = some σ → σ.Instance E τ → Typ E Γ (.var x) τ
   | lam : Typ E ((x, .mono τ₁) :: Γ) t τ₂ → Typ E Γ (.lam x t) (.arrow τ₁ τ₂)
   | app : Typ E Γ f (.arrow τ₁ τ₂) → Typ E Γ a τ₁ → Typ E Γ (.app f a) τ₂
   | rcd : TypFields E Γ fs F → Typ E Γ (.rcd fs) (.record F .abs)
@@ -148,12 +145,12 @@ inductive Typ (E : Defs) : Ctx → Term → Ty → Prop where
   | ext : Typ E Γ t (.record F.absOf ρ) → TypFields E Γ fs F → Typ E Γ (.ext t fs) (.record F ρ)
   /-- `t with {}` evaluates to `t`, whatever its type (as in `lib/typer.ml`). -/
   | extNil : Typ E Γ t τ → Typ E Γ (.ext t []) τ
-  /-- `let`: generalize the variables `vars` of a type of `s`. -/
-  | letIn : Typ E Γ s σ → Gen E Γ vars → Typ E ((x, .poly vars σ) :: Γ) t τ →
-      Typ E Γ (.letIn false x s t) τ
-  /-- `let rec`: `x` is monomorphic in `s`, generalized in `t`. -/
-  | letRec : Typ E ((x, .mono σ) :: Γ) s σ → Gen E Γ vars →
-      Typ E ((x, .poly vars σ) :: Γ) t τ → Typ E Γ (.letIn true x s t) τ
+  /-- `let`: `s` has every instance of the scheme `σ`, which has one. -/
+  | letIn : (∀ τ', σ.Instance E τ' → Typ E Γ s τ') → σ.Instance E τ₀ →
+      Typ E ((x, σ) :: Γ) t τ → Typ E Γ (.letIn false x s t) τ
+  /-- `let rec`: for every instance, `s` has it assuming `x` has it. -/
+  | letRec : (∀ τ', σ.Instance E τ' → Typ E ((x, .mono τ') :: Γ) s τ') → σ.Instance E τ₀ →
+      Typ E ((x, σ) :: Γ) t τ → Typ E Γ (.letIn true x s t) τ
   /-- Subsumption. -/
   | sub : Typ E Γ t τ → Sub E τ τ' → Typ E Γ t τ'
 
@@ -175,7 +172,7 @@ def builtins : Ctx :=
     ("not", .mono (.arrow bool bool)),
     ("succ", .mono (.arrow int int)),
     ("add", .mono (.arrow int (.arrow int int))),
-    ("if", .poly ["a"] (.arrow bool (.arrow (.fvar "a") (.arrow (.fvar "a") (.fvar "a"))))) ]
+    ("if", .poly ["a"] [] (.arrow bool (.arrow (.fvar "a") (.arrow (.fvar "a") (.fvar "a"))))) ]
 
 /-! ## Examples -/
 
@@ -183,17 +180,17 @@ section Examples
 
 /-- A variable bound by a lambda (or a monomorphic `let`) has its type. -/
 theorem Typ.var_mono {Γ : Ctx} {x : String} {τ : Ty} (h : Γ.lookup x = some (.mono τ)) : Typ E Γ (.var x) τ :=
-  .var h (Scheme.instance_mono τ)
+  .var h (Scheme.instance_mono E τ)
 
 /-- A monomorphic `let`. -/
 theorem Typ.letIn_mono {Γ : Ctx} (h₁ : Typ E Γ s σ) (h₂ : Typ E ((x, .mono σ) :: Γ) t τ) :
     Typ E Γ (.letIn false x s t) τ :=
-  .letIn (vars := []) h₁ (fun _ h => nomatch h) h₂
+  .letIn (fun _ h => Scheme.instance_mono_eq h ▸ h₁) (Scheme.instance_mono E σ) h₂
 
 /-- A monomorphic `let rec`. -/
 theorem Typ.letRec_mono {Γ : Ctx} (h₁ : Typ E ((x, .mono σ) :: Γ) s σ)
     (h₂ : Typ E ((x, .mono σ) :: Γ) t τ) : Typ E Γ (.letIn true x s t) τ :=
-  .letRec (vars := []) h₁ (fun _ h => nomatch h) h₂
+  .letRec (fun _ h => Scheme.instance_mono_eq h ▸ h₁) (Scheme.instance_mono E σ) h₂
 
 /-- `twice = fun f -> fun x -> f (f x)` has type `(τ → τ) → τ → τ`, for any `τ`. -/
 theorem typ_twice (τ : Ty) :
@@ -206,7 +203,8 @@ theorem typ_twice (τ : Ty) :
 theorem typ_if : Typ E builtins
     (.app (.app (.app (.var "if") (.var "true")) (.lit 1)) (.lit 2)) int := by
   have hif : (builtins.lookup "if").isSome := rfl
-  refine .app (.app (.app (.var rfl ⟨fun x => if x = "a" then some int else none, ?_, ?_⟩)
+  refine .app (.app (.app (.var rfl ⟨fun x => if x = "a" then some int else none, ?_,
+    (fun _ h => nomatch h), ?_⟩)
     (.var_mono rfl)) .lit) .lit
   · intro x hx
     by_cases h : x = "a"
@@ -248,25 +246,43 @@ theorem typ_ext :
   exact .sel (.sub (.app hfun (.sub (.rcd (.cons .lit .nil)) harg)) hres)
 
 /-- Let-polymorphism: `let id = fun x -> x in {a = id 1; b = id true}`,
-generalizing `id : α → α` and using it at `int` and at `bool`. -/
-theorem typ_letPoly (hE : Defs.Avoids E "a") :
+with `id : ∀α. α → α`, used at `int` and at `bool`. -/
+theorem typ_letPoly :
     Typ E builtins
       (.letIn false "id" (.lam "x" (.var "x"))
         (.rcd [("a", .app (.var "id") (.lit 1)), ("b", .app (.var "id") (.var "true"))]))
       (.record (.cons "a" int (.cons "b" bool .nil)) .abs) := by
-  have inst : ∀ τ : Ty, (Scheme.poly ["a"] (.arrow (.fvar "a") (.fvar "a"))).Instance
+  have inst : ∀ τ : Ty, (Scheme.poly ["a"] [] (.arrow (.fvar "a") (.fvar "a"))).Instance E
       (.arrow τ τ) := fun τ =>
     ⟨fun y => if y = "a" then some τ else none,
-      fun y hy => by by_cases h : y = "a" <;> simp_all, by simp [Ty.substM]⟩
-  have gen : Gen E builtins ["a"] := by
-    intro a ha
-    simp only [List.mem_singleton] at ha
-    subst ha
-    refine ⟨?_, hE⟩
-    simp [Ctx.Avoids, builtins, Scheme.FreeIn, Scheme.mono, Ty.fv, bool, int]
-  exact .letIn (.lam (.var_mono rfl)) gen
+      fun y hy => by by_cases h : y = "a" <;> simp_all, (fun _ h => nomatch h),
+      by simp [Ty.substM]⟩
+  refine .letIn (fun τ' ⟨m, _, _, h⟩ => ?_) (inst int)
     (.rcd (.cons (.app (.var rfl (inst int)) .lit)
       (.cons (.app (.var rfl (inst bool)) (.var_mono rfl)) .nil)))
+  subst h
+  exact .lam (.var_mono rfl)
+
+/-- A constrained scheme: `let inc = fun x -> succ x` gets
+`∀α. α ≤ int ⇒ α → int`; the body of `inc` uses the constraint to pass
+`x : α` to `succ`. Here it is used at `int`. -/
+theorem typ_letConstrained :
+    Typ E builtins
+      (.letIn false "inc" (.lam "x" (.app (.var "succ") (.var "x")))
+        (.app (.var "inc") (.lit 1)))
+      int := by
+  let σ : Scheme := .poly ["a"] [(.fvar "a", int)] (.arrow (.fvar "a") int)
+  have hint : Holds E int int := ⟨Sub.of_step .prim, fun _ => by simp [int, Ty.field]; exact Sub.abs⟩
+  have inst : σ.Instance E (.arrow int int) :=
+    ⟨fun y => if y = "a" then some int else none,
+      fun y hy => by by_cases h : y = "a" <;> simp_all [σ],
+      fun p hp => by simp only [σ, List.mem_singleton] at hp; subst hp; simpa [Ty.substM, int] using hint,
+      by simp [σ, Ty.substM, int]⟩
+  refine .letIn (σ := σ) (fun τ' ⟨m, _, hcs, h⟩ => ?_) inst (.app (.var rfl inst) .lit)
+  subst h
+  have hc := (hcs _ (List.mem_singleton.mpr rfl)).1
+  simp only [Ty.substM] at hc ⊢
+  exact .lam (.app (.var_mono rfl) (.sub (.var_mono rfl) hc))
 
 end Examples
 
