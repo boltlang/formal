@@ -1,5 +1,5 @@
-import SimpleSub.SolutionRows
-import SimpleSub.Typing
+import BoltCore.SolutionRows
+import BoltCore.Typing
 
 /-!
 # Theorem 1: soundness of type inference
@@ -19,7 +19,7 @@ variable (its kind is empty), so its solution is below `⊤`: the selected
 field is present, as the declarative rule requires.
 -/
 
-namespace SimpleSub.Alg
+namespace BoltCore.Alg
 
 open State
 
@@ -282,4 +282,4 @@ theorem soundness {K : Nat → List String} {rank : Nat → Nat}
   exact TypeTerm.sound ⟨h.inv_init, (h.inv₂ Inv₂.init).inLog, hn.1, hr⟩ h builtins_NAC Inv₂.init
     LogNAC.init (fun _ hp => hp) h.kind_eq.symm
 
-end SimpleSub.Alg
+end BoltCore.Alg

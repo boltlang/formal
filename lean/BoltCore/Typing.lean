@@ -1,5 +1,5 @@
-import SimpleSub.Syntax
-import SimpleSub.Sub
+import BoltCore.Syntax
+import BoltCore.Sub
 
 /-!
 # Declarative typing
@@ -42,7 +42,7 @@ Labels in a `with` are assumed distinct (the OCaml checker keeps the last
 binding of a repeated label). `t with {}` is just `t`.
 -/
 
-namespace SimpleSub
+namespace BoltCore
 
 /-! ## Substitution of free variables -/
 
@@ -378,4 +378,4 @@ theorem not_typ_sel_other {Γ : Ctx} {τ : Ty} :
     ¬ Typ E Γ (.sel (.rcd [("a", .lit 1)]) "b") τ :=
   not_typ_sel_missing fun p hp => by simp at hp; subst hp; decide
 
-end SimpleSub
+end BoltCore

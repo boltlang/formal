@@ -1,4 +1,4 @@
-import SimpleSub.Solution
+import BoltCore.Solution
 
 /-!
 # `Abs` never occurs as a component of a function type
@@ -15,7 +15,7 @@ algorithm accepts is `NAC`, and that the types it infers for terms are
 `NAC` and not `Abs`.
 -/
 
-namespace SimpleSub.Alg
+namespace BoltCore.Alg
 
 open State
 
@@ -267,4 +267,4 @@ theorem builtins_NAC : CtxNAC builtins := by
   rcases hm with ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, rfl⟩ <;>
     exact ⟨by simp [SType.NAC], by simp⟩
 
-end SimpleSub.Alg
+end BoltCore.Alg

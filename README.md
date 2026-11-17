@@ -1,4 +1,4 @@
-# simplesub
+# Bolt's Core
 
 An OCaml port of the core of **Simple-sub**, from Lionel Parreaux,
 *The Simple Essence of Algebraic Subtyping* (ICFP 2020), in `papers/`.
@@ -6,13 +6,13 @@ It's a research testbed for the type system of the Bolt compiler.
 
 ```sh
 dune build
-dune exec -- simplesub -e 'fun f -> fun x -> f (f x)'
-dune exec -- simplesub program.sub      # or read from stdin
-dune exec -- simplesub --raw -e '...'   # skip simplification (Sec. 3.3 output)
-dune exec -- simplesub --rectypes -e '...'   # allow recursive types, as in the paper
-dune exec -- simplesub -e '...' --expect "'a -> 'a"   # check modulo equivalence
-dune exec -- simplesub --self-check program.sub      # simplified ≡ raw, per item
-dune exec -- simplesub --compare "⊤ -> int" "'a -> int" # relate two type schemes
+dune exec -- boltcore -e 'fun f -> fun x -> f (f x)'
+dune exec -- boltcore program.sub      # or read from stdin
+dune exec -- boltcore --raw -e '...'   # skip simplification (Sec. 3.3 output)
+dune exec -- boltcore --rectypes -e '...'   # allow recursive types, as in the paper
+dune exec -- boltcore -e '...' --expect "'a -> 'a"   # check modulo equivalence
+dune exec -- boltcore --self-check program.sub      # simplified ≡ raw, per item
+dune exec -- boltcore --compare "⊤ -> int" "'a -> int" # relate two type schemes
 dune test                                # cram snapshots in test/*.t
 ```
 
@@ -144,7 +144,7 @@ expanded and memoized per label set. A few more rules apply:
   hypothesis that's never unlocked. So such a type is strictly below `X`,
   but the simplifier (the paper's and ours) drops these cycles, which would
   be unsound. Emitting only contractive types removes the conflict. The
-  Lean development (`lean/SimpleSub/Types.lean`) is restricted to
+  Lean development (`lean/BoltCore/Types.lean`) is restricted to
   contractive types too.
 - **Reflexive constraints are skipped.** `constrain` returns immediately
   when `lhs` and `rhs` are equal, and the paper's Fig. 9 doesn't. Without
@@ -175,11 +175,11 @@ expanded and memoized per label set. A few more rules apply:
 `lean/` is a Lake project on Lean v4.35.0, with no Mathlib. Run `lake build`
 in `lean/`. Everything below is proved; there are no `sorry`s.
 
-- `SimpleSub/Syntax.lean`: terms, mirroring `lib/syntax.ml`.
-- `SimpleSub/Types.lean`: types with rows. There are no structural
+- `BoltCore/Syntax.lean`: terms, mirroring `lib/syntax.ml`.
+- `BoltCore/Types.lean`: types with rows. There are no structural
   recursive types (no `μ`): the model rejects them, as an occurs check
   would, and recursive data is meant to be nominal (issue #4).
-- `SimpleSub/Sub.lean`: declarative subtyping.
+- `BoltCore/Sub.lean`: declarative subtyping.
   `Step E R` is one layer of subtyping. It's inductive and uses the
   coinductive hypothesis `R` only under a function type or record field,
   which is the paper's ▷/◁ discipline. `E` gives *graph variables*
@@ -216,7 +216,7 @@ in `lean/`. Everything below is proved; there are no `sorry`s.
   yet: merging intersections and unions of functions, merging intersections
   and unions of records, and distributing a row over a union of tails.
   Adding them while keeping transitivity is the next milestone.
-- `SimpleSub/Rows.lean`: the row algebra. Rows are modeled by what they
+- `BoltCore/Rows.lean`: the row algebra. Rows are modeled by what they
   denote: a total map from labels to fields, with explicit fields
   overriding the tail. Each theorem shows a row rewrite in the OCaml code
   preserves that denotation:
@@ -231,10 +231,10 @@ in `lean/`. Everything below is proved; there are no `sorry`s.
   - `flatten`: nested rows flatten to appended fields (`mk_row`,
     `row_view`, `norm_row`).
 
-- `SimpleSub/Lattice.lean`: the MLsub lattice equations. `not_fun_merge`
+- `BoltCore/Lattice.lean`: the MLsub lattice equations. `not_fun_merge`
   proves that function merging isn't derivable from the minimal rules. The
   file header records the sequent-style plan for adding the equations.
-- `SimpleSub/Typing.lean`: declarative typing over the minimal subtyping
+- `BoltCore/Typing.lean`: declarative typing over the minimal subtyping
   rules, with constrained schemes for built-ins and let-polymorphism, and
   record extension. Selection `t.l` requires a present field: `t : {l : τ}`
   with `τ ≤ ⊤`. Examples: `typ_twice`, `typ_if`, `typ_ext` (the
@@ -243,7 +243,7 @@ in `lean/`. Everything below is proved; there are no `sorry`s.
   no type (`not_typ_sel_missing`; `{}.x` and `{a = 1}.b`), a first step
   towards type safety. There is no operational semantics yet, so progress
   and preservation are not proved.
-- `SimpleSub/Algorithm.lean`: a model of `lib/typer.ml`, without levels.
+- `BoltCore/Algorithm.lean`: a model of `lib/typer.ml`, without levels.
   Coalescing only affects printing and is left for step 5. Like the
   OCaml code, the model rejects structural recursive types: an accepted
   run ends in a state whose bounds are ranked (`StructRanked`: a
@@ -258,7 +258,7 @@ in `lean/`. Everything below is proved; there are no `sorry`s.
   propagation gives the result variable the lower bound `int`. The state
   has a ghost `log` of every accepted constraint, which exists only for
   the proofs.
-- `SimpleSub/Soundness.lean`: soundness of constraining at the level of the
+- `BoltCore/Soundness.lean`: soundness of constraining at the level of the
   bound graph (the first half of the paper's Lemma 2). Two invariants hold
   of every state the algorithm reaches:
   - **Justified:** every logged constraint is justified by one
@@ -271,7 +271,7 @@ in `lean/`. Everything below is proved; there are no `sorry`s.
   while a new bound propagates. `ConstrainTop.sound`: a successful
   `constrain` call preserves the invariant and accepts its constraint.
   `TypeTerm.inv_init`: the invariant holds after typing any term.
-- `SimpleSub/Solution.lean`: the solution (the paper's unifying
+- `BoltCore/Solution.lean`: the solution (the paper's unifying
   coalescing). Each type variable `v` becomes a *graph variable* `gvar v`,
   defined as the intersection of the non-variable upper bounds reachable
   from `v` through variable-to-variable bounds (`Clo`, an inductive
@@ -279,7 +279,7 @@ in `lean/`. Everything below is proved; there are no `sorry`s.
   stands for a type: it is an ordinary type variable (empty kind) or is
   accepted below one (`TyVar`). So an unconstrained type variable is `⊤`,
   a present field, and an unconstrained row variable is the top row.
-- `SimpleSub/SolutionRows.lean`: every accepted constraint `a ≤ b` gives
+- `BoltCore/SolutionRows.lean`: every accepted constraint `a ≤ b` gives
   `θ(a) ≤ θ(b)` (`solution_rows`). The coinductive relation also holds the
   *field projections* of accepted constraints. Proving a field pair follows
   the algorithm's record case: common fields, labels supplied by row
@@ -289,13 +289,13 @@ in `lean/`. Everything below is proved; there are no `sorry`s.
   constraints. Variables may be lower bounds. It assumes chains of
   row-variable tails are acyclic (`TailRanked`), which kinds guarantee
   (`Kinds.lean`).
-- `SimpleSub/Theorem1.lean`: **soundness of type inference** (the paper's
+- `BoltCore/Theorem1.lean`: **soundness of type inference** (the paper's
   Theorem 1, for our model). If the algorithm types `t` with `st` from the
   built-in context, then `t : θ(st)` in the declarative system, where `θ`
   is the solution of the final state (`soundness`). Every constraint the
   algorithm solved becomes a subsumption step. It assumes that
   row-variable tails are acyclic (`TailRanked`).
-- `SimpleSub/Kinds.lean`: **kinds** discharge that assumption, giving
+- `BoltCore/Kinds.lean`: **kinds** discharge that assumption, giving
   Theorem 1 with no assumptions (`theorem1`). The model's state carries
   each variable's kind (the labels it lacks), and expansion leaves labels
   in the tail's kind absent, as in `lib/typer.ml`. The kind map is fixed
@@ -307,7 +307,7 @@ in `lean/`. Everything below is proved; there are no `sorry`s.
   `check_kind` checks at run time. So an upper bound `{fs | ρ}` of `v`
   has `kind ρ = kind v ⊎ fs`, strictly larger, and the number of logged
   labels outside a variable's kind ranks the tails.
-- `SimpleSub/Sorts.lean`: `Abs` never occurs as a parameter or result of a
+- `BoltCore/Sorts.lean`: `Abs` never occurs as a parameter or result of a
   function type in accepted constraints or inferred types. `Abs` is the top
   of `Sub`, so `Abs ≤ {…}` must stay false at the level of types. Row
   constraints with `Abs` on the left are only ever compared field by

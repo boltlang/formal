@@ -1,4 +1,4 @@
-import SimpleSub.Sub
+import BoltCore.Sub
 
 /-!
 # The MLsub lattice equations: where the current rules stop
@@ -43,7 +43,7 @@ the guarded premises of a cut combine big meets and joins of parameter and
 result types.
 -/
 
-namespace SimpleSub
+namespace BoltCore
 
 section Gap
 
@@ -81,4 +81,4 @@ theorem not_fun_merge :
 
 end Gap
 
-end SimpleSub
+end BoltCore

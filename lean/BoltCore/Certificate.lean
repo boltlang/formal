@@ -1,4 +1,4 @@
-import SimpleSub.Kinds
+import BoltCore.Kinds
 
 /-!
 # Certificates
@@ -34,7 +34,7 @@ that the type it gives the field is that of a present field
 (`SType.Present`): not `Abs`, and not a row variable.
 -/
 
-namespace SimpleSub.Alg
+namespace BoltCore.Alg
 
 open State
 
@@ -520,4 +520,4 @@ theorem theorem1_cert (h : Infers K t st s') :
   have hc := h.certificate hr
   exact ⟨_, CTyp.sound hc.1 hc.2, _, hc.1.nonrec⟩
 
-end SimpleSub.Alg
+end BoltCore.Alg

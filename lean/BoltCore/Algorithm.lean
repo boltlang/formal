@@ -1,5 +1,5 @@
-import SimpleSub.Syntax
-import SimpleSub.Types
+import BoltCore.Syntax
+import BoltCore.Types
 
 /-!
 # A model of the inference algorithm
@@ -25,7 +25,7 @@ expansion is keyed by the label list as given rather than as a sorted set,
 and labels in a `with` are assumed distinct.
 -/
 
-namespace SimpleSub.Alg
+namespace BoltCore.Alg
 
 /-! ## Simple types (Fig. 6) -/
 
@@ -362,4 +362,4 @@ theorem typeTerm_app_id :
 
 end Examples
 
-end SimpleSub.Alg
+end BoltCore.Alg

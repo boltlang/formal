@@ -1,2 +1,2 @@
 (cram
- (deps %{bin:simplesub} (source_tree ../examples)))
+ (deps %{bin:boltcore} (source_tree ../examples)))

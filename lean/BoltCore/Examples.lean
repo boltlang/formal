@@ -1,4 +1,4 @@
-import SimpleSub.PolyLet
+import BoltCore.PolyLet
 
 /-!
 # An example certificate with let-polymorphism
@@ -14,9 +14,9 @@ certificate with a non-trivial generalization. The proofs are by hand;
 the executable checker (roadmap 6b) will decide such conditions.
 -/
 
-namespace SimpleSub.Alg.Example
+namespace BoltCore.Alg.Example
 
-open SimpleSub.Alg
+open BoltCore.Alg
 
 def int : SType := .prim "int"
 
@@ -158,7 +158,7 @@ and `4` of `0` and `3`, which carry the renamed bounds `1 ≤ int` and
 
 namespace Constrained
 
-open SimpleSub.Alg.Example (int)
+open BoltCore.Alg.Example (int)
 
 def cert : Certificate where
   log := [(.arrow int int, .arrow (.var 0) (.var 3)), (.var 0, int), (int, .var 3),
@@ -314,4 +314,4 @@ theorem typed : Typ (defsOf cert.state) (Γ.toCtx cert.bounds cert.kind .gvar) p
 
 end Constrained
 
-end SimpleSub.Alg.Example
+end BoltCore.Alg.Example

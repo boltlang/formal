@@ -1,4 +1,4 @@
-import SimpleSub.Algorithm
+import BoltCore.Algorithm
 
 /-!
 # Soundness of constraining, at the level of the bound graph
@@ -29,7 +29,7 @@ done (Sec. 3.2.2 of the paper). The proofs therefore carry a set of
 propagation calls succeed.
 -/
 
-namespace SimpleSub.Alg
+namespace BoltCore.Alg
 
 open State
 
@@ -580,4 +580,4 @@ theorem Inv.init {K : Nat → List String} : Inv (State.initK K) :=
 invariant. -/
 theorem TypeTerm.inv_init {K : Nat → List String} (h : TypeTerm Γ (State.initK K) t st s') : Inv s' := h.inv .init
 
-end SimpleSub.Alg
+end BoltCore.Alg

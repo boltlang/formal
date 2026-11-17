@@ -1,7 +1,7 @@
 (* Usage:
-     simplesub [OPTIONS] [FILE]        type-check a program file (or stdin)
-     simplesub [OPTIONS] -e SOURCE     type-check a program given inline
-     simplesub --compare TYPE1 TYPE2   relate two type schemes by generality
+     boltcore [OPTIONS] [FILE]        type-check a program file (or stdin)
+     boltcore [OPTIONS] -e SOURCE     type-check a program given inline
+     boltcore --compare TYPE1 TYPE2   relate two type schemes by generality
 
    Options:
      --raw          print coalesced types without simplification (Sec. 3.3)
@@ -15,12 +15,12 @@
    Exit status: 0 on success, 1 on type errors or failed checks, 2 on usage
    or parse errors. *)
 
-open Simplesub
+open Boltcore
 
 let usage () =
   prerr_endline
-    "usage: simplesub [--raw] [--rectypes] [--expect TYPE] [--self-check] [FILE | -e SOURCE]\n\
-    \       simplesub --compare TYPE1 TYPE2";
+    "usage: boltcore [--raw] [--rectypes] [--expect TYPE] [--self-check] [FILE | -e SOURCE]\n\
+    \       boltcore --compare TYPE1 TYPE2";
   exit 2
 
 let parse_type_or_exit s =

@@ -1,5 +1,5 @@
-import SimpleSub.Soundness
-import SimpleSub.Sub
+import BoltCore.Soundness
+import BoltCore.Sub
 
 /-!
 # A solution of the inferred constraints
@@ -23,7 +23,7 @@ This file sets up the solution and the invariants it needs; the solution
 theorem itself, for all simple types, is in `SolutionRows.lean`.
 -/
 
-namespace SimpleSub.Alg
+namespace BoltCore.Alg
 
 open State
 
@@ -185,4 +185,4 @@ theorem Justified.step {s : State} (h : Justified s) (hp : (a, b) ∈ s.log) :
   · exact nomatch h
   · exact h
 
-end SimpleSub.Alg
+end BoltCore.Alg

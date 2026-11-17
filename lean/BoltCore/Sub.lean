@@ -1,4 +1,4 @@
-import SimpleSub.Types
+import BoltCore.Types
 
 /-!
 # Declarative subtyping
@@ -41,7 +41,7 @@ equations that the simplifier relies on (merging intersections of
 functions or records, distributivity) are not included.
 -/
 
-namespace SimpleSub
+namespace BoltCore
 
 /-- Definitions of graph variables (`Ty.gvar`): `E n` is a set of upper
 bounds, and `gvar n` stands for their intersection. This is how solutions of
@@ -557,4 +557,4 @@ theorem not_empty_le_field : ¬ Sub E (.record .nil .abs) (.record (.cons "x" in
 
 end Rows
 
-end SimpleSub
+end BoltCore

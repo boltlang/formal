@@ -5,7 +5,7 @@ Mirrors `lib/syntax.ml` (paper, Fig. 4). Integer literals are kept so terms
 correspond one-to-one with the OCaml implementation.
 -/
 
-namespace SimpleSub
+namespace BoltCore
 
 inductive Term where
   | lit : Int → Term
@@ -25,4 +25,4 @@ def Term.IsFun : Term → Prop
   | .lam _ _ => True
   | _ => False
 
-end SimpleSub
+end BoltCore

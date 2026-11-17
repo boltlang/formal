@@ -1,4 +1,4 @@
-import SimpleSub.Theorem1
+import BoltCore.Theorem1
 
 /-!
 # Kinds for row variables, and Theorem 1 without assumptions
@@ -26,7 +26,7 @@ The kind map is fixed for a run (see `State.kind`), so kinds of existing
 variables never change, and no scoping invariant is needed.
 -/
 
-namespace SimpleSub.Alg
+namespace BoltCore.Alg
 
 open State
 
@@ -650,4 +650,4 @@ theorem theorem1 (h : TypeTerm builtins (State.initK K) t st s') :
   soundness h (kinds_tailRanked (h.kinds builtins_K Inv₂.init KInv.init).1
     (h.inv₂ Inv₂.init).inLog)
 
-end SimpleSub.Alg
+end BoltCore.Alg

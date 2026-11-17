@@ -1,4 +1,4 @@
-import SimpleSub.SolutionGen
+import BoltCore.SolutionGen
 
 /-!
 # Polymorphic `let` in certificates
@@ -29,7 +29,7 @@ above every free type variable the scheme would otherwise contain, so
 substituting them captures nothing.
 -/
 
-namespace SimpleSub
+namespace BoltCore
 
 /-! ## Free type variables -/
 
@@ -85,9 +85,9 @@ theorem lt_natBound : ∀ {l : List Nat} {n : Nat}, n ∈ l → n < natBound l
     · omega
     · have := lt_natBound h; omega
 
-end SimpleSub
+end BoltCore
 
-namespace SimpleSub.Alg
+namespace BoltCore.Alg
 
 open State
 
@@ -662,4 +662,4 @@ theorem PTyp.sound_top (hv : c.Valid) (h : PTyp c Γ t st) :
 
 end
 
-end SimpleSub.Alg
+end BoltCore.Alg

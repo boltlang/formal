@@ -1,5 +1,5 @@
-import SimpleSub.Solution
-import SimpleSub.Sorts
+import BoltCore.Solution
+import BoltCore.Sorts
 
 /-!
 # A solution of the inferred constraints, with rows
@@ -30,7 +30,7 @@ as a hypothesis (`TailRanked`). Kinds for row variables make it hold
 variable lacks.
 -/
 
-namespace SimpleSub.Alg
+namespace BoltCore.Alg
 
 open State
 
@@ -688,4 +688,4 @@ theorem solution_rows {s : State} {rank : Nat → Nat} (hi : Inv s)
     Sub (defsOf s) a.toTy b.toTy :=
   SolR.sub hi hn hr (.ty hl ha)
 
-end SimpleSub.Alg
+end BoltCore.Alg

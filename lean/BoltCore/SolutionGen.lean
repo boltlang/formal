@@ -1,4 +1,4 @@
-import SimpleSub.Certificate
+import BoltCore.Certificate
 
 /-!
 # The solution under a generalization
@@ -18,7 +18,7 @@ variable of `A`, that variable's bounds give the subtyping fact directly,
 so no graph definition of it is needed.
 -/
 
-namespace SimpleSub.Alg
+namespace BoltCore.Alg
 
 open State
 
@@ -140,7 +140,7 @@ theorem StG.comp (h₁ : StG s I x y) (h₂ : StG s I y z) : StG s I x z :=
     | .inl h => h
     | .inr ⟨_, h₁, h₂⟩ => .trans h₁ h₂
 
-theorem _root_.SimpleSub.TC.map {R R' : Ty → Ty → Prop} (hR : ∀ x y, R x y → R' x y) : TC R x y → TC R' x y
+theorem _root_.BoltCore.TC.map {R R' : Ty → Ty → Prop} (hR : ∀ x y, R x y → R' x y) : TC R x y → TC R' x y
   | .base h => .base (hR _ _ h)
   | .trans h₁ h₂ => .trans (h₁.map hR) (h₂.map hR)
 
@@ -453,4 +453,4 @@ theorem solution_gen (hi : Inv s) (hn : LogNAC s) (hr : TailRanked s rank) (hg :
 
 end
 
-end SimpleSub.Alg
+end BoltCore.Alg

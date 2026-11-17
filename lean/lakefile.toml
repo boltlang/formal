@@ -1,6 +1,6 @@
-name = "SimpleSub"
+name = "BoltCore"
 version = "0.1.0"
-defaultTargets = ["SimpleSub"]
+defaultTargets = ["BoltCore"]
 
 [[lean_lib]]
-name = "SimpleSub"
+name = "BoltCore"

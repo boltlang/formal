@@ -26,7 +26,7 @@ computed: row variables. `Ty.field` computes the field of any row,
 producing `proj` only for those.
 -/
 
-namespace SimpleSub
+namespace BoltCore
 
 mutual
 inductive Ty where
@@ -88,4 +88,4 @@ def Ty.field (l : String) : Ty → Ty
   | .arrow _ _ => .abs
   | t => .proj l t
 
-end SimpleSub
+end BoltCore

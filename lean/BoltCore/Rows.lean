@@ -20,7 +20,7 @@ preserve the denotation:
   appended (`mk_row`, `row_view`, `norm_row`).
 -/
 
-namespace SimpleSub.Rows
+namespace BoltCore.Rows
 
 variable {F : Type}
 
@@ -260,4 +260,4 @@ theorem flatten (fs : List (String × F)) (r : Row F) (l : String) :
   simp only [Row.at, find_append]
   cases find? l fs <;> rfl
 
-end SimpleSub.Rows
+end BoltCore.Rows

@@ -1,7 +1,7 @@
 Snapshots of every program in examples/. --self-check also verifies that each
 simplified type is equivalent to the raw coalesced one.
 
-  $ simplesub --self-check ../examples/basics.sub
+  $ boltcore --self-check ../examples/basics.sub
   let const : 'a -> ⊤ -> 'a
   let id : 'a -> 'a
   let apply : ('a -> 'b) -> 'a -> 'b
@@ -11,7 +11,7 @@ simplified type is equivalent to the raw coalesced one.
   let inc : int -> int
   let plus2 : int -> int
   let negate_twice : bool -> bool
-  $ simplesub --rectypes --self-check ../examples/errors.sub
+  $ boltcore --rectypes --self-check ../examples/errors.sub
   let not_a_function : type error: cannot constrain int <: (int -> α2)
   let wrong_arg : type error: cannot constrain bool <: int
   let missing_field : type error: missing field: b in {a: int}
@@ -22,13 +22,13 @@ simplified type is equivalent to the raw coalesced one.
   let finite : type error: missing field: tail in {isNil: bool}
   let fine : int
   [1]
-  $ simplesub --self-check ../examples/polymorphism.sub
+  $ boltcore --self-check ../examples/polymorphism.sub
   let id : 'a -> 'a
   let pair : {a: int, b: bool}
   let local : {b: {v: bool}, i: {v: int}}
   let extruded : (bool ∨ int -> 'a) -> {a: 'a, b: 'a}
   let mono : (bool ∨ int -> 'a) -> {a: 'a, b: 'a}
-  $ simplesub --self-check ../examples/records.sub
+  $ boltcore --self-check ../examples/records.sub
   let get_x : {x: 'a} -> 'a
   let norm1 : {x: int, y: int} -> int
   let n : int
@@ -37,7 +37,7 @@ simplified type is equivalent to the raw coalesced one.
   let tag : 'a ∧ {size: int} -> {size: int, value: 'a}
   let tagged : {size: int, value: {name: int, size: int}}
   let inner : int
-  $ simplesub --self-check ../examples/rows.sub
+  $ boltcore --self-check ../examples/rows.sub
   let addY : {y: Abs | 'a} -> {y: int | 'a}
   let fromX : {x: int, y: int}
   let xAgain : int
@@ -51,7 +51,7 @@ simplified type is equivalent to the raw coalesced one.
   let count : 'a ∧ {n: int | 'b ∧ {done: bool}} ∧ {done: bool} -> 'a ∨ {n: int | 'b}
   let noZ : type error: missing field: z in {x: int}
   [1]
-  $ simplesub --rectypes --self-check ../examples/recursion.sub
+  $ boltcore --rectypes --self-check ../examples/recursion.sub
   let produce : int -> ({head: int, tail: 'a} as 'a)
   let sum : ({head: int, tail: 'a} as 'a) -> int
   let total : int
@@ -62,7 +62,7 @@ simplified type is equivalent to the raw coalesced one.
   let y : ('a -> 'a) -> 'a
   let yeat : (⊤ -> 'a as 'a)
   [1]
-  $ simplesub --self-check ../examples/unions.sub
+  $ boltcore --self-check ../examples/unions.sub
   let either : bool -> int ∨ {a: int}
   let both : {f: 'a} ∧ (int -> 'b) -> {r: 'a, s: 'b}
   let pick : bool -> {x: int}
