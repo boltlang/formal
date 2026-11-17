@@ -3,11 +3,11 @@
 Lionel Parreaux, Aleksander Boruch-Gruszecki, Andong Fan and Chun Yin Chau.
 *When Subtyping Constraints Liberate: A Novel Type Inference Approach for
 First-Class Polymorphism.* POPL 2024, PACMPL 8, article 48.
-[doi:10.1145/3632890](https://doi.org/10.1145/3632890). Local copies: the
-paper, [`papers/when-subtyping-constraints-liberate.pdf`](../../papers/when-subtyping-constraints-liberate.pdf),
-and the technical report with the appendices (more examples, box erasure,
-the acyclicity check, the translation to F<sub>cc</sub>, proofs),
-[`papers/superf-tech-report.pdf`](../../papers/superf-tech-report.pdf).
+[doi:10.1145/3632890](https://doi.org/10.1145/3632890). Online: the
+[preprint](https://lptk.github.io/files/superf-popl24-preprint.pdf), and the
+[technical report](https://lptk.github.io/files/superf-tech-report.pdf) with
+the appendices (more examples, box erasure, the acyclicity check, the
+translation to F<sub>cc</sub>, proofs).
 
 **Status: under discussion (issue #6). Not implemented.**
 

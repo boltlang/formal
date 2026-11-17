@@ -1,8 +1,9 @@
 # Papers
 
 One note per paper the project builds on or plans around: what the paper
-does, how it is used here, and where we differ. The PDFs are in
-[`papers/`](../../papers/).
+does, how it is used here, and where we differ. Each note links to the
+paper; the three papers the implementation follows or plans after are also
+in [`papers/`](../../papers/).
 
 | Paper | Status | Note |
 |---|---|---|
@@ -13,12 +14,12 @@ does, how it is used here, and where we differ. The PDFs are in
 | Parreaux, Boruch-Gruszecki, Fan, Chau, *When Subtyping Constraints Liberate* (SuperF, POPL 2024) | discussion: first-class polymorphism (#6) | [superf.md](superf.md) |
 | Castagna, *Typing Records, Maps, and Structs* (ICFP 2023) | comparison: optional fields (#2) | [records-maps-structs.md](records-maps-structs.md) |
 
-Also in `papers/`, not used yet: Frisch, Castagna and Benzaken, *Semantic
-Subtyping: Dealing Set-Theoretically with Function, Union, Intersection,
-and Negation Types* (JACM 2008), the foundation of Castagna's records
-paper.
+Not used yet: Frisch, Castagna and Benzaken, *Semantic Subtyping: Dealing
+Set-Theoretically with Function, Union, Intersection, and Negation Types*
+(JACM 2008, [doi:10.1145/1391289.1391293](https://doi.org/10.1145/1391289.1391293)),
+the foundation of Castagna's records paper.
 
-Cited without a local copy:
+Also cited:
 
 - Dolan and Mycroft, *Polymorphism, Subtyping, and Type Inference in MLsub*
   (POPL 2017): the type lattice and its equations, which the simplifier

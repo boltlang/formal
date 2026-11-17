@@ -31,7 +31,7 @@ scripts/check-certs.sh                                # certify every example
 | `lean/` | the mechanized metatheory ([`lean/README.md`](lean/README.md)) |
 | `scripts/check-certs.sh` | certifies every example and test program with the Lean checker |
 | `docs/` | [certificates](docs/certificates.md), [papers](docs/papers/README.md) |
-| `papers/` | the papers, as PDFs |
+| `papers/` | PDFs of the papers the implementation follows |
 
 ## The language
 

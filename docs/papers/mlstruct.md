@@ -2,7 +2,7 @@
 
 Lionel Parreaux and Chun Yin Chau. OOPSLA 2022, PACMPL 6, article 141.
 [doi:10.1145/3563304](https://doi.org/10.1145/3563304).
-Local copy: [`papers/mlstruct.pdf`](../../papers/mlstruct.pdf).
+Extended version with the proofs: <https://lptk.github.io/mlstruct-paper>.
 
 **Status: a candidate for the next step of the type lattice. Not implemented.**
 

@@ -1,8 +1,7 @@
 # Typing Records, Maps, and Structs
 
 Giuseppe Castagna. ICFP 2023, PACMPL 7, article 196.
-[doi:10.1145/3607838](https://doi.org/10.1145/3607838).
-Local copy: [`papers/typing-records-maps-and-structs.pdf`](../../papers/typing-records-maps-and-structs.pdf).
+[doi:10.1145/3607838](https://doi.org/10.1145/3607838). Open access.
 
 **Status: the comparison point for optional record fields (issue #2). Not
 implemented.**
