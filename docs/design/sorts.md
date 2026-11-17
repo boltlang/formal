@@ -1,6 +1,6 @@
 # Design note: sorted types (types, rows, fields)
 
-Status: step 1 done (`lean/BoltCore/Sorted/`); steps 2–5 to do.
+Status: steps 1 and 2 done (`lean/BoltCore/Sorted/`); steps 3–5 to do.
 
 ## The problem
 
@@ -114,22 +114,15 @@ finite derivations, now with the `pre` and row cases.
 The algorithm model's `SType` and the OCaml `simple_type` keep one syntax,
 with `Record (fields, tail)` for both records and rows. What changes:
 
-- **Each variable has a sort**, fixed at creation as its kind is: `fresh_var`
-  makes type variables, while `with` and row expansion make row variables.
-  Extrusion and instantiation copy the sort. In the OCaml typer, tails are
-  only ever `Abs`, `with` rows or expansion variables, so the sort is always
-  known.
-- **A well-sortedness invariant replaces `NAC`** (`Sorts.lean` becomes it):
-  every accepted constraint relates two well-sorted terms of the same sort.
-  `NAC` is a fragment of this already. `check_kind` in the OCaml typer
-  gets a sort check, and certificates list each variable's sort, which the
-  checker verifies.
-- **The solution translates by sort**: `toTy`, `toRow` and `toField` map an
-  `SType` to `T .ty`, `T .row` and `T .field` (`toField abs = top`,
-  `toField τ = pre (toTy τ)`, `toRow (var v) = gvar v`, …). They are total;
-  ill-sorted input gives junk, which the invariant rules out. A graph
-  variable is defined at its own sort, from its upper bounds translated at
-  that sort, so `TyVar` and the `⊤` definition go.
+- **The solution translates by position** (as built in step 2): `sTy`,
+  `sRow` and `sField` map a simple type to a type, a row and a field
+  (`sField abs = ⊤`, `sField τ = pre (sTy τ)`, `sRow (var v) = gvar v`, …).
+  They are total; `Abs` in a type position gives junk, which `NAC` rules
+  out where it matters. Every graph variable is defined at every sort, from
+  its upper bounds translated at that sort, so variables need no sort and
+  `TyVar` and the `⊤` definition go. (This note first proposed a sort per
+  variable and a well-sortedness invariant replacing `NAC`; neither turned
+  out to be needed.)
 
 Keeping `SType` unsorted avoids dependent pairs in logs, caches and
 certificates, and keeps the model close to the OCaml code. A fully indexed
@@ -170,15 +163,24 @@ passing:
    Cut elimination goes through a *pending cut* predicate (`Pend`), so that
    one induction on the right derivation covers every shape without casts
    between sorts; rows are cut field by field.
-2. **Sorted solution.** The well-sortedness invariant (from `Sorts.lean`),
-   the translations, and `defsOf` by sort, through `Solution.lean`,
-   `SolutionRows.lean`, `Theorem1.lean` and `Kinds.lean`. Checkpoint:
-   `theorem1`.
+2. **Sorted solution.** Done (`Sorted/Solution.lean`, `Sorted/Theorem1.lean`):
+   the sorted solution theorem (`ssolution_ty`, `ssolution_row`) and
+   Theorem 1 over sorted typing with no assumption left (`stheorem1`). Two
+   findings change the plan:
+   - **Variables need no sort.** A simple type is translated by the
+     position it occurs in (`sTy`, `sRow`, `sField`), and every graph
+     variable is defined at every sort from its upper bounds. The
+     unsorted proof's type-level pairs and field pairs become pairs at the
+     type and row sorts; `TyVar` and the `⊤` definition are gone.
+   - **`NAC` stays as it is.** It is the fragment of well-sortedness the
+     proof needs (no `Abs` in function types, so their translations at the
+     type sort mean something), and `Sorts.lean` is reused unchanged, as
+     are the algorithm model, justification, consistency and kinds.
 3. **Certificates.** `Certificate.lean`, `SolutionGen.lean`, `PolyLet.lean`,
    `Check.lean` and `Examples.lean`, without the `⊤` patches; certificates
    list variable sorts.
-4. **OCaml.** A sort on `var_state`, the sort check next to `check_kind`,
-   and sorts in certificates.
+4. **OCaml.** Probably unnecessary: since variables need no sort (step 2),
+   neither the typer nor certificates need to record one.
 5. **Then #2**, optional fields, on the sorted field lattice.
 
 ## Open questions

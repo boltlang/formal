@@ -20,3 +20,5 @@ import BoltCore.Sorted.Types
 import BoltCore.Sorted.Sub
 import BoltCore.Sorted.Lattice
 import BoltCore.Sorted.Typing
+import BoltCore.Sorted.Solution
+import BoltCore.Sorted.Theorem1
