@@ -157,7 +157,8 @@ def ann : Ann :=
 /-- The executable checker accepts the certificate and the skeleton. -/
 theorem checked : cert.check = true ∧ infer cert [] ann = some (.var 2) := by decide
 
-example : Typ (defsOf cert.state) [] prog (.gvar 2) := check_sound checked.1 checked.2
+/-- The same in the sorted system, through the checker. -/
+example : Sorted.Typ (sdefsOf cert.state) [] prog (.gvar 2) := check_sound checked.1 checked.2
 
 /-! ## A constrained example
 
@@ -328,7 +329,7 @@ def ann : Ann :=
 
 theorem checked : cert.check = true ∧ infer cert Γ ann = some (.var 2) := by decide
 
-example : Typ (defsOf cert.state) (Γ.toCtx cert.bounds cert.kind .gvar) prog (.gvar 2) :=
+example : Sorted.Typ (sdefsOf cert.state) (Γ.toSCtx cert.bounds .gv) prog (.gvar 2) :=
   check_sound checked.1 checked.2
 
 end Constrained

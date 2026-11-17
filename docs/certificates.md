@@ -38,10 +38,12 @@ In `lean/BoltCore/Check.lean`:
   invariants of the soundness proofs (justification, consistency, bounds
   in the log, `Abs` never a function component, the kind discipline, and a
   ranking that excludes structural recursive types);
-- `infer c Γ a = some st → PTyp c Γ a.erase st`: the annotated term has a
+- `infer c Γ a = some st → SPTyp c Γ a.erase st`: the annotated term has a
   polymorphic typing skeleton;
-- `check_sound`: together, `a.erase` has type `st` in the declarative
-  system with constrained schemes, over the certificate's solution.
+- `check_sound`: together, `a.erase` has type `st` in the sorted
+  declarative system with constrained schemes (types, rows and fields are
+  separate sorts, see [design/sorts.md](design/sorts.md)), over the
+  certificate's solution.
 
 Only this direction is proved: a rejection proves nothing. Not verified:
 the JSON parser, the ranks (computed by `boltcore-check` and checked by
@@ -49,8 +51,9 @@ the JSON parser, the ranks (computed by `boltcore-check` and checked by
 written.
 
 The other direction, *adequacy*, is proved for the Lean model of the
-algorithm without levels (`TypeTerm.certificate`, `Certificate.lean`): an
-accepted run yields a valid certificate. For the real typer, with levels
+algorithm without levels (`TypeTerm.scertificate`, `Sorted/Certificate.lean`):
+an accepted run yields a valid certificate and a skeleton the checker's
+rules accept. For the real typer, with levels
 and let-polymorphism, it is tested.
 
 ## How the typer produces one

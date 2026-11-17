@@ -1,13 +1,13 @@
-import BoltCore.PolyLet
+import BoltCore.Sorted.PolyLet
 
 /-!
 # An executable certificate checker (roadmap 6b)
 
-Boolean checks for everything `PTyp.sound_top` asks of a certificate and a
-typing skeleton, each proved to imply the property it checks:
+Boolean checks for everything `SPTyp.sound_top` asks of a certificate and
+a typing skeleton, each proved to imply the property it checks:
 
 * `Certificate.check c = true → c.Valid` (`Certificate.check_valid`);
-* `infer c Γ a = some st → PTyp c Γ a.erase st` (`infer_sound`), where `a`
+* `infer c Γ a = some st → SPTyp c Γ a.erase st` (`infer_sound`), where `a`
   is an *annotated term* (`Ann`): the term, with the types a skeleton
   cannot compute bottom-up (the parameter type of a `fun`, the result type
   of an application or selection, the tail of an extension, the
@@ -15,7 +15,7 @@ typing skeleton, each proved to imply the property it checks:
   let-bound name).
 
 Together (`check_sound`): an accepted certificate types the term in the
-declarative system. Only this direction matters for trusting the checker:
+sorted declarative system (`Sorted/Typing.lean`). Only this direction matters for trusting the checker:
 a bug in the inferencer or the certificate printer can make the checker
 reject, never accept, a wrong typing. Whether every run of the inferencer
 yields an accepted certificate is the adequacy question, tested on the
@@ -459,12 +459,11 @@ def genB (Γ : PCtx) (gen : List Nat) : Bool :=
 /-- The renaming a list of pairs gives: unlisted variables are fixed. -/
 def renameOf (ρ : List (Nat × Nat)) (v : Nat) : Nat := (ρ.lookup v).getD v
 
-/-- `InstOK` for `renameOf ρ`: only `gen` is renamed, copies keep kinds,
-and the copies' renamed bounds are accepted. -/
+/-- `SInstOK` for `renameOf ρ`: only `gen` is renamed, and the copies'
+renamed bounds are accepted. -/
 def instB (gen : List Nat) (ρ : List (Nat × Nat)) : Bool :=
   (ρ.all fun p => decide (p.1 ∈ gen)) &&
   gen.all fun α =>
-    decide (c.kind (renameOf ρ α) = c.kind α) &&
     (c.bounds α).upper.all (fun u => decide (c.Accepts (.var (renameOf ρ α)) (u.rename (renameOf ρ)))) &&
     (c.bounds α).lower.all (fun l => decide (c.Accepts (l.rename (renameOf ρ)) (.var (renameOf ρ α))))
 
@@ -491,10 +490,9 @@ theorem renameOf_fix {ρ : List (Nat × Nat)} {gen : List Nat} (h : ∀ p ∈ ρ
     exact absurd (h p hp) hv
 
 theorem instB_sound {gen : List Nat} {ρ : List (Nat × Nat)} (h : c.instB gen ρ = true) :
-    InstOK c gen (renameOf ρ) := by
+    SInstOK c gen (renameOf ρ) := by
   simp only [instB, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at h
-  exact ⟨fun _ hv => renameOf_fix h.1 hv, fun α hα => (h.2 α hα).1.1,
-    fun α hα => (h.2 α hα).1.2, fun α hα => (h.2 α hα).2⟩
+  exact ⟨fun _ hv => renameOf_fix h.1 hv, fun α hα => (h.2 α hα).1, fun α hα => (h.2 α hα).2⟩
 
 end Certificate
 
@@ -578,7 +576,7 @@ def infer (Γ : PCtx) : Ann → Option SType
   | .sel t l st =>
     match infer Γ t with
     | some st₀ =>
-      if st₀ ≠ .abs ∧ c.Accepts st₀ (.record (.cons l st .nil) .abs) ∧ st.Present c.kind
+      if st₀ ≠ .abs ∧ c.Accepts st₀ (.record (.cons l st .nil) .abs) ∧ st ≠ .abs
       then some st else none
     | none => none
   | .ext t .nil _ => infer Γ t
@@ -605,7 +603,7 @@ def inferFields (Γ : PCtx) : AFields → Option SFields
   | .nil => some .nil
   | .cons l t fs =>
     match infer Γ t, inferFields Γ fs with
-    | some st, some F => some (.cons l st F)
+    | some st, some F => if st ≠ .abs then some (.cons l st F) else none
     | _, _ => none
 end
 
@@ -615,7 +613,7 @@ mutual
 /-- **Skeleton checking is sound**: a checked annotated term has a typing
 skeleton at the type `infer` computes. -/
 theorem infer_sound : ∀ {Γ : PCtx} {a : Ann} {st : SType}, infer c Γ a = some st →
-    PTyp c Γ a.erase st
+    SPTyp c Γ a.erase st
   | Γ, .lit _, st, h => by simp only [infer, Option.some.injEq] at h; subst h; exact .lit
   | Γ, .var x, st, h => by
     simp only [infer] at h
@@ -692,12 +690,15 @@ theorem infer_sound : ∀ {Γ : PCtx} {a : Ann} {st : SType}, infer c Γ a = som
     · cases h
 
 theorem inferFields_sound : ∀ {Γ : PCtx} {fs : AFields} {F : SFields}, inferFields c Γ fs = some F →
-    PFields c Γ fs.erase F
+    SPFields c Γ fs.erase F
   | Γ, .nil, F, h => by simp only [inferFields, Option.some.injEq] at h; subst h; exact .nil
   | Γ, .cons l t fs, F, h => by
     simp only [inferFields] at h
     split at h
-    · next ht hF => cases h; exact .cons (infer_sound ht) (inferFields_sound hF)
+    · next ht hF =>
+      split at h
+      · next hne => cases h; exact .cons (infer_sound ht) hne (inferFields_sound hF)
+      · cases h
     · cases h
 end
 
@@ -707,17 +708,17 @@ end Infer
 
 /-- The built-ins of `lib/typer.ml`, with `if : ∀α. bool → α → α → α` for
 the variable `α = k` (the certificate gives it no bounds, so the scheme is
-the expected one, constrained only by `k ≤ ⊤`). -/
+the expected one, with no constraints). -/
 def pbuiltins (k : Nat) : PCtx :=
   builtins.map (fun p => (p.1, .mono p.2)) ++
     [("if", .poly [k] (.arrow (.prim "bool") (.arrow (.var k) (.arrow (.var k) (.var k)))))]
 
 /-- **Theorem 1 for the executable checker**: if the certificate checks,
 and the annotated term checks against it, the term has the computed type
-in the declarative system, over the certificate's solution. -/
+in the sorted declarative system, over the certificate's sorted solution. -/
 theorem check_sound {c : Certificate} {Γ : PCtx} {a : Ann} {st : SType} (hc : c.check = true)
     (h : infer c Γ a = some st) :
-    Typ (defsOf c.state) (Γ.toCtx c.bounds c.kind .gvar) a.erase st.toTy :=
-  PTyp.sound_top (Certificate.check_valid hc) (infer_sound h)
+    Sorted.Typ (sdefsOf c.state) (Γ.toSCtx c.bounds .gv) a.erase st.sTy :=
+  SPTyp.sound_top (Certificate.check_valid hc) (infer_sound h)
 
 end BoltCore.Alg

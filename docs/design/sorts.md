@@ -1,6 +1,6 @@
 # Design note: sorted types (types, rows, fields)
 
-Status: steps 1 and 2 done (`lean/BoltCore/Sorted/`); steps 3–5 to do.
+Status: steps 1–3 done (`lean/BoltCore/Sorted/`); the checker proves sorted typings. Next: retire the unsorted declarative development, then #2.
 
 ## The problem
 
@@ -176,9 +176,23 @@ passing:
      proof needs (no `Abs` in function types, so their translations at the
      type sort mean something), and `Sorts.lean` is reused unchanged, as
      are the algorithm model, justification, consistency and kinds.
-3. **Certificates.** `Certificate.lean`, `SolutionGen.lean`, `PolyLet.lean`,
-   `Check.lean` and `Examples.lean`, without the `⊤` patches; certificates
-   list variable sorts.
+3. **Certificates.** Done: `Sorted/SolutionGen.lean`, `Sorted/PolyLet.lean`
+   and `Sorted/Certificate.lean`, and the executable checker
+   (`Check.lean`) now proves sorted typings (`check_sound` through
+   `SPTyp.sound_top`). An interpretation gives each variable a type and a
+   row; generalization asks for the bounds at both sorts, which replaces
+   the field-by-field obligations, and there is no `α ≤ ⊤` constraint and no
+   kind condition on instantiation. The checker asks that a selected field
+   and a record literal's fields are not `Abs`, instead of `Present`.
+   Adequacy goes straight to the polymorphic skeleton
+   (`TypeTerm.scertificate`): a monomorphic `let` generalizes no variables.
+   Still unsorted: the hand-written skeletons in `Examples.lean` (their
+   `decide` checks already go through the sorted checker).
+3b. **Retire the unsorted declarative development**: port the examples'
+   hand-written skeletons, remove the unsorted `Sub`, `Typing`, `Lattice`,
+   solution, `Theorem1`, `CTyp` and schemes, move the algorithm-level
+   lemmas they hold (row views, tail ranks, chains, `Av`, `genCs`) to where
+   they belong, and drop the `Sorted` prefix.
 4. **OCaml.** Probably unnecessary: since variables need no sort (step 2),
    neither the typer nor certificates need to record one.
 5. **Then #2**, optional fields, on the sorted field lattice.

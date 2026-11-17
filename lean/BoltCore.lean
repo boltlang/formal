@@ -22,3 +22,6 @@ import BoltCore.Sorted.Lattice
 import BoltCore.Sorted.Typing
 import BoltCore.Sorted.Solution
 import BoltCore.Sorted.Theorem1
+import BoltCore.Sorted.SolutionGen
+import BoltCore.Sorted.PolyLet
+import BoltCore.Sorted.Certificate
