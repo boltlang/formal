@@ -116,6 +116,7 @@ overloading, flow typing or first-class polymorphism (see
 | Minimal rules, MLsub equations optional | The same choice. `Lattice.lean` proves that function merging is not derivable from the minimal rules. |
 
 The Lean development also covers what the paper does not have: rows and
-row expansion, kinds for row variables, `Abs` strictly above `⊤` (only
-present fields are below `⊤`), and the absence of structural recursive
+row expansion, kinds for row variables, separate sorts for types, rows
+and fields (`Abs` is the top field and never a type, so a present field
+`pre τ` is strictly below it), and the absence of structural recursive
 types (`Valid.nonrec`).

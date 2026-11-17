@@ -1,4 +1,5 @@
 import BoltCore.SolutionGen
+import BoltCore.Typing
 
 /-!
 # Polymorphic `let` in certificates
@@ -10,68 +11,24 @@ each use of the bound name instantiates them with a renaming `ρ`, as
 
 * **generalization** (`GenOK`): bounds of variables outside `gen` do not
   mention `gen`, and neither does the context;
-* **instantiation** (`InstOK`): `ρ` fixes every variable outside `gen`,
-  the copies have the kinds of the originals, and the renamed bounds of
-  `gen` are accepted constraints.
+* **instantiation** (`InstOK`): `ρ` fixes every variable outside `gen`, and
+  the renamed bounds of `gen` are accepted constraints.
 
-The scheme of a generalized `let` is the constrained scheme whose
-variables are `gen` (as fresh free type variables) and whose constraints
-are their bounds, and `α ≤ ⊤` for each ordinary type variable `α` of `gen`
-(`mkScheme`): an instance reads a type variable as a type, never as `Abs`,
-so a field selected at that type stays present. Soundness (`PTyp.sound`) types the
+The scheme of a generalized `let` (`mkScheme`) has the generalized
+variables as free variables at the type and row sorts, and for each bound
+of a generalized variable a constraint at the type sort (unless its smaller
+side is `Abs`) and one at the row sort. Soundness (`PTyp.sound`) types the
 right-hand side at every instance through `solution_gen`, and each use at
 an instance given by the copies' solution.
 
 A nested `let` is generalized under the instance of an enclosing one, so
-soundness is proved under an interpretation `I` of the variables that is
-itself an instance (`GenHyp`), and the scheme's variables are numbered
-above every free type variable the scheme would otherwise contain, so
-substituting them captures nothing.
+soundness is proved under an interpretation `I` that is itself an instance
+(`GenHyp`), and the scheme's variables are numbered above every free
+variable the scheme would otherwise contain, so substituting them captures
+nothing.
 -/
 
 namespace BoltCore
-
-/-! ## Free type variables -/
-
-mutual
-def Ty.fvars : Ty → List Nat
-  | .fvar n => [n]
-  | .top | .bot | .abs | .prim _ | .gvar _ => []
-  | .union a b | .inter a b | .arrow a b => a.fvars ++ b.fvars
-  | .record fs t => fs.fvars ++ t.fvars
-  | .proj _ t => t.fvars
-
-def Fields.fvars : Fields → List Nat
-  | .nil => []
-  | .cons _ f fs => f.fvars ++ fs.fvars
-end
-
-mutual
-/-- Substituting variables that do not occur changes nothing. -/
-theorem Ty.substM_fresh {m : Nat → Option Ty} :
-    ∀ t : Ty, (∀ n ∈ t.fvars, m n = none) → t.substM m = t
-  | .fvar n, h => by simp [Ty.substM, h n (by simp [Ty.fvars])]
-  | .top, _ | .bot, _ | .abs, _ | .prim _, _ | .gvar _, _ => rfl
-  | .union a b, h | .inter a b, h | .arrow a b, h => by
-    simp only [Ty.substM]
-    rw [Ty.substM_fresh a fun n hn => h n (by simp [Ty.fvars, hn]),
-      Ty.substM_fresh b fun n hn => h n (by simp [Ty.fvars, hn])]
-  | .record fs t, h => by
-    simp only [Ty.substM]
-    rw [Fields.substM_fresh fs fun n hn => h n (by simp [Ty.fvars, hn]),
-      Ty.substM_fresh t fun n hn => h n (by simp [Ty.fvars, hn])]
-  | .proj _ t, h => by
-    simp only [Ty.substM]
-    rw [Ty.substM_fresh t fun n hn => h n (by simp [Ty.fvars, hn])]
-
-theorem Fields.substM_fresh {m : Nat → Option Ty} :
-    ∀ fs : Fields, (∀ n ∈ fs.fvars, m n = none) → fs.substM m = fs
-  | .nil, _ => rfl
-  | .cons _ f fs, h => by
-    simp only [Fields.substM]
-    rw [Ty.substM_fresh f fun n hn => h n (by simp [Fields.fvars, hn]),
-      Fields.substM_fresh fs fun n hn => h n (by simp [Fields.fvars, hn])]
-end
 
 /-- A number above every number of the list. -/
 def natBound : List Nat → Nat
@@ -85,100 +42,38 @@ theorem lt_natBound : ∀ {l : List Nat} {n : Nat}, n ∈ l → n < natBound l
     · omega
     · have := lt_natBound h; omega
 
+/-! ## Free variables -/
+
+/-- The free variables occurring in a type, of any sort. -/
+def Ty.fvars : Ty s → List Nat
+  | .fvar n => [n]
+  | .top | .bot | .gvar _ | .prim _ => []
+  | .union a b | .inter a b | .arrow a b => a.fvars ++ b.fvars
+  | .rcd ρ | .pre ρ | .proj _ ρ => ρ.fvars
+  | .cons _ θ ρ => θ.fvars ++ ρ.fvars
+
+/-- Substituting variables that do not occur changes nothing. -/
+theorem Ty.substM_fresh {m : Subst} :
+    {s : Srt} → (t : Ty s) → (∀ n ∈ t.fvars, ∀ srt, m srt n = none) → t.substM m = t
+  | s, .fvar n, h => by simp [Ty.substM, h n (by simp [Ty.fvars]) s]
+  | _, .top, _ | _, .bot, _ | _, .prim _, _ | _, .gvar _, _ => rfl
+  | _, .union a b, h | _, .inter a b, h | _, .arrow a b, h => by
+    simp only [Ty.substM]
+    rw [Ty.substM_fresh a fun n hn => h n (by simp [Ty.fvars, hn]),
+      Ty.substM_fresh b fun n hn => h n (by simp [Ty.fvars, hn])]
+  | _, .rcd ρ, h | _, .pre ρ, h | _, .proj _ ρ, h => by
+    simp only [Ty.substM]
+    rw [Ty.substM_fresh ρ fun n hn => h n (by simp [Ty.fvars, hn])]
+  | _, .cons _ θ ρ, h => by
+    simp only [Ty.substM]
+    rw [Ty.substM_fresh θ fun n hn => h n (by simp [Ty.fvars, hn]),
+      Ty.substM_fresh ρ fun n hn => h n (by simp [Ty.fvars, hn])]
+
 end BoltCore
 
 namespace BoltCore.Alg
 
 open State
-
-/-! ## Interpretations -/
-
-mutual
-theorem SType.interp_congr {I J : Nat → Ty} :
-    ∀ t : SType, (∀ v ∈ t.vars, I v = J v) → t.interp I = t.interp J
-  | .var v, h => h v (by simp [SType.vars])
-  | .prim _, _ | .abs, _ => rfl
-  | .arrow a b, h => by
-    simp only [SType.interp]
-    rw [SType.interp_congr a fun v hv => h v (by simp [SType.vars, hv]),
-      SType.interp_congr b fun v hv => h v (by simp [SType.vars, hv])]
-  | .record fs t, h => by
-    simp only [SType.interp]
-    rw [SFields.interp_congr fs fun v hv => h v (by simp [SType.vars, hv]),
-      SType.interp_congr t fun v hv => h v (by simp [SType.vars, hv])]
-
-theorem SFields.interp_congr {I J : Nat → Ty} :
-    ∀ fs : SFields, (∀ v ∈ fs.vars, I v = J v) → fs.interp I = fs.interp J
-  | .nil, _ => rfl
-  | .cons _ f fs, h => by
-    simp only [SFields.interp]
-    rw [SType.interp_congr f fun v hv => h v (by simp [SFields.vars, hv]),
-      SFields.interp_congr fs fun v hv => h v (by simp [SFields.vars, hv])]
-end
-
-mutual
-theorem SType.interp_substM (I : Nat → Ty) (m : Nat → Option Ty) :
-    ∀ t : SType, (t.interp I).substM m = t.interp fun v => (I v).substM m
-  | .var _ => rfl
-  | .prim _ | .abs => rfl
-  | .arrow a b => by
-    simp only [SType.interp, Ty.substM, SType.interp_substM I m a, SType.interp_substM I m b]
-  | .record fs t => by
-    simp only [SType.interp, Ty.substM, SFields.interp_substM I m fs, SType.interp_substM I m t]
-
-theorem SFields.interp_substM (I : Nat → Ty) (m : Nat → Option Ty) :
-    ∀ fs : SFields, (fs.interp I).substM m = fs.interp fun v => (I v).substM m
-  | .nil => rfl
-  | .cons _ f fs => by
-    simp only [SFields.interp, Fields.substM, SType.interp_substM I m f,
-      SFields.interp_substM I m fs]
-end
-
-mutual
-theorem SType.rename_interp (ρ : Nat → Nat) (I : Nat → Ty) :
-    ∀ t : SType, (t.rename ρ).interp I = t.interp fun v => I (ρ v)
-  | .var _ | .prim _ | .abs => rfl
-  | .arrow a b => by
-    simp only [SType.rename, SType.interp, SType.rename_interp ρ I a, SType.rename_interp ρ I b]
-  | .record fs t => by
-    simp only [SType.rename, SType.interp, SFields.rename_interp ρ I fs, SType.rename_interp ρ I t]
-
-theorem SFields.rename_interp (ρ : Nat → Nat) (I : Nat → Ty) :
-    ∀ fs : SFields, (fs.rename ρ).interp I = fs.interp fun v => I (ρ v)
-  | .nil => rfl
-  | .cons _ f fs => by
-    simp only [SFields.rename, SFields.interp, SType.rename_interp ρ I f,
-      SFields.rename_interp ρ I fs]
-end
-
-mutual
-theorem SType.fvars_interp {I : Nat → Ty} {n : Nat} :
-    ∀ t : SType, n ∈ (t.interp I).fvars → ∃ v ∈ t.vars, n ∈ (I v).fvars
-  | .var v, h => ⟨v, by simp [SType.vars], h⟩
-  | .prim _, h | .abs, h => by simp [SType.interp, Ty.fvars] at h
-  | .arrow a b, h => by
-    simp only [SType.interp, Ty.fvars, List.mem_append] at h
-    rcases h with h | h
-    · obtain ⟨v, hv, h⟩ := SType.fvars_interp a h; exact ⟨v, by simp [SType.vars, hv], h⟩
-    · obtain ⟨v, hv, h⟩ := SType.fvars_interp b h; exact ⟨v, by simp [SType.vars, hv], h⟩
-  | .record fs t, h => by
-    simp only [SType.interp, Ty.fvars, List.mem_append] at h
-    rcases h with h | h
-    · obtain ⟨v, hv, h⟩ := SFields.fvars_interp fs h; exact ⟨v, by simp [SType.vars, hv], h⟩
-    · obtain ⟨v, hv, h⟩ := SType.fvars_interp t h; exact ⟨v, by simp [SType.vars, hv], h⟩
-
-theorem SFields.fvars_interp {I : Nat → Ty} {n : Nat} :
-    ∀ fs : SFields, n ∈ (fs.interp I).fvars → ∃ v ∈ fs.vars, n ∈ (I v).fvars
-  | .nil, h => by simp [SFields.interp, Fields.fvars] at h
-  | .cons _ f fs, h => by
-    simp only [SFields.interp, Fields.fvars, List.mem_append] at h
-    rcases h with h | h
-    · obtain ⟨v, hv, h⟩ := SType.fvars_interp f h; exact ⟨v, by simp [SFields.vars, hv], h⟩
-    · obtain ⟨v, hv, h⟩ := SFields.fvars_interp fs h; exact ⟨v, by simp [SFields.vars, hv], h⟩
-end
-
-theorem SType.interp_ne_abs_of {I : Nat → Ty} {t : SType} (h : t.interp I ≠ .abs) : t ≠ .abs :=
-  fun he => h (by subst he; rfl)
 
 /-! ## Schemes of generalized variables -/
 
@@ -223,40 +118,9 @@ def SType.isAbs : SType → Bool
 theorem SType.isAbs_false {t : SType} : t.isAbs = false ↔ t ≠ .abs := by
   cases t <;> simp [SType.isAbs]
 
-/-- Read the variables `gen` through `G`, the others through `I`. -/
-def withGen (gen : List Nat) (G I : Nat → Ty) (v : Nat) : Ty := if v ∈ gen then G v else I v
-
-/-- The scheme's variables are numbered from here: above every free type
-variable that the types `I` gives the scheme's other variables contain. -/
-def schemeBase (σ : Nat → Bounds) (I : Nat → Ty) (gen : List Nat) (st : SType) : Nat :=
-  natBound ((schemeVars σ gen st).flatMap fun v => if v ∈ gen then [] else (I v).fvars)
-
 def genName (base : Nat) (gen : List Nat) (v : Nat) : Nat := base + gen.idxOf v
 
-/-- The interpretation inside the scheme: `gen` as its free variables. -/
-def schemeF (σ : Nat → Bounds) (I : Nat → Ty) (gen : List Nat) (st : SType) : Nat → Ty :=
-  withGen gen (fun v => .fvar (genName (schemeBase σ I gen st) gen v)) I
-
-/-- The constrained scheme generalizing `gen` in `st`, under `I`: the
-bounds of `gen`, and `α ≤ ⊤` for each ordinary type variable `α` of `gen`
-(kind `[]` in `K`), so that an instance cannot read it as `Abs`. -/
-def mkScheme (σ : Nat → Bounds) (K : Nat → List String) (I : Nat → Ty) (gen : List Nat)
-    (st : SType) : Scheme where
-  vars := gen.map (genName (schemeBase σ I gen st) gen)
-  cs := ((genCs σ gen).map fun p =>
-      ⟨p.1.interp (schemeF σ I gen st), p.2.interp (schemeF σ I gen st), !p.1.isAbs⟩) ++
-    (gen.filter fun α => (K α).isEmpty).map fun α =>
-      ⟨.fvar (genName (schemeBase σ I gen st) gen α), .top, true⟩
-  body := st.interp (schemeF σ I gen st)
-
-section
-variable {σ : Nat → Bounds} {K : Nat → List String} {I : Nat → Ty} {gen : List Nat} {st : SType}
-
-theorem schemeBase_lt {v n : Nat} (hv : v ∈ schemeVars σ gen st) (hg : v ∉ gen)
-    (hn : n ∈ (I v).fvars) : n < schemeBase σ I gen st :=
-  lt_natBound (List.mem_flatMap.mpr ⟨v, hv, by simp [hg, hn]⟩)
-
-theorem genName_inj {base v w : Nat} (hv : v ∈ gen) (hw : w ∈ gen)
+theorem genName_inj {gen : List Nat} {base v w : Nat} (hv : v ∈ gen) (hw : w ∈ gen)
     (h : genName base gen v = genName base gen w) : v = w := by
   have h' : gen.idxOf v = gen.idxOf w := by simp only [genName] at h; omega
   have h1 := List.getElem_idxOf (List.idxOf_lt_length_iff.mpr hv)
@@ -264,157 +128,12 @@ theorem genName_inj {base v w : Nat} (hv : v ∈ gen) (hw : w ∈ gen)
   simp only [h'] at h1
   rw [← h1, h2]
 
-/-- Substituting the scheme's variables only touches them. -/
-theorem scheme_substM {m : Nat → Option Ty} (hm : ∀ n, n < schemeBase σ I gen st → m n = none)
-    {t : SType} (ht : ∀ v ∈ t.vars, v ∈ schemeVars σ gen st) :
-    (t.interp (schemeF σ I gen st)).substM m =
-      t.interp (withGen gen (fun v => (Ty.fvar (genName (schemeBase σ I gen st) gen v)).substM m) I) := by
-  rw [SType.interp_substM]
-  apply SType.interp_congr
-  intro v hv
-  simp only [schemeF, withGen]
-  split
-  · rfl
-  · next hg => exact Ty.substM_fresh _ fun n hn => hm n (schemeBase_lt (ht v hv) hg hn)
-
-/-- The substitution that instantiates the scheme's variables with `G`. -/
-def genSubst (σ : Nat → Bounds) (I : Nat → Ty) (gen : List Nat) (st : SType) (G : Nat → Ty) :
-    Nat → Option Ty :=
-  fun n => (gen.find? fun v => genName (schemeBase σ I gen st) gen v == n).map G
-
-theorem genSubst_name {G : Nat → Ty} {v : Nat} (hv : v ∈ gen) :
-    genSubst σ I gen st G (genName (schemeBase σ I gen st) gen v) = some (G v) := by
-  simp only [genSubst]
-  cases h : gen.find? fun w => genName (schemeBase σ I gen st) gen w == genName (schemeBase σ I gen st) gen v with
-  | none =>
-    have := List.find?_eq_none.mp h v hv
-    simp at this
-  | some w =>
-    have hw := List.mem_of_find?_eq_some h
-    have hp := List.find?_some h
-    simp only [beq_iff_eq] at hp
-    rw [genName_inj hw hv hp]; rfl
-
-theorem genSubst_low {G : Nat → Ty} {n : Nat} (hn : n < schemeBase σ I gen st) :
-    genSubst σ I gen st G n = none := by
-  simp only [genSubst]
-  have : gen.find? (fun w => genName (schemeBase σ I gen st) gen w == n) = none :=
-    List.find?_eq_none.mpr fun w _ h => by
-      simp only [beq_iff_eq, genName] at h; omega
-  rw [this]; rfl
-
-theorem genSubst_dom {G : Nat → Ty} {n : Nat} (h : (genSubst σ I gen st G n).isSome) :
-    n ∈ (mkScheme σ K I gen st).vars := by
-  simp only [genSubst] at h
-  obtain ⟨w, hw, hp⟩ := List.find?_isSome.mp (by rwa [Option.isSome_map] at h)
-  simp only [beq_iff_eq] at hp
-  exact List.mem_map.mpr ⟨w, hw, hp⟩
-
-/-- An instance of the scheme: read `gen` through `G`, given that the
-constraints (the bounds of `gen`) hold so, and that `G` reads the ordinary
-type variables of `gen` as types. -/
-theorem mkScheme_instance {E : Defs} {G : Nat → Ty}
-    (hcs : ∀ q ∈ genCs σ gen,
-      (q.1 ≠ .abs → Sub E (q.1.interp (withGen gen G I)) (q.2.interp (withGen gen G I))) ∧
-        ∀ l, Sub E ((q.1.interp (withGen gen G I)).field l) ((q.2.interp (withGen gen G I)).field l))
-    (htop : ∀ α ∈ gen, K α = [] → Sub E (G α) .top) :
-    (mkScheme σ K I gen st).Instance E (st.interp (withGen gen G I)) := by
-  have key : ∀ t : SType, (∀ v ∈ t.vars, v ∈ schemeVars σ gen st) →
-      (t.interp (schemeF σ I gen st)).substM (genSubst σ I gen st G) = t.interp (withGen gen G I) := by
-    intro t ht
-    rw [scheme_substM (fun n hn => genSubst_low hn) ht]
-    apply SType.interp_congr
-    intro _ _
-    simp only [withGen]
-    split
-    · next hg => simp only [Ty.substM, genSubst_name hg]; rfl
-    · rfl
-  refine ⟨genSubst σ I gen st G, fun n h => genSubst_dom h, fun p hp => ?_, ?_⟩
-  · rcases List.mem_append.mp (show p ∈ _ ++ _ from hp) with hp | hp
-    · obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
-      have hv := genCs_vars (st := st) hq
-      simp only [SatAfter]
-      rw [key q.1 hv.1, key q.2 hv.2]
-      exact ⟨fun h => (hcs q hq).1 (SType.isAbs_false.mp (by simpa using h)), (hcs q hq).2⟩
-    · -- `α ≤ ⊤`, for an ordinary type variable `α`
-      obtain ⟨α, hα, rfl⟩ := List.mem_map.mp hp
-      have hα' := List.mem_filter.mp hα
-      refine ⟨fun _ => ?_, fun l => ?_⟩
-      · simp only [Ty.substM, genSubst_name hα'.1, Option.getD_some]
-        exact htop α hα'.1 (List.isEmpty_iff.mp hα'.2)
-      · simp only [Ty.substM, Ty.field]; exact Sub.abs
-  · show st.interp _ = (st.interp (schemeF σ I gen st)).substM _
-    exact (key st fun v hv => List.mem_append_left _ hv).symm
-
-/-- Conversely, every instance reads `gen` through some `G` under which the
-constraints hold, and which reads the ordinary type variables of `gen` as
-types. -/
-theorem mkScheme_instance_inv {E : Defs} {τ : Ty} (h : (mkScheme σ K I gen st).Instance E τ) :
-    ∃ G : Nat → Ty, τ = st.interp (withGen gen G I) ∧ (∀ q ∈ genCs σ gen,
-      (q.1 ≠ .abs → Sub E (q.1.interp (withGen gen G I)) (q.2.interp (withGen gen G I))) ∧
-        ∀ l, Sub E ((q.1.interp (withGen gen G I)).field l) ((q.2.interp (withGen gen G I)).field l)) ∧
-      ∀ α ∈ gen, K α = [] → Sub E (G α) .top := by
-  obtain ⟨m, hdom, hcs, rfl⟩ := h
-  have hm : ∀ n, n < schemeBase σ I gen st → m n = none := fun n hn => by
-    cases hmn : m n with
-    | none => rfl
-    | some _ =>
-      have := hdom n (by simp [hmn])
-      simp only [mkScheme, List.mem_map, genName] at this
-      obtain ⟨_, _, rfl⟩ := this
-      omega
-  refine ⟨fun v => (Ty.fvar (genName (schemeBase σ I gen st) gen v)).substM m,
-    scheme_substM (st := st) hm fun v hv => List.mem_append_left _ hv, fun q hq => ?_,
-    fun α hα hk => ?_⟩
-  · have hv := genCs_vars (st := st) hq
-    have := hcs ⟨q.1.interp (schemeF σ I gen st), q.2.interp (schemeF σ I gen st), !q.1.isAbs⟩
-      (List.mem_append_left _ (List.mem_map.mpr ⟨q, hq, rfl⟩))
-    simp only [SatAfter] at this
-    rw [scheme_substM hm hv.1, scheme_substM hm hv.2] at this
-    exact ⟨fun h => this.1 (by simpa using SType.isAbs_false.mpr h), this.2⟩
-  · exact (hcs ⟨.fvar (genName (schemeBase σ I gen st) gen α), .top, true⟩
-      (List.mem_append_right _ (List.mem_map.mpr
-        ⟨α, List.mem_filter.mpr ⟨hα, List.isEmpty_iff.mpr hk⟩, rfl⟩))).1 rfl
-
-/-- The scheme only depends on what `I` gives the variables it mentions. -/
-theorem mkScheme_congr {J : Nat → Ty} (h : ∀ v ∈ schemeVars σ gen st, v ∉ gen → I v = J v) :
-    mkScheme σ K I gen st = mkScheme σ K J gen st := by
-  have hb : schemeBase σ I gen st = schemeBase σ J gen st := by
-    simp only [schemeBase]
-    congr 1
-    apply flatMap_congr'
-    intro v hv
-    split
-    · rfl
-    · next hg => rw [h v hv hg]
-  have hF : ∀ v ∈ schemeVars σ gen st, schemeF σ I gen st v = schemeF σ J gen st v := by
-    intro v hv
-    simp only [schemeF, withGen, hb]
-    split
-    · rfl
-    · next hg => exact h v hv hg
-  simp only [mkScheme, hb]
-  congr 1
-  · congr 1
-    apply List.map_congr_left
-    intro p hp
-    have hv := genCs_vars (st := st) hp
-    rw [SType.interp_congr p.1 fun v h' => hF v (hv.1 v h'),
-      SType.interp_congr p.2 fun v h' => hF v (hv.2 v h')]
-  · exact SType.interp_congr st fun v h' => hF v (List.mem_append_left _ h')
-
-end
-
 /-! ## Contexts with schemes -/
 
 inductive CEntry where
   | mono (st : SType)
   /-- A let-bound name, generalizing `gen` in `st`. -/
   | poly (gen : List Nat) (st : SType)
-
-def CEntry.toScheme (σ : Nat → Bounds) (K : Nat → List String) (I : Nat → Ty) : CEntry → Scheme
-  | .mono st => .mono (st.interp I)
-  | .poly gen st => mkScheme σ K I gen st
 
 /-- The entry does not mention the variables `gen'`. -/
 def CEntry.Avoids (σ : Nat → Bounds) (gen' : List Nat) : CEntry → Prop
@@ -425,12 +144,304 @@ abbrev PCtx := List (String × CEntry)
 
 def PCtx.lookup (Γ : PCtx) (x : String) : Option CEntry := (Γ.find? (·.1 = x)).map (·.2)
 
-def PCtx.toCtx (σ : Nat → Bounds) (K : Nat → List String) (I : Nat → Ty) (Γ : PCtx) : Ctx :=
-  Γ.map fun p => (p.1, p.2.toScheme σ K I)
+/-! ## Checking generalization and instantiation -/
 
-theorem PCtx.lookup_toCtx {σ : Nat → Bounds} {K : Nat → List String} {I : Nat → Ty} {Γ : PCtx}
-    {x : String} {e : CEntry}
-    (h : Γ.lookup x = some e) : (Γ.toCtx σ K I).lookup x = some (e.toScheme σ K I) := by
+/-- `gen` may be generalized: bounds of other variables do not mention it,
+and neither does the context. -/
+structure GenOK (c : Certificate) (Γ : PCtx) (gen : List Nat) : Prop where
+  avoid : ∀ v, v ∉ gen → ∀ b, (b ∈ (c.bounds v).upper ∨ b ∈ (c.bounds v).lower) → Av gen b
+  ctx : ∀ p ∈ Γ, p.2.Avoids c.bounds gen
+
+/-! ## Interpretations -/
+
+/-- An interpretation, substituted. -/
+def SInterp.substM (I : SInterp) (m : Subst) : SInterp := fun srt v => (I srt v).substM m
+
+mutual
+theorem SType.interp_congr {I J : SInterp} :
+    ∀ t : SType, (∀ v ∈ t.vars, ∀ srt, I srt v = J srt v) →
+      t.toTyI I = t.toTyI J ∧ t.toRowI I = t.toRowI J
+  | .var v, h => ⟨h v (by simp [SType.vars]) _, h v (by simp [SType.vars]) _⟩
+  | .prim _, _ | .abs, _ => ⟨rfl, rfl⟩
+  | .arrow a b, h => by
+    have ha := SType.interp_congr a fun v hv => h v (by simp [SType.vars, hv])
+    have hb := SType.interp_congr b fun v hv => h v (by simp [SType.vars, hv])
+    exact ⟨by simp only [SType.toTyI, ha.1, hb.1], rfl⟩
+  | .record fs t, h => by
+    have ht := SType.interp_congr t fun v hv => h v (by simp [SType.vars, hv])
+    have hf := SFields.interp_congr fs (fun v hv => h v (by simp [SType.vars, hv])) ht.2
+    exact ⟨by simp only [SType.toTyI, hf], by simp only [SType.toRowI, hf]⟩
+
+theorem SFields.interp_congr {I J : SInterp} :
+    ∀ fs : SFields, (∀ v ∈ fs.vars, ∀ srt, I srt v = J srt v) →
+      ∀ {ρ ρ' : Ty .row}, ρ = ρ' → fs.toRowOnI I ρ = fs.toRowOnI J ρ'
+  | .nil, _, _, _, e => e
+  | .cons n f fs, h, _, _, e => by
+    rw [SFields.toRowOnI_cons, SFields.toRowOnI_cons,
+      SFields.interp_congr fs (fun v hv => h v (by simp [SFields.vars, hv])) e]
+    have hf := SType.interp_congr f fun v hv => h v (by simp [SFields.vars, hv])
+    cases f with
+    | abs => rfl
+    | _ => simp only [SType.toFieldI, hf.1]
+end
+
+mutual
+theorem SType.interp_substM (I : SInterp) (m : Subst) : ∀ t : SType,
+    (t.toTyI I).substM m = t.toTyI (I.substM m) ∧ (t.toRowI I).substM m = t.toRowI (I.substM m)
+  | .var _ => ⟨rfl, rfl⟩
+  | .prim _ | .abs => ⟨rfl, rfl⟩
+  | .arrow a b => by
+    have ha := SType.interp_substM I m a
+    have hb := SType.interp_substM I m b
+    exact ⟨by simp only [SType.toTyI, Ty.substM, ha.1, hb.1], rfl⟩
+  | .record fs t => by
+    have ht := SType.interp_substM I m t
+    have hf := SFields.interp_substM I m fs (t.toRowI I)
+    exact ⟨by simp only [SType.toTyI, Ty.substM, hf, ht.2],
+      by simp only [SType.toRowI, hf, ht.2]⟩
+
+theorem SFields.interp_substM (I : SInterp) (m : Subst) : ∀ (fs : SFields) (ρ : Ty .row),
+    (fs.toRowOnI I ρ).substM m = fs.toRowOnI (I.substM m) (ρ.substM m)
+  | .nil, _ => rfl
+  | .cons n f fs, ρ => by
+    rw [SFields.toRowOnI_cons, SFields.toRowOnI_cons]
+    simp only [Ty.substM, SFields.interp_substM I m fs ρ]
+    have hf := SType.interp_substM I m f
+    cases f with
+    | abs => rfl
+    | _ => simp only [SType.toFieldI, Ty.substM, hf.1]
+end
+
+mutual
+theorem SType.rename_interp (ρ : Nat → Nat) (I : SInterp) : ∀ t : SType,
+    (t.rename ρ).toTyI I = t.toTyI (fun srt v => I srt (ρ v)) ∧
+      (t.rename ρ).toRowI I = t.toRowI (fun srt v => I srt (ρ v))
+  | .var _ | .prim _ | .abs => ⟨rfl, rfl⟩
+  | .arrow a b => by
+    have ha := SType.rename_interp ρ I a
+    have hb := SType.rename_interp ρ I b
+    exact ⟨by simp only [SType.rename, SType.toTyI, ha.1, hb.1], rfl⟩
+  | .record fs t => by
+    have ht := SType.rename_interp ρ I t
+    have hf := SFields.rename_interp ρ I fs ht.2
+    exact ⟨by simp only [SType.rename, SType.toTyI, hf], by simp only [SType.rename, SType.toRowI, hf]⟩
+
+theorem SFields.rename_interp (ρ : Nat → Nat) (I : SInterp) : ∀ (fs : SFields) {r r' : Ty .row},
+    r = r' → (fs.rename ρ).toRowOnI I r = fs.toRowOnI (fun srt v => I srt (ρ v)) r'
+  | .nil, _, _, e => e
+  | .cons n f fs, _, _, e => by
+    simp only [SFields.rename]
+    rw [SFields.toRowOnI_cons, SFields.toRowOnI_cons, SFields.rename_interp ρ I fs e]
+    have hf := SType.rename_interp ρ I f
+    have hfld : (f.rename ρ).toFieldI I = f.toFieldI (fun srt v => I srt (ρ v)) := by
+      cases f with
+      | abs => rfl
+      | _ => exact congrArg Ty.pre hf.1
+    rw [hfld]
+end
+
+/-! ## Schemes of generalized variables -/
+
+/-- Read the variables `gen` through `G`, the others through `I`. -/
+def withGen (gen : List Nat) (G I : SInterp) : SInterp := fun srt v => if v ∈ gen then G srt v else I srt v
+
+/-- The scheme's variables are numbered from here: above every free variable
+in what `I` gives the scheme's other variables. -/
+def schemeBase (σ : Nat → Bounds) (I : SInterp) (gen : List Nat) (st : SType) : Nat :=
+  natBound ((schemeVars σ gen st).flatMap fun v =>
+    if v ∈ gen then [] else (I .ty v).fvars ++ (I .row v).fvars ++ (I .field v).fvars)
+
+/-- The interpretation inside the scheme: `gen` as its free variables. -/
+def schemeF (σ : Nat → Bounds) (I : SInterp) (gen : List Nat) (st : SType) : SInterp :=
+  withGen gen (fun _ v => .fvar (genName (schemeBase σ I gen st) gen v)) I
+
+/-- The constraints a bound gives: at the type sort, unless the smaller side
+is `Abs`, and at the row sort. -/
+def boundCs (F : SInterp) (p : SType × SType) : List Cstr :=
+  (if p.1.isAbs then [] else [⟨p.1.toTyI F, p.2.toTyI F⟩]) ++ [⟨p.1.toRowI F, p.2.toRowI F⟩]
+
+/-- The constrained scheme generalizing `gen` in `st`, under `I`. -/
+def mkScheme (σ : Nat → Bounds) (I : SInterp) (gen : List Nat) (st : SType) : Scheme where
+  vars := gen.map (genName (schemeBase σ I gen st) gen)
+  cs := (genCs σ gen).flatMap (boundCs (schemeF σ I gen st))
+  body := st.toTyI (schemeF σ I gen st)
+
+section
+variable {σ : Nat → Bounds} {I : SInterp} {gen : List Nat} {st : SType}
+
+theorem schemeBase_lt {v n : Nat} (hv : v ∈ schemeVars σ gen st) (hg : v ∉ gen) {srt : Srt}
+    (hn : n ∈ (I srt v).fvars) : n < schemeBase σ I gen st := by
+  apply lt_natBound
+  refine List.mem_flatMap.mpr ⟨v, hv, ?_⟩
+  simp only [hg, ite_false, List.mem_append]
+  cases srt
+  · exact .inl (.inl hn)
+  · exact .inl (.inr hn)
+  · exact .inr hn
+
+/-- Substituting the scheme's variables only touches them. -/
+theorem scheme_substM {m : Subst}
+    (hm : ∀ n, n < schemeBase σ I gen st → ∀ srt, m srt n = none)
+    {t : SType} (ht : ∀ v ∈ t.vars, v ∈ schemeVars σ gen st) :
+    (t.toTyI (schemeF σ I gen st)).substM m =
+        t.toTyI (withGen gen (fun _ v => (Ty.fvar (genName (schemeBase σ I gen st) gen v)).substM m) I) ∧
+      (t.toRowI (schemeF σ I gen st)).substM m =
+        t.toRowI (withGen gen (fun _ v => (Ty.fvar (genName (schemeBase σ I gen st) gen v)).substM m) I) := by
+  have hs := SType.interp_substM (schemeF σ I gen st) m t
+  have hc := SType.interp_congr (I := (schemeF σ I gen st).substM m)
+    (J := withGen gen (fun srt v => (Ty.fvar (genName (schemeBase σ I gen st) gen v)).substM m) I) t
+    (fun v hv srt => by
+      simp only [SInterp.substM, schemeF, withGen]
+      split
+      · rfl
+      · next hg => exact Ty.substM_fresh _ fun n hn => hm n (schemeBase_lt (ht v hv) hg hn))
+  exact ⟨hs.1.trans hc.1, hs.2.trans hc.2⟩
+
+/-- The substitution that instantiates the scheme's variables with `G`. -/
+def genSubst (σ : Nat → Bounds) (I : SInterp) (gen : List Nat) (st : SType) (G : SInterp) :
+    Subst :=
+  fun srt n => (gen.find? fun v => genName (schemeBase σ I gen st) gen v == n).map (G srt)
+
+theorem genSubst_name {G : SInterp} {v : Nat} (hv : v ∈ gen) (srt : Srt) :
+    genSubst σ I gen st G srt (genName (schemeBase σ I gen st) gen v) = some (G srt v) := by
+  simp only [genSubst]
+  cases h : gen.find? fun w => genName (schemeBase σ I gen st) gen w ==
+      genName (schemeBase σ I gen st) gen v with
+  | none =>
+    have := List.find?_eq_none.mp h v hv
+    simp at this
+  | some w =>
+    have hw := List.mem_of_find?_eq_some h
+    have hp := List.find?_some h
+    simp only [beq_iff_eq] at hp
+    rw [genName_inj hw hv hp]; rfl
+
+theorem genSubst_low {G : SInterp} {n : Nat} (hn : n < schemeBase σ I gen st) (srt : Srt) :
+    genSubst σ I gen st G srt n = none := by
+  simp only [genSubst]
+  have : gen.find? (fun w => genName (schemeBase σ I gen st) gen w == n) = none :=
+    List.find?_eq_none.mpr fun w _ h => by
+      simp only [beq_iff_eq, genName] at h; omega
+  rw [this]; rfl
+
+theorem genSubst_dom {G : SInterp} {srt : Srt} {n : Nat} (h : (genSubst σ I gen st G srt n).isSome) :
+    n ∈ (mkScheme σ I gen st).vars := by
+  simp only [genSubst] at h
+  obtain ⟨w, hw, hp⟩ := List.find?_isSome.mp (by rwa [Option.isSome_map] at h)
+  simp only [beq_iff_eq] at hp
+  exact List.mem_map.mpr ⟨w, hw, hp⟩
+
+/-- The bounds of `gen` hold, read through `W`, at both sorts. -/
+def BoundsHold (E : Defs) (σ : Nat → Bounds) (gen : List Nat) (W : SInterp) : Prop :=
+  ∀ q ∈ genCs σ gen, (q.1 ≠ .abs → Sub E (q.1.toTyI W) (q.2.toTyI W)) ∧
+    Sub E (q.1.toRowI W) (q.2.toRowI W)
+
+/-- An instance of the scheme: read `gen` through `G`, given that the bounds
+of `gen` hold so. -/
+theorem mkScheme_instance {E : Defs} {G : SInterp}
+    (hcs : BoundsHold E σ gen (withGen gen G I)) :
+    (mkScheme σ I gen st).Instance E (st.toTyI (withGen gen G I)) := by
+  have key : ∀ t : SType, (∀ v ∈ t.vars, v ∈ schemeVars σ gen st) →
+      (t.toTyI (schemeF σ I gen st)).substM (genSubst σ I gen st G) = t.toTyI (withGen gen G I) ∧
+      (t.toRowI (schemeF σ I gen st)).substM (genSubst σ I gen st G) = t.toRowI (withGen gen G I) := by
+    intro t ht
+    have h := scheme_substM (m := genSubst σ I gen st G) (fun n hn srt => genSubst_low hn srt) ht
+    have hc := SType.interp_congr (I := withGen gen
+        (fun srt v => (Ty.fvar (genName (schemeBase σ I gen st) gen v)).substM (genSubst σ I gen st G)) I)
+      (J := withGen gen G I) t (fun v _ srt => by
+        simp only [withGen]
+        split
+        · next hg => simp only [Ty.substM, genSubst_name hg]; rfl
+        · rfl)
+    exact ⟨h.1.trans hc.1, h.2.trans hc.2⟩
+  refine ⟨genSubst σ I gen st G, fun _ _ h => genSubst_dom h, fun c hc => ?_, ?_⟩
+  · obtain ⟨q, hq, hc⟩ := List.mem_flatMap.mp hc
+    have hv := genCs_vars (st := st) hq
+    simp only [boundCs, List.mem_append, List.mem_singleton] at hc
+    rcases hc with hc | rfl
+    · split at hc
+      · exact nomatch hc
+      · next hab =>
+        simp only [List.mem_singleton] at hc; subst hc
+        simp only [SatAfter]
+        rw [(key q.1 hv.1).1, (key q.2 hv.2).1]
+        exact (hcs q hq).1 (SType.isAbs_false.mp (by simpa using hab))
+    · simp only [SatAfter]
+      rw [(key q.1 hv.1).2, (key q.2 hv.2).2]
+      exact (hcs q hq).2
+  · show st.toTyI _ = (st.toTyI (schemeF σ I gen st)).substM _
+    exact ((key st fun v hv => List.mem_append_left _ hv).1).symm
+
+/-- Conversely, every instance reads `gen` through some `G` under which the
+bounds hold. -/
+theorem mkScheme_instance_inv {E : Defs} {τ : Ty .ty}
+    (h : (mkScheme σ I gen st).Instance E τ) :
+    ∃ G : SInterp, τ = st.toTyI (withGen gen G I) ∧ BoundsHold E σ gen (withGen gen G I) := by
+  obtain ⟨m, hdom, hcs, rfl⟩ := h
+  have hm : ∀ n, n < schemeBase σ I gen st → ∀ srt, m srt n = none := fun n hn srt => by
+    cases hmn : m srt n with
+    | none => rfl
+    | some _ =>
+      have := hdom srt n (by simp [hmn])
+      simp only [mkScheme, List.mem_map, genName] at this
+      obtain ⟨_, _, rfl⟩ := this
+      omega
+  refine ⟨fun srt v => (Ty.fvar (genName (schemeBase σ I gen st) gen v)).substM m,
+    (scheme_substM hm fun v hv => List.mem_append_left _ hv).1, fun q hq => ?_⟩
+  have hv := genCs_vars (st := st) hq
+  have hk := scheme_substM (st := st) hm hv.1
+  have hk' := scheme_substM (st := st) hm hv.2
+  refine ⟨fun hab => ?_, ?_⟩
+  · have := hcs ⟨q.1.toTyI (schemeF σ I gen st), q.2.toTyI (schemeF σ I gen st)⟩
+      (List.mem_flatMap.mpr ⟨q, hq, by
+        simp [boundCs, SType.isAbs_false.mpr hab]⟩)
+    simp only [SatAfter] at this
+    rwa [hk.1, hk'.1] at this
+  · have := hcs ⟨q.1.toRowI (schemeF σ I gen st), q.2.toRowI (schemeF σ I gen st)⟩
+      (List.mem_flatMap.mpr ⟨q, hq, by simp [boundCs]⟩)
+    simp only [SatAfter] at this
+    rwa [hk.2, hk'.2] at this
+
+/-- The scheme only depends on what `I` gives the variables it mentions. -/
+theorem mkScheme_congr {J : SInterp} (h : ∀ v ∈ schemeVars σ gen st, v ∉ gen → ∀ srt, I srt v = J srt v) :
+    mkScheme σ I gen st = mkScheme σ J gen st := by
+  have hb : schemeBase σ I gen st = schemeBase σ J gen st := by
+    simp only [schemeBase]
+    congr 1
+    apply flatMap_congr'
+    intro v hv
+    split
+    · rfl
+    · next hg => rw [h v hv hg .ty, h v hv hg .row, h v hv hg .field]
+  have hF : ∀ v ∈ schemeVars σ gen st, ∀ srt, schemeF σ I gen st srt v = schemeF σ J gen st srt v := by
+    intro v hv srt
+    simp only [schemeF, withGen, hb]
+    split
+    · rfl
+    · next hg => exact h v hv hg srt
+  simp only [mkScheme, hb]
+  congr 1
+  · apply flatMap_congr'
+    intro p hp
+    have hv := genCs_vars (st := st) hp
+    have h₁ := SType.interp_congr p.1 fun v h' => hF v (hv.1 v h')
+    have h₂ := SType.interp_congr p.2 fun v h' => hF v (hv.2 v h')
+    simp only [boundCs, h₁.1, h₁.2, h₂.1, h₂.2]
+  · exact (SType.interp_congr st fun v h' => hF v (List.mem_append_left _ h')).1
+
+end
+
+/-! ## Contexts with schemes -/
+
+def CEntry.toScheme (σ : Nat → Bounds) (I : SInterp) : CEntry → Scheme
+  | .mono st => .mono (st.toTyI I)
+  | .poly gen st => mkScheme σ I gen st
+
+def PCtx.toCtx (σ : Nat → Bounds) (I : SInterp) (Γ : PCtx) : Ctx :=
+  Γ.map fun p => (p.1, p.2.toScheme σ I)
+
+theorem PCtx.lookup_toCtx {σ : Nat → Bounds} {I : SInterp} {Γ : PCtx} {x : String} {e : CEntry}
+    (h : Γ.lookup x = some e) : (Γ.toCtx σ I).lookup x = some (e.toScheme σ I) := by
   induction Γ with
   | nil => simp [PCtx.lookup] at h
   | cons p Γ ih =>
@@ -445,104 +456,104 @@ theorem PCtx.lookup_toCtx {σ : Nat → Bounds} {K : Nat → List String} {I : N
       have := ih h
       simpa [PCtx.toCtx, Ctx.lookup] using this
 
-theorem CEntry.toScheme_withGen {σ : Nat → Bounds} {K : Nat → List String} {I G : Nat → Ty}
-    {gen' : List Nat} {e : CEntry} (h : e.Avoids σ gen') :
-    e.toScheme σ K (withGen gen' G I) = e.toScheme σ K I := by
+theorem CEntry.toScheme_withGen {σ : Nat → Bounds} {I G : SInterp} {gen' : List Nat} {e : CEntry}
+    (h : e.Avoids σ gen') : e.toScheme σ (withGen gen' G I) = e.toScheme σ I := by
   cases e with
   | mono st =>
     simp only [CEntry.toScheme]
-    exact congrArg Scheme.mono (SType.interp_congr st fun v hv => by simp [withGen, h v hv])
+    exact congrArg Scheme.mono (SType.interp_congr st fun v hv srt => by
+      simp [withGen, h v hv]).1
   | poly gen st =>
     simp only [CEntry.toScheme]
-    exact (mkScheme_congr fun v hv hg => by simp [withGen, h v hv hg]).symm
+    exact mkScheme_congr fun v hv hg srt => by simp [withGen, h v hv hg]
 
-theorem PCtx.toCtx_withGen {σ : Nat → Bounds} {K : Nat → List String} {I G : Nat → Ty}
-    {gen' : List Nat} {Γ : PCtx} (h : ∀ p ∈ Γ, p.2.Avoids σ gen') :
-    Γ.toCtx σ K (withGen gen' G I) = Γ.toCtx σ K I := by
+theorem PCtx.toCtx_withGen {σ : Nat → Bounds} {I G : SInterp} {gen' : List Nat} {Γ : PCtx}
+    (h : ∀ p ∈ Γ, p.2.Avoids σ gen') : Γ.toCtx σ (withGen gen' G I) = Γ.toCtx σ I := by
   simp only [PCtx.toCtx]
   apply List.map_congr_left
   intro p hp
   rw [CEntry.toScheme_withGen (h p hp)]
 
-/-! ## Checking generalization and instantiation -/
-
-/-- `gen` may be generalized: bounds of other variables do not mention it,
-and neither does the context. -/
-structure GenOK (c : Certificate) (Γ : PCtx) (gen : List Nat) : Prop where
-  avoid : ∀ v, v ∉ gen → ∀ b, (b ∈ (c.bounds v).upper ∨ b ∈ (c.bounds v).lower) → Av gen b
-  ctx : ∀ p ∈ Γ, p.2.Avoids c.bounds gen
+/-! ## Instantiation and skeletons -/
 
 /-- A use instantiates `gen` by the renaming `ρ` (the copies `freshen_above`
-made): `ρ` fixes every other variable, and the copies have the same kinds
-and the renamed bounds. -/
+made): `ρ` fixes every other variable, and the copies' renamed bounds are
+accepted. -/
 structure InstOK (c : Certificate) (gen : List Nat) (ρ : Nat → Nat) : Prop where
   fix : ∀ v, v ∉ gen → ρ v = v
-  kind : ∀ α ∈ gen, c.kind (ρ α) = c.kind α
   up : ∀ α ∈ gen, ∀ u ∈ (c.bounds α).upper, c.Accepts (.var (ρ α)) (u.rename ρ)
   low : ∀ α ∈ gen, ∀ l ∈ (c.bounds α).lower, c.Accepts (l.rename ρ) (.var (ρ α))
 
-/-! ## Typing skeletons with let-polymorphism -/
-
 mutual
+/-- Typing skeletons with let-polymorphism. -/
 inductive PTyp (c : Certificate) : PCtx → Term → SType → Prop where
   | lit : PTyp c Γ (.lit n) (.prim "int")
   | var : Γ.lookup x = some (.mono st) → PTyp c Γ (.var x) st
-  /-- A use of a let-bound name, instantiated by the renaming `ρ`. -/
   | inst : Γ.lookup x = some (.poly gen st) → InstOK c gen ρ → PTyp c Γ (.var x) (st.rename ρ)
   | lam : PTyp c ((x, .mono st₁) :: Γ) t st₂ → PTyp c Γ (.lam x t) (.arrow st₁ st₂)
   | app : PTyp c Γ f stf → PTyp c Γ a sta → stf ≠ .abs →
       c.Accepts stf (.arrow sta st) → PTyp c Γ (.app f a) st
   | rcd : PFields c Γ fs F → PTyp c Γ (.rcd fs) (.record F .abs)
+  /-- Selection: the selected field's type is not `Abs`. -/
   | sel : PTyp c Γ t st₀ → st₀ ≠ .abs →
-      c.Accepts st₀ (.record (.cons l st .nil) .abs) → st.Present c.kind →
-      PTyp c Γ (.sel t l) st
+      c.Accepts st₀ (.record (.cons l st .nil) .abs) → st ≠ .abs → PTyp c Γ (.sel t l) st
   | ext : PTyp c Γ t st₀ → PFields c Γ fs F → st₀ ≠ .abs →
       c.Accepts st₀ (.record F.absOf ρ) → PTyp c Γ (.ext t fs) (.record F ρ)
   | extNil : PTyp c Γ t st → PTyp c Γ (.ext t []) st
-  /-- `let`, generalizing `gen` in the right-hand side's type. -/
   | letIn : PTyp c Γ r str → GenOK c Γ gen → PTyp c ((x, .poly gen str) :: Γ) b st →
       PTyp c Γ (.letIn false x r b) st
-  /-- `let rec`: `x` is monomorphic in the right-hand side, generalized after. -/
   | letRec : r.IsFun → PTyp c ((x, .mono stx) :: Γ) r inf → inf ≠ .abs → c.Accepts inf stx →
       GenOK c Γ gen → PTyp c ((x, .poly gen stx) :: Γ) b st → PTyp c Γ (.letIn true x r b) st
 
+/-- Fields of a record literal; their types are not `Abs`. -/
 inductive PFields (c : Certificate) : PCtx → List (String × Term) → SFields → Prop where
   | nil : PFields c Γ [] .nil
-  | cons : PTyp c Γ t st → PFields c Γ fs F → PFields c Γ ((l, t) :: fs) (.cons l st F)
+  | cons : PTyp c Γ t st → st ≠ .abs → PFields c Γ fs F →
+      PFields c Γ ((l, t) :: fs) (.cons l st F)
 end
 
+theorem PFields.pres {c : Certificate} : PFields c Γ fs F → F.Pres
+  | .nil => trivial
+  | .cons _ h hF => ⟨h, hF.pres⟩
+
 /-! ## Soundness -/
+
+/-- The list of field types under an interpretation. -/
+def SFields.toListI (I : SInterp) : SFields → List (String × Ty .ty)
+  | .nil => []
+  | .cons n f fs => (n, f.toTyI I) :: fs.toListI I
+
+theorem SFields.toRowOnI_pres {I : SInterp} {ρ : Ty .row} :
+    ∀ {F : SFields}, F.Pres → F.toRowOnI I ρ = Ty.ofFields (F.toListI I) ρ
+  | .nil, _ => rfl
+  | .cons n f F, ⟨hf, hF⟩ => by
+    rw [SFields.toRowOnI_cons, SType.toFieldI_of_ne hf, SFields.toRowOnI_pres hF]; rfl
+
+theorem SFields.toRowOnI_absOf {I : SInterp} {ρ : Ty .row} :
+    ∀ F : SFields, F.absOf.toRowOnI I ρ = Ty.absFields (F.toListI I) ρ
+  | .nil => rfl
+  | .cons n f F => by
+    simp only [SFields.absOf, SFields.toRowOnI_cons, SFields.toRowOnI_absOf F]; rfl
 
 section
 variable {c : Certificate}
 
-/-- Under an instance of the generalized variables, accepted constraints
-hold (`solution_gen`). -/
-theorem Certificate.Valid.holdsG (hv : c.Valid) {A : List Nat} {I : Nat → Ty}
+theorem Certificate.Valid.holdsG (hv : c.Valid) {A : List Nat} {I : SInterp}
     (hg : GenHyp c.state A I) (h : c.Accepts a b) :
-    (a ≠ .abs → Sub (defsOf c.state) (a.interp I) (b.interp I)) ∧
-      ∀ l, Sub (defsOf c.state) ((a.interp I).field l) ((b.interp I).field l) :=
-  ⟨fun ha => SolG.holds hv.inv hv.nac hv.final.ranked hg (.ty h (.inl ha)),
-   fun _ => SolG.holds hv.inv hv.nac hv.final.ranked hg (.fld h)⟩
+    (a ≠ .abs → Sub (defsOf c.state) (a.toTyI I) (b.toTyI I)) ∧
+      Sub (defsOf c.state) (a.toRowI I) (b.toRowI I) :=
+  solution_gen hv.inv hv.nac hv.final.ranked hg h
 
-/-- Generalizing `gen` under an instance: reading `gen` through `G`, which
-satisfies the bounds of `gen`, is again an instance. -/
-theorem GenHyp.extend {A gen : List Nat} {I G : Nat → Ty} (hg : GenHyp c.state A I)
-    (hok : GenOK c Γ gen)
-    (hcs : ∀ q ∈ genCs c.bounds gen,
-      (q.1 ≠ .abs → Sub (defsOf c.state) (q.1.interp (withGen gen G I)) (q.2.interp (withGen gen G I))) ∧
-        ∀ l, Sub (defsOf c.state) ((q.1.interp (withGen gen G I)).field l)
-          ((q.2.interp (withGen gen G I)).field l))
-    (htop : ∀ α ∈ gen, c.kind α = [] → Sub (defsOf c.state) (G α) .top) :
+theorem GenHyp.extend {A gen : List Nat} {I G : SInterp} (hg : GenHyp c.state A I)
+    (hok : GenOK c Γ gen) (hcs : BoundsHold (defsOf c.state) c.bounds gen (withGen gen G I)) :
     GenHyp c.state (A ++ gen) (withGen gen G I) := by
   have same : ∀ v, v ∉ gen → ∀ b, (b ∈ (c.bounds v).upper ∨ b ∈ (c.bounds v).lower) →
-      b.interp (withGen gen G I) = b.interp I := fun v hv b hb =>
-    SType.interp_congr b fun w hw => by simp [withGen, hok.avoid v hv b hb w hw]
-  refine ⟨fun v hv => ?_, fun v hv b hb w hw => ?_, fun α hα u hu => ?_, fun α hα l hl => ?_,
-    fun α hα hk => ?_⟩
+      b.toTyI (withGen gen G I) = b.toTyI I ∧ b.toRowI (withGen gen G I) = b.toRowI I :=
+    fun v hv b hb => SType.interp_congr b fun w hw srt => by simp [withGen, hok.avoid v hv b hb w hw]
+  refine ⟨fun srt v hv => ?_, fun v hv b hb w hw => ?_, fun α hα u hu => ?_, fun α hα l hl => ?_⟩
   · simp only [List.mem_append, not_or] at hv
     simp only [withGen, hv.2, ite_false]
-    exact hg.out v hv.1
+    exact hg.out srt v hv.1
   · simp only [List.mem_append, not_or] at hv ⊢
     exact ⟨hg.avoid v hv.1 b hb w hw, hok.avoid v hv.2 b hb w hw⟩
   · by_cases hαg : α ∈ gen
@@ -551,114 +562,170 @@ theorem GenHyp.extend {A gen : List Nat} {I G : Nat → Ty} (hg : GenHyp c.state
       exact ⟨this.1 (fun h => nomatch h), this.2⟩
     · have hαA : α ∈ A := by
         simp only [List.mem_append] at hα; exact hα.resolve_right hαg
-      have hI : withGen gen G I α = I α := by simp [withGen, hαg]
-      show Holds _ (withGen gen G I α) (u.interp (withGen gen G I))
-      rw [hI, same α hαg u (.inl hu)]
+      have hs := same α hαg u (.inl hu)
+      simp only [withGen, hαg, ite_false]
+      rw [hs.1, hs.2]
       exact hg.up α hαA u hu
   · by_cases hαg : α ∈ gen
-    · have := hcs (l, .var α) (List.mem_flatMap.mpr ⟨α, hαg, List.mem_append_right _
+    · exact hcs (l, .var α) (List.mem_flatMap.mpr ⟨α, hαg, List.mem_append_right _
         (List.mem_map.mpr ⟨l, hl, rfl⟩)⟩)
-      exact this
     · have hαA : α ∈ A := by
         simp only [List.mem_append] at hα; exact hα.resolve_right hαg
-      have hI : withGen gen G I α = I α := by simp [withGen, hαg]
-      show (l ≠ .abs → Sub _ (l.interp (withGen gen G I)) (withGen gen G I α)) ∧ _
-      rw [hI, same α hαg l (.inr hl)]
+      have hs := same α hαg l (.inr hl)
+      simp only [withGen, hαg, ite_false]
+      rw [hs.1, hs.2]
       exact hg.low α hαA l hl
-  · by_cases hαg : α ∈ gen
-    · simp only [withGen, hαg, ite_true]; exact htop α hαg hk
-    · have hαA : α ∈ A := by
-        simp only [List.mem_append] at hα; exact hα.resolve_right hαg
-      simp only [withGen, hαg, ite_false]; exact hg.top α hαA hk
 
 /-- The bounds of `gen` hold of the solution itself: the scheme has an
 instance. -/
-theorem bounds_hold (hv : c.Valid) {A : List Nat} {I : Nat → Ty} (hg : GenHyp c.state A I)
-    {gen : List Nat} :
-    ∀ q ∈ genCs c.bounds gen,
-      (q.1 ≠ .abs → Sub (defsOf c.state) (q.1.interp (withGen gen I I)) (q.2.interp (withGen gen I I))) ∧
-        ∀ l, Sub (defsOf c.state) ((q.1.interp (withGen gen I I)).field l)
-          ((q.2.interp (withGen gen I I)).field l) := by
+theorem bounds_hold (hv : c.Valid) {A : List Nat} {I : SInterp} (hg : GenHyp c.state A I)
+    {gen : List Nat} : BoundsHold (defsOf c.state) c.bounds gen (withGen gen I I) := by
   intro q hq
-  have hI : withGen gen I I = I := funext fun v => by simp [withGen]
+  have hI : withGen gen I I = I := funext fun srt => funext fun v => by simp [withGen]
   rw [hI]
   obtain ⟨α, _, ⟨u, hu, rfl⟩ | ⟨l, hl, rfl⟩⟩ := mem_genCs hq
   · exact hv.holdsG hg (.inr (hv.inLog.1 α u hu))
   · exact hv.holdsG hg (.inr (hv.inLog.2 α l hl))
 
 mutual
-/-- **Soundness of polymorphic skeletons**: under an instance `I` of the
-variables generalized so far, a skeleton checked against a valid
-certificate gives a declarative typing with constrained schemes. -/
-theorem PTyp.sound (hv : c.Valid) {A : List Nat} {I : Nat → Ty} (hg : GenHyp c.state A I) :
-    PTyp c Γ t st → Typ (defsOf c.state) (Γ.toCtx c.bounds c.kind I) t (st.interp I)
+/-- **Soundness of polymorphic skeletons**: under an instance `I` of
+the variables generalized so far, a skeleton checked against a valid
+certificate gives a declarative typing. -/
+theorem PTyp.sound (hv : c.Valid) {A : List Nat} {I : SInterp} (hg : GenHyp c.state A I) :
+    PTyp c Γ t st → Typ (defsOf c.state) (Γ.toCtx c.bounds I) t (st.toTyI I)
   | .lit => .lit
   | .var hx => Typ.var_mono (PCtx.lookup_toCtx hx)
   | .inst (gen := gen) (st := st) (ρ := ρ) hx hok => by
-    -- the copies' solution is an instance of the scheme
-    have hK : withGen gen (fun v => I (ρ v)) I = fun v => I (ρ v) := funext fun v => by
-      simp only [withGen]; split
-      · rfl
-      · next hg' => rw [hok.fix v hg']
-    have hinst := mkScheme_instance (σ := c.bounds) (K := c.kind) (I := I) (st := st)
-      (E := defsOf c.state) (G := fun v => I (ρ v)) (by
+    have hK : withGen gen (fun srt v => I srt (ρ v)) I = fun srt v => I srt (ρ v) :=
+      funext fun srt => funext fun v => by
+        simp only [withGen]; split
+        · rfl
+        · next hg' => rw [hok.fix v hg']
+    have hinst := mkScheme_instance (σ := c.bounds) (I := I) (st := st) (gen := gen)
+      (E := defsOf c.state) (G := fun srt v => I srt (ρ v)) (by
         intro q hq
-        rw [hK, SType.rename_interp ρ I q.1 |>.symm, SType.rename_interp ρ I q.2 |>.symm]
+        rw [hK, (SType.rename_interp ρ I q.1).1.symm, (SType.rename_interp ρ I q.2).1.symm,
+          (SType.rename_interp ρ I q.1).2.symm, (SType.rename_interp ρ I q.2).2.symm]
         obtain ⟨α, hα, ⟨u, hu, rfl⟩ | ⟨l, hl, rfl⟩⟩ := mem_genCs hq
         · have := hv.holdsG hg (hok.up α hα u hu)
           exact ⟨fun _ => this.1 (fun h => nomatch h), this.2⟩
         · have := hv.holdsG hg (hok.low α hα l hl)
           exact ⟨fun h => this.1 (SType.rename_ne_abs h), this.2⟩)
-      -- a copy of an ordinary type variable is one
-      (fun α hα hk => hg.le_top (v := ρ α) ((hok.kind α hα).trans hk))
-    rw [hK, ← SType.rename_interp] at hinst
+    rw [hK, ← (SType.rename_interp ρ I st).1] at hinst
     exact .var (PCtx.lookup_toCtx hx) hinst
   | .lam h => .lam (h.sound hv hg)
   | .app h₁ h₂ ha hc => .app (.sub (h₁.sound hv hg) ((hv.holdsG hg hc).1 ha)) (h₂.sound hv hg)
-  | .rcd h => .rcd (h.sound hv hg)
-  | .sel h ha hc hp =>
-    .sel (.sub (h.sound hv hg) ((hv.holdsG hg hc).1 ha)) (hp.top fun _ hk => hg.le_top hk)
-  | .ext h₁ h₂ ha hc => by
+  | .rcd (F := F) h => by
+    have e : (SType.record F .abs).toTyI I = Ty.record (F.toListI I) := by
+      simp only [SType.toTyI, SType.toRowI, Ty.record]
+      exact congrArg Ty.rcd (SFields.toRowOnI_pres h.pres)
+    rw [e]
+    exact .rcd (h.sound hv hg)
+  | .sel (l := l) (st := st) h ha hc hst => by
     have hs := (hv.holdsG hg hc).1 ha
-    simp only [SType.interp, SFields.interp_absOf] at hs
+    have e : (SType.record (.cons l st .nil) .abs).toTyI I = .rcd (.cons l (.pre (st.toTyI I)) .top) := by
+      simp only [SType.toTyI, SType.toRowI, SFields.toRowOnI_cons, SType.toFieldI_of_ne hst]; rfl
+    rw [e] at hs
+    exact .sel (.sub (h.sound hv hg) hs)
+  | .ext (F := F) (ρ := ρ) h₁ h₂ ha hc => by
+    have hs := (hv.holdsG hg hc).1 ha
+    simp only [SType.toTyI, SFields.toRowOnI_absOf] at hs
+    have e : (SType.record F ρ).toTyI I = .rcd (Ty.ofFields (F.toListI I) (ρ.toRowI I)) := by
+      simp only [SType.toTyI]
+      exact congrArg Ty.rcd (SFields.toRowOnI_pres h₂.pres)
+    rw [e]
     exact .ext (.sub (h₁.sound hv hg) hs) (h₂.sound hv hg)
   | .extNil h => .extNil (h.sound hv hg)
   | .letIn (gen := gen) (str := str) h₁ hok h₂ => by
-    refine .letIn (σ := mkScheme c.bounds c.kind I gen str) (fun τ' hτ => ?_)
-      (mkScheme_instance (bounds_hold hv hg) fun _ _ hk => hg.le_top hk) (h₂.sound hv hg)
-    obtain ⟨G, rfl, hcs, htop⟩ := mkScheme_instance_inv hτ
-    have ih := h₁.sound hv (hg.extend hok hcs htop)
+    refine .letIn (σ := mkScheme c.bounds I gen str) (fun τ' hτ => ?_)
+      (mkScheme_instance (bounds_hold hv hg)) (h₂.sound hv hg)
+    obtain ⟨G, rfl, hcs⟩ := mkScheme_instance_inv hτ
+    have ih := h₁.sound hv (hg.extend hok hcs)
     rwa [PCtx.toCtx_withGen hok.ctx] at ih
   | .letRec (x := x) (gen := gen) (stx := stx) hf h₁ ha hc hok h₂ => by
-    refine .letRec hf (σ := mkScheme c.bounds c.kind I gen stx) (fun τ' hτ => ?_)
-      (mkScheme_instance (bounds_hold hv hg) fun _ _ hk => hg.le_top hk) (h₂.sound hv hg)
-    obtain ⟨G, rfl, hcs, htop⟩ := mkScheme_instance_inv hτ
-    have hg' := hg.extend hok hcs htop
+    refine .letRec hf (σ := mkScheme c.bounds I gen stx) (fun τ' hτ => ?_)
+      (mkScheme_instance (bounds_hold hv hg)) (h₂.sound hv hg)
+    obtain ⟨G, rfl, hcs⟩ := mkScheme_instance_inv hτ
+    have hg' := hg.extend hok hcs
     have ih : Typ (defsOf c.state)
-        ((x, Scheme.mono (stx.interp (withGen gen G I))) ::
-          Γ.toCtx c.bounds c.kind (withGen gen G I)) _ _ :=
+        ((x, Scheme.mono (stx.toTyI (withGen gen G I))) ::
+          Γ.toCtx c.bounds (withGen gen G I)) _ _ :=
       h₁.sound hv hg'
     rw [PCtx.toCtx_withGen hok.ctx] at ih
     exact .sub ih ((hv.holdsG hg' hc).1 ha)
 
-theorem PFields.sound (hv : c.Valid) {A : List Nat} {I : Nat → Ty} (hg : GenHyp c.state A I) :
-    PFields c Γ fs F → TypFields (defsOf c.state) (Γ.toCtx c.bounds c.kind I) fs (F.interp I)
+theorem PFields.sound (hv : c.Valid) {A : List Nat} {I : SInterp} (hg : GenHyp c.state A I) :
+    PFields c Γ fs F → TypFields (defsOf c.state) (Γ.toCtx c.bounds I) fs (F.toListI I)
   | .nil => .nil
-  | .cons h₁ h₂ => .cons (h₁.sound hv hg) (h₂.sound hv hg)
+  | .cons h₁ _ h₂ => .cons (h₁.sound hv hg) (h₂.sound hv hg)
 end
 
 /-- No variable is generalized yet: the solution itself is an instance. -/
-theorem GenHyp.nil (c : Certificate) : GenHyp c.state [] .gvar :=
-  ⟨fun _ _ => rfl, (fun _ _ _ _ _ _ h => nomatch h), (fun _ h => nomatch h), (fun _ h => nomatch h),
+theorem GenHyp.nil (c : Certificate) : GenHyp c.state [] .gv :=
+  ⟨fun _ _ _ => rfl, (fun _ _ _ _ _ _ h => nomatch h), (fun _ h => nomatch h),
     (fun _ h => nomatch h)⟩
 
 /-- **Theorem 1 with let-polymorphism, for certificates**: a polymorphic
 skeleton checked against a valid certificate gives a declarative typing
 with constrained schemes. -/
 theorem PTyp.sound_top (hv : c.Valid) (h : PTyp c Γ t st) :
-    Typ (defsOf c.state) (Γ.toCtx c.bounds c.kind .gvar) t st.toTy := by
+    Typ (defsOf c.state) (Γ.toCtx c.bounds .gv) t st.toTy := by
   have := h.sound hv (GenHyp.nil c)
-  rwa [SType.interp_gvar] at this
+  rwa [SType.toTyI_gv] at this
+
+/-! ## No recursive types in the solution -/
+
+mutual
+theorem SType.toTy_gvars : ∀ a : SType, (∀ m ∈ a.toTy.gvars, m ∈ a.vars) ∧ (∀ m ∈ a.toRow.gvars, m ∈ a.vars)
+  | .var _ => ⟨fun m h => by simpa [SType.toTy, Ty.gvars, SType.vars] using h,
+      fun m h => by simpa [SType.toRow, Ty.gvars, SType.vars] using h⟩
+  | .prim _ | .abs => ⟨fun _ h => by simp [SType.toTy, Ty.gvars] at h,
+      fun _ h => by simp [SType.toRow, Ty.gvars] at h⟩
+  | .arrow a b => ⟨fun m h => by
+      simp only [SType.toTy, Ty.gvars, List.mem_append] at h
+      simp only [SType.vars, List.mem_append]
+      exact h.imp ((SType.toTy_gvars a).1 m) ((SType.toTy_gvars b).1 m),
+      fun _ h => by simp [SType.toRow, Ty.gvars] at h⟩
+  | .record fs t =>
+    have hf := SFields.toRowOn_gvars fs t.toRow
+    have ht := (SType.toTy_gvars t).2
+    have h : ∀ m ∈ (fs.toRowOn t.toRow).gvars, m ∈ (SType.record fs t).vars := fun m hm => by
+      simp only [SType.vars, List.mem_append]
+      rcases hf m hm with h | h
+      · exact .inl h
+      · exact .inr (ht m h)
+    ⟨fun m hm => h m (by simpa [SType.toTy, Ty.gvars] using hm), h⟩
+
+theorem SFields.toRowOn_gvars : ∀ (fs : SFields) (ρ : Ty .row), ∀ m ∈ (fs.toRowOn ρ).gvars,
+    m ∈ fs.vars ∨ m ∈ ρ.gvars
+  | .nil, _, _, h => .inr h
+  | .cons n f fs, ρ, m, h => by
+    rw [SFields.toRowOn_cons] at h
+    simp only [Ty.gvars, List.mem_append] at h
+    simp only [SFields.vars, List.mem_append]
+    rcases h with h | h
+    · refine .inl (.inl ?_)
+      cases f with
+      | abs => simp [SType.toField, Ty.gvars] at h
+      | _ => exact (SType.toTy_gvars _).1 m (by simpa [SType.toField, Ty.gvars] using h)
+    · rcases SFields.toRowOn_gvars fs ρ m h with h | h
+      · exact .inl (.inr h)
+      · exact .inr h
+end
+
+theorem SType.toAt_gvars (a : SType) : ∀ srt : Srt, ∀ m ∈ (a.toAt srt).gvars, m ∈ a.vars
+  | .ty => (SType.toTy_gvars a).1
+  | .row => (SType.toTy_gvars a).2
+  | .field => fun m h => by
+    cases a with
+    | abs => simp [SType.toAt, SType.toField, Ty.gvars] at h
+    | _ => exact (SType.toTy_gvars _).1 m (by simpa [SType.toAt, SType.toField, Ty.gvars] using h)
+
+/-- **No recursive types**: the solution of a valid certificate defines
+each graph variable only in terms of graph variables of lower rank. -/
+theorem Certificate.Valid.nonrec (hv : c.Valid) : Defs.Ranked (defsOf c.state) c.rank := by
+  rintro srt n _ ⟨u, hc, rfl⟩ m hm
+  exact hc.ranked hv.acyclic m (SType.toAt_gvars u srt m hm)
 
 end
 

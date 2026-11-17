@@ -1,6 +1,6 @@
 # Design note: sorted types (types, rows, fields)
 
-Status: steps 1–3 done (`lean/BoltCore/Sorted/`); the checker proves sorted typings. Next: retire the unsorted declarative development, then #2.
+Status: done (steps 1–3 and 3b); the Lean development is sorted throughout. Next: #2, optional fields.
 
 ## The problem
 
@@ -152,7 +152,9 @@ Costs:
 ## Plan
 
 Each step ends with `lake build`, `dune test` and `scripts/check-certs.sh`
-passing:
+passing. Steps 1–3 were built in `lean/BoltCore/Sorted/`, alongside the
+unsorted files; step 3b moved them into place, so the file names below are
+those of the time:
 
 1. **Sorted declarative core.** Done, in `lean/BoltCore/Sorted/`, alongside
    the unsorted files: `Types`, `Sub` (with cut elimination), `Lattice` and
@@ -188,11 +190,14 @@ passing:
    (`TypeTerm.scertificate`): a monomorphic `let` generalizes no variables.
    Still unsorted: the hand-written skeletons in `Examples.lean` (their
    `decide` checks already go through the sorted checker).
-3b. **Retire the unsorted declarative development**: port the examples'
-   hand-written skeletons, remove the unsorted `Sub`, `Typing`, `Lattice`,
-   solution, `Theorem1`, `CTyp` and schemes, move the algorithm-level
-   lemmas they hold (row views, tail ranks, chains, `Av`, `genCs`) to where
-   they belong, and drop the `Sorted` prefix.
+3b. **Retire the unsorted declarative development.** Done: the sorted files
+   replaced `Types`, `Sub`, `Lattice` and `Typing`; the files that mixed
+   algorithm-level lemmas with the unsorted solution (`Solution`,
+   `SolutionRows`, `Theorem1`, `Kinds`, `Certificate`, `SolutionGen`,
+   `PolyLet`) keep the former and hold the sorted proofs; adequacy is
+   `Adequacy.lean`; the `Sorted` prefix is gone. The monomorphic skeleton
+   `CTyp` is gone too: its role is played by `PTyp` with lets that
+   generalize no variables.
 4. **OCaml.** Probably unnecessary: since variables need no sort (step 2),
    neither the typer nor certificates need to record one.
 5. **Then #2**, optional fields, on the sorted field lattice.

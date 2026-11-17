@@ -32,11 +32,11 @@ As a reference for the field lattice. Its readings line up with ours:
 
 | Castagna | This repository |
 |---|---|
-| `ℓ = t`, mandatory | a present field `t` (`Pre t`); in Lean, a type below `⊤` |
+| `ℓ = t`, mandatory | a present field `t` (`Pre t`); in Lean, `pre t` |
 | `1`, any value | `⊤` |
-| `1 ∨ ⊥`, any value or undefined | `Abs`, strictly above `⊤` |
+| `1 ∨ ⊥`, any value or undefined | `Abs`, the top field, strictly above `pre ⊤` |
 | open record `{…}` (other labels `1 ∨ ⊥`) | a record with tail `Abs`, our only kind of record literal |
-| `e.ℓ` requires `{ℓ = 1}` | `t.l` requires a present field (`Typ.sel`, `τ ≤ ⊤`) |
+| `e.ℓ` requires `{ℓ = 1}` | `t.l` requires a present field (`Typ.sel`, `pre τ`) |
 | `e₁ + e₂` | `r with {…}`, with a literal on the right |
 | `ℓ ⇒ t`, optional | proposed `Opt t` (#2) |
 | `⊥`, undefined; closed records | proposed `Absent` field and tail (#2) |

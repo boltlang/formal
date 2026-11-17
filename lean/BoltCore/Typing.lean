@@ -4,190 +4,138 @@ import BoltCore.Sub
 /-!
 # Declarative typing
 
-The type system that inferred types are meant to be correct for (the
-paper's Fig. 2, extended with integer literals and record extension), over
-the minimal subtyping relation of `Sub.lean`. The context holds type
-*schemes*, so that built-ins such as `if : ∀α. bool → α → α → α` can be
-instantiated, and let-bound variables can be polymorphic (below). The
-algorithm model is still monomorphic in `let`, as in the paper's proof
-(Sec. 5).
+The type system inferred types are meant to be correct for (the paper's
+Fig. 2, extended with integer literals and record extension), over the
+minimal subtyping relation of `Sub.lean`. With sorts:
 
-**Schemes are constrained**, as in HM(X): `∀ᾱ. D ⇒ σ`, where `D` is a
-list of subtyping constraints on the quantified variables `ᾱ` (free type
-variables, `fvar`). An instance substitutes types for `ᾱ` (`Ty.substM`)
-such that the constraints hold (`Scheme.Instance`). A constraint holds when
-it holds as subtyping and field by field, since a constrained variable may
-stand for a row.
+* **Constraints** of a scheme are subtyping at their own sort: a constraint
+  between rows is `Sub` at sort `row`, which compares field by field
+  (`Step.fields`). There is no field-wise side condition and no flag for
+  constraints that only hold field by field.
+* **Scheme variables are sorted**, and an instance substitutes at each sort
+  (`Subst`), so a type variable is never instantiated with `Abs`.
+* **Selection** `t.l : τ` needs `t : {l : pre τ}`: the field is present by
+  the shape of the rule, with no `τ ≤ ⊤` premise.
 
-**Let-polymorphism**: `let x = s in t` gives `x` a scheme when `s` has
-*every* instance of it, and it has at least one instance (`s` is
-evaluated). This reads the constraints semantically, through their
-instances, as HM(X) defines constraint entailment, instead of typing `s`
-under the constraints as hypotheses: subtyping under hypotheses with both
+**Schemes are constrained**, as in HM(X): `∀ᾱ. D ⇒ σ`, where `D` is a list
+of subtyping constraints on the quantified variables. An instance
+substitutes for `ᾱ` such that the constraints hold. `let x = s in t` gives
+`x` a scheme when `s` has *every* instance of it, and it has one: the
+constraints are read through their instances, as HM(X) defines entailment,
+instead of typing `s` under them as hypotheses, since subtyping under both
 lower and upper bounds is not transitive in general (the "bad bounds" of
-DOT), while instances inherit transitivity from `Sub`. `let rec` is the
-same with `x` monomorphic in `s`. A monomorphic `let` is the scheme with no
-variables and no constraints (`Typ.letIn_mono`). There is no value
-restriction: the language has no mutable state (Bolt will need one).
-
-**Selection** `t.l` needs the field to be present: `t : {l : τ}` with
-`τ ≤ ⊤`. `Abs` is strictly above `⊤` (`Sub.lean`), so this excludes a field
-of type `Abs`, which every record has, with or without `l`. Selecting a
-label that a record literal lacks has no type (`not_typ_sel_missing`).
-
-`t with {l₁ = e₁, …}` is typed like the OCaml type checker types it: `t`
-must be a record whose fields `lᵢ` may be anything (`Abs`) and whose other
-fields form some row `ρ`; the result has the new fields over the same `ρ`.
-Labels in a `with` are assumed distinct (the OCaml checker keeps the last
-binding of a repeated label). `t with {}` is just `t`.
+DOT). A monomorphic `let` is the scheme with no variables. There is no
+value restriction (no mutable state). Labels in a record literal or a `with` are distinct
+(the parser rejects a repeated one in a `with`).
 -/
 
 namespace BoltCore
 
 /-! ## Substitution of free variables -/
 
-mutual
-/-- Simultaneous substitution of free type variables. -/
-def Ty.substM : Ty → (Nat → Option Ty) → Ty
-  | .fvar x, m => (m x).getD (.fvar x)
-  | .top, _ => .top
-  | .bot, _ => .bot
-  | .abs, _ => .abs
-  | .prim n, _ => .prim n
-  | .union a b, m => .union (a.substM m) (b.substM m)
-  | .inter a b, m => .inter (a.substM m) (b.substM m)
-  | .arrow a b, m => .arrow (a.substM m) (b.substM m)
-  | .record fs t, m => .record (fs.substM m) (t.substM m)
-  | .proj l t, m => .proj l (t.substM m)
-  | .gvar n, _ => .gvar n
+/-- A substitution of free variables, at each sort. -/
+abbrev Subst := (s : Srt) → Nat → Option (Ty s)
 
-def Fields.substM : Fields → (Nat → Option Ty) → Fields
-  | .nil, _ => .nil
-  | .cons l f fs, m => .cons l (f.substM m) (fs.substM m)
-end
+def Ty.substM (m : Subst) : {s : Srt} → Ty s → Ty s
+  | s, .fvar x => (m s x).getD (.fvar x)
+  | _, .top => .top
+  | _, .bot => .bot
+  | _, .union a b => .union (a.substM m) (b.substM m)
+  | _, .inter a b => .inter (a.substM m) (b.substM m)
+  | _, .gvar n => .gvar n
+  | _, .prim n => .prim n
+  | _, .arrow a b => .arrow (a.substM m) (b.substM m)
+  | _, .rcd ρ => .rcd (ρ.substM m)
+  | _, .cons l θ ρ => .cons l (θ.substM m) (ρ.substM m)
+  | _, .pre τ => .pre (τ.substM m)
+  | _, .proj l ρ => .proj l (ρ.substM m)
 
-mutual
-theorem Ty.substM_none : ∀ t : Ty, t.substM (fun _ => none) = t
-  | .fvar _ | .top | .bot | .abs | .prim _ | .gvar _ => rfl
-  | .union a b | .inter a b | .arrow a b => by
+/-- The empty substitution. -/
+def Subst.empty : Subst := fun _ _ => Option.none
+
+theorem Ty.substM_none : {s : Srt} → (t : Ty s) → t.substM Subst.empty = t
+  | _, .fvar _ | _, .top | _, .bot | _, .gvar _ | _, .prim _ => rfl
+  | _, .union a b | _, .inter a b | _, .arrow a b => by
     simp only [Ty.substM, Ty.substM_none a, Ty.substM_none b]
-  | .record fs t => by simp only [Ty.substM, Fields.substM_none fs, Ty.substM_none t]
-  | .proj _ t => by simp only [Ty.substM, Ty.substM_none t]
-
-theorem Fields.substM_none : ∀ fs : Fields, fs.substM (fun _ => none) = fs
-  | .nil => rfl
-  | .cons _ f fs => by simp only [Fields.substM, Ty.substM_none f, Fields.substM_none fs]
-end
+  | _, .rcd ρ | _, .pre ρ | _, .proj _ ρ => by simp only [Ty.substM, Ty.substM_none ρ]
+  | _, .cons _ θ ρ => by simp only [Ty.substM, Ty.substM_none θ, Ty.substM_none ρ]
 
 /-! ## Schemes and contexts -/
 
-/-- A constraint `lhs ≤ rhs` of a scheme. It always holds field by field;
-`typeLevel` says whether it also holds as subtyping. A constraint
-`Abs ≤ ρ` (the row `ρ` guarantees no field) is a row constraint, only
-meaningful field by field, since `Abs` is the top type. The flag is part
-of the constraint, not computed from `lhs` after substitution, so
-instantiating a variable with `Abs` cannot discharge a constraint. -/
+/-- A constraint `lhs ≤ rhs` of a scheme, at some sort. -/
 structure Cstr where
-  lhs : Ty
-  rhs : Ty
-  typeLevel : Bool := true
+  {s : Srt}
+  lhs : Ty s
+  rhs : Ty s
 
 /-- `∀ vars. cs ⇒ body`, with constraints `cs` on the quantified variables. -/
 structure Scheme where
   poly ::
   vars : List Nat
   cs : List Cstr
-  body : Ty
+  body : Ty .ty
 
-/-- A monomorphic scheme. -/
-def Scheme.mono (t : Ty) : Scheme := .poly [] [] t
-
-/-- A constraint holds: as subtyping, and field by field (a constrained
-variable may stand for a row). -/
-def Holds (E : Defs) (a b : Ty) : Prop := Sub E a b ∧ ∀ l, Sub E (a.field l) (b.field l)
+def Scheme.mono (t : Ty .ty) : Scheme := .poly [] [] t
 
 /-- A constraint of a scheme holds after substituting `m`. -/
-def SatAfter (E : Defs) (m : Nat → Option Ty) (c : Cstr) : Prop :=
-  (c.typeLevel = true → Sub E (c.lhs.substM m) (c.rhs.substM m)) ∧
-    ∀ l, Sub E ((c.lhs.substM m).field l) ((c.rhs.substM m).field l)
+def SatAfter (E : Defs) (m : Subst) (c : Cstr) : Prop := Sub E (c.lhs.substM m) (c.rhs.substM m)
 
-/-- `τ` is an instance of `σ`: substitute types for (some of) its
-quantified variables, such that its constraints hold. -/
-def Scheme.Instance (E : Defs) (σ : Scheme) (τ : Ty) : Prop :=
-  ∃ m : Nat → Option Ty, (∀ x, (m x).isSome → x ∈ σ.vars) ∧
-    (∀ p ∈ σ.cs, SatAfter E m p) ∧ τ = σ.body.substM m
+/-- `τ` is an instance of `σ`: substitute for (some of) its quantified
+variables, at any sorts, such that its constraints hold. -/
+def Scheme.Instance (E : Defs) (σ : Scheme) (τ : Ty .ty) : Prop :=
+  ∃ m : Subst, (∀ s x, (m s x).isSome → x ∈ σ.vars) ∧
+    (∀ c ∈ σ.cs, SatAfter E m c) ∧ τ = σ.body.substM m
 
-theorem Scheme.instance_mono (E : Defs) (t : Ty) : (Scheme.mono t).Instance E t :=
-  ⟨fun _ => none, by simp, (fun _ h => nomatch h), (Ty.substM_none t).symm⟩
+theorem Scheme.instance_mono (E : Defs) (t : Ty .ty) : (Scheme.mono t).Instance E t :=
+  ⟨Subst.empty, by simp [Subst.empty], (fun _ h => nomatch h), (Ty.substM_none t).symm⟩
 
-/-- The only instance of a monomorphic scheme is its type. -/
-theorem Scheme.instance_mono_eq {E : Defs} {t τ : Ty} (h : (Scheme.mono t).Instance E τ) :
+theorem Scheme.instance_mono_eq {E : Defs} {t τ : Ty .ty} (h : (Scheme.mono t).Instance E τ) :
     τ = t := by
   obtain ⟨m, hdom, _, rfl⟩ := h
-  have : m = fun _ => none := funext fun x => by
-    cases hx : m x with
+  have : m = Subst.empty := funext fun s => funext fun x => by
+    cases hx : m s x with
     | none => rfl
-    | some _ => exact absurd (hdom x (by simp [hx])) (by simp [Scheme.mono])
+    | some _ => exact absurd (hdom s x (by simp [hx])) (by simp [Scheme.mono])
   subst this
   exact Ty.substM_none t
 
-/-- Contexts: the most recent binding of a name comes first. -/
 abbrev Ctx := List (String × Scheme)
 
-def Ctx.lookup (Γ : Ctx) (x : String) : Option Scheme :=
-  (Γ.find? (·.1 = x)).map (·.2)
+def Ctx.lookup (Γ : Ctx) (x : String) : Option Scheme := (Γ.find? (·.1 = x)).map (·.2)
 
-/-! ## Typing rules
-
-Typing is relative to definitions `E` of type variables (see `Sub.lean`):
-types may refer to defined variables, which is how inferred solutions are
-expressed. -/
+/-! ## Typing rules -/
 
 variable {E : Defs}
 
-/-- The same labels, all with the absent field. -/
-def Fields.absOf : Fields → Fields
-  | .nil => .nil
-  | .cons l _ fs => .cons l .abs fs.absOf
-
 mutual
-inductive Typ (E : Defs) : Ctx → Term → Ty → Prop where
+inductive Typ (E : Defs) : Ctx → Term → Ty .ty → Prop where
   | lit : Typ E Γ (.lit n) (.prim "int")
   | var : Γ.lookup x = some σ → σ.Instance E τ → Typ E Γ (.var x) τ
   | lam : Typ E ((x, .mono τ₁) :: Γ) t τ₂ → Typ E Γ (.lam x t) (.arrow τ₁ τ₂)
   | app : Typ E Γ f (.arrow τ₁ τ₂) → Typ E Γ a τ₁ → Typ E Γ (.app f a) τ₂
-  | rcd : TypFields E Γ fs F → Typ E Γ (.rcd fs) (.record F .abs)
-  /-- Selection: the field is present, i.e. its type is below `⊤` (a field
-  of type `Abs` may be missing). -/
-  | sel : Typ E Γ t (.record (.cons l τ .nil) .abs) → Sub E τ .top → Typ E Γ (.sel t l) τ
+  | rcd : TypFields E Γ fs F → Typ E Γ (.rcd fs) (Ty.record F)
+  /-- Selection: the field is present. -/
+  | sel : Typ E Γ t (.rcd (.cons l (.pre τ) .top)) → Typ E Γ (.sel t l) τ
   /-- `t with {fs}`: `t`'s fields `fs` may be anything, the rest is `ρ`. -/
-  | ext : Typ E Γ t (.record F.absOf ρ) → TypFields E Γ fs F → Typ E Γ (.ext t fs) (.record F ρ)
-  /-- `t with {}` evaluates to `t`, whatever its type (as in `lib/typer.ml`). -/
+  | ext : Typ E Γ t (.rcd (Ty.absFields F ρ)) → TypFields E Γ fs F →
+      Typ E Γ (.ext t fs) (.rcd (Ty.ofFields F ρ))
   | extNil : Typ E Γ t τ → Typ E Γ (.ext t []) τ
-  /-- `let`: `s` has every instance of the scheme `σ`, which has one. -/
   | letIn : (∀ τ', σ.Instance E τ' → Typ E Γ s τ') → σ.Instance E τ₀ →
       Typ E ((x, σ) :: Γ) t τ → Typ E Γ (.letIn false x s t) τ
-  /-- `let rec`: `s` is a function (evaluation is eager), and for every
-  instance, `s` has it assuming `x` has it. -/
   | letRec : s.IsFun → (∀ τ', σ.Instance E τ' → Typ E ((x, .mono τ') :: Γ) s τ') →
-      σ.Instance E τ₀ →
-      Typ E ((x, σ) :: Γ) t τ → Typ E Γ (.letIn true x s t) τ
-  /-- Subsumption. -/
+      σ.Instance E τ₀ → Typ E ((x, σ) :: Γ) t τ → Typ E Γ (.letIn true x s t) τ
   | sub : Typ E Γ t τ → Sub E τ τ' → Typ E Γ t τ'
 
-/-- Field terms and their types, label by label. -/
-inductive TypFields (E : Defs) : Ctx → List (String × Term) → Fields → Prop where
-  | nil : TypFields E Γ [] .nil
-  | cons : Typ E Γ t τ → TypFields E Γ fs F → TypFields E Γ ((l, t) :: fs) (.cons l τ F)
+inductive TypFields (E : Defs) : Ctx → List (String × Term) → List (String × Ty .ty) → Prop where
+  | nil : TypFields E Γ [] []
+  | cons : Typ E Γ t τ → TypFields E Γ fs F → TypFields E Γ ((l, t) :: fs) ((l, τ) :: F)
 end
 
-/-! ## Built-ins (as in `lib/typer.ml`) -/
+/-! ## Built-ins -/
 
-def bool : Ty := .prim "bool"
-def int : Ty := .prim "int"
+def bool : Ty .ty := .prim "bool"
+def int : Ty .ty := .prim "int"
 
-/-- `true`, `false`, `not`, `succ`, `add`, and `if : ∀α. bool → α → α → α`
-(`if c then a else b` is parsed as `if c a b`). -/
 def builtins : Ctx :=
   [ ("true", .mono bool), ("false", .mono bool),
     ("not", .mono (.arrow bool bool)),
@@ -199,183 +147,156 @@ def builtins : Ctx :=
 
 section Examples
 
-/-- A variable bound by a lambda (or a monomorphic `let`) has its type. -/
-theorem Typ.var_mono {Γ : Ctx} {x : String} {τ : Ty} (h : Γ.lookup x = some (.mono τ)) : Typ E Γ (.var x) τ :=
+theorem Typ.var_mono {Γ : Ctx} {x : String} {τ : Ty .ty} (h : Γ.lookup x = some (.mono τ)) :
+    Typ E Γ (.var x) τ :=
   .var h (Scheme.instance_mono E τ)
 
-/-- A monomorphic `let`. -/
-theorem Typ.letIn_mono {Γ : Ctx} (h₁ : Typ E Γ s σ) (h₂ : Typ E ((x, .mono σ) :: Γ) t τ) :
-    Typ E Γ (.letIn false x s t) τ :=
+theorem Typ.letIn_mono {Γ : Ctx} {σ τ : Ty .ty} (h₁ : Typ E Γ s σ)
+    (h₂ : Typ E ((x, .mono σ) :: Γ) t τ) : Typ E Γ (.letIn false x s t) τ :=
   .letIn (fun _ h => Scheme.instance_mono_eq h ▸ h₁) (Scheme.instance_mono E σ) h₂
 
-/-- A monomorphic `let rec`. -/
-theorem Typ.letRec_mono {Γ : Ctx} (hf : s.IsFun) (h₁ : Typ E ((x, .mono σ) :: Γ) s σ)
-    (h₂ : Typ E ((x, .mono σ) :: Γ) t τ) : Typ E Γ (.letIn true x s t) τ :=
+theorem Typ.letRec_mono {Γ : Ctx} {σ τ : Ty .ty} (hf : s.IsFun)
+    (h₁ : Typ E ((x, .mono σ) :: Γ) s σ) (h₂ : Typ E ((x, .mono σ) :: Γ) t τ) :
+    Typ E Γ (.letIn true x s t) τ :=
   .letRec hf (fun _ h => Scheme.instance_mono_eq h ▸ h₁) (Scheme.instance_mono E σ) h₂
 
-/-- `twice = fun f -> fun x -> f (f x)` has type `(τ → τ) → τ → τ`, for any `τ`. -/
-theorem typ_twice (τ : Ty) :
+theorem typ_twice (τ : Ty .ty) :
     Typ E builtins
       (.lam "f" (.lam "x" (.app (.var "f") (.app (.var "f") (.var "x")))))
       (.arrow (.arrow τ τ) (.arrow τ τ)) :=
   .lam (.lam (.app (.var_mono rfl) (.app (.var_mono rfl) (.var_mono rfl))))
 
-/-- `if true then 1 else 2 : int`, instantiating `if` at `int`. -/
+/-- The substitution of one type variable. -/
+def Subst.one (x : Nat) (τ : Ty .ty) : Subst := fun s y =>
+  match s with
+  | .ty => if y = x then some τ else none
+  | _ => none
+
+theorem Subst.one_dom {x y : Nat} {τ : Ty .ty} {s : Srt} (h : ((Subst.one x τ) s y).isSome) :
+    y = x := by
+  cases s <;> simp only [Subst.one] at h
+  · by_cases hy : y = x
+    · exact hy
+    · simp [hy] at h
+  all_goals simp at h
+
 theorem typ_if : Typ E builtins
-    (.app (.app (.app (.var "if") (.var "true")) (.lit 1)) (.lit 2)) int := by
-  have hif : (builtins.lookup "if").isSome := rfl
-  refine .app (.app (.app (.var rfl ⟨fun x => if x = 0 then some int else none, ?_,
-    (fun _ h => nomatch h), ?_⟩)
-    (.var_mono rfl)) .lit) .lit
-  · intro x hx
-    by_cases h : x = 0
-    · simp [h]
-    · simp [h] at hx
-  · rfl
+    (.app (.app (.app (.var "if") (.var "true")) (.lit 1)) (.lit 2)) int :=
+  .app (.app (.app (.var rfl ⟨Subst.one 0 int, fun _ _ h => by simp [Subst.one_dom h],
+    (fun _ h => nomatch h), rfl⟩) (.var_mono rfl)) .lit) .lit
 
 /-- The record extension example of Marques et al.:
-`((fun r -> r with {y = 2}) {x = 1}).x : int`. The function is used at
-`ρ = {x: int}`: its argument `{x = 1}` fits `{y: Abs | {x: int}}`, and
-the result `{y: int | {x: int}}` has field `x`. -/
+`((fun r -> r with {y = 2}) {x = 1}).x : int`, with the function used at the
+row `ρ = {x: int}`. -/
 theorem typ_ext :
     Typ E builtins
       (.sel (.app (.lam "r" (.ext (.var "r") [("y", .lit 2)])) (.rcd [("x", .lit 1)])) "x")
       int := by
-  -- the row the function is used at
-  let ρ : Ty := .record (.cons "x" int .nil) .abs
+  let ρ : Ty .row := .cons "x" (.pre int) .top
   have hfun : Typ E builtins (.lam "r" (.ext (.var "r") [("y", .lit 2)]))
-      (.arrow (.record (.cons "y" .abs .nil) ρ) (.record (.cons "y" int .nil) ρ)) :=
-    .lam (.ext (F := .cons "y" int .nil) (.var_mono rfl) (.cons .lit .nil))
-  -- {x: int} ≤ {y: Abs | {x: int}}
-  have harg : Sub E (.record (.cons "x" int .nil) .abs) (.record (.cons "y" .abs .nil) ρ) := by
-    refine Sub.of_step (.record fun l => ?_)
+      (.arrow (.rcd (.cons "y" .abs ρ)) (.rcd (.cons "y" (.pre int) ρ))) :=
+    .lam (.ext (F := [("y", int)]) (ρ := ρ) (.var_mono rfl) (.cons .lit .nil))
+  have harg : Sub E (Ty.record [("x", int)]) (.rcd (.cons "y" .abs ρ)) := by
+    refine Sub.of_step (.rcd (Sub.row fun l => ?_))
     by_cases hx : l = "x"
-    · subst hx; exact Sub.of_step (show Step E (Sub E) int int from .prim)
-    · have hx' : ¬ "x" = l := fun e => hx e.symm
-      by_cases hy : l = "y"
-      · subst hy; simp only [Ty.field, Fields.lookup, hx', ite_true]; exact Sub.abs
-      · have hy' : ¬ "y" = l := fun e => hy e.symm
-        simp only [ρ, Ty.field, Fields.lookup, hx', hy', ite_false]; exact Sub.abs
-  -- {y: int | {x: int}} ≤ {x: int}
-  have hres : Sub E (.record (.cons "y" int .nil) ρ) (.record (.cons "x" int .nil) .abs) := by
-    refine Sub.of_step (.record fun l => ?_)
+    · subst hx; simp [Ty.ofFields, Ty.field, ρ]; exact Sub.refl
+    · by_cases hy : l = "y"
+      · subst hy; simp [Ty.field]; exact Sub.top
+      · simp [Ty.ofFields, Ty.field, ρ, Ne.symm hx, Ne.symm hy]; exact Sub.refl
+  have hres : Sub E (.rcd (.cons "y" (.pre int) ρ)) (.rcd (.cons "x" (.pre int) .top)) := by
+    refine Sub.of_step (.rcd (Sub.row fun l => ?_))
     by_cases hx : l = "x"
-    · subst hx; exact Sub.of_step (show Step E (Sub E) int int from .prim)
-    · have hx' : ¬ "x" = l := fun e => hx e.symm
-      simp only [Ty.field, Fields.lookup, hx', ite_false]
-      exact Sub.abs
-  exact .sel (.sub (.app hfun (.sub (.rcd (.cons .lit .nil)) harg)) hres) (Sub.top trivial)
+    · subst hx; simp [Ty.field, ρ]; exact Sub.refl
+    · simp [Ty.field, Ne.symm hx]; exact Sub.top
+  exact .sel (.sub (.app hfun (.sub (.rcd (.cons .lit .nil)) harg)) hres)
 
-/-- Let-polymorphism: `let id = fun x -> x in {a = id 1; b = id true}`,
-with `id : ∀α. α → α`, used at `int` and at `bool`. -/
 theorem typ_letPoly :
     Typ E builtins
       (.letIn false "id" (.lam "x" (.var "x"))
         (.rcd [("a", .app (.var "id") (.lit 1)), ("b", .app (.var "id") (.var "true"))]))
-      (.record (.cons "a" int (.cons "b" bool .nil)) .abs) := by
-  have inst : ∀ τ : Ty, (Scheme.poly [0] [] (.arrow (.fvar 0) (.fvar 0))).Instance E
+      (Ty.record [("a", int), ("b", bool)]) := by
+  have inst : ∀ τ : Ty .ty, (Scheme.poly [0] [] (.arrow (.fvar 0) (.fvar 0))).Instance E
       (.arrow τ τ) := fun τ =>
-    ⟨fun y => if y = 0 then some τ else none,
-      fun y hy => by by_cases h : y = 0 <;> simp_all, (fun _ h => nomatch h),
-      by simp [Ty.substM]⟩
+    ⟨Subst.one 0 τ, fun _ _ h => by simp [Subst.one_dom h], (fun _ h => nomatch h),
+      by simp [Ty.substM, Subst.one]⟩
   refine .letIn (fun τ' ⟨m, _, _, h⟩ => ?_) (inst int)
     (.rcd (.cons (.app (.var rfl (inst int)) .lit)
       (.cons (.app (.var rfl (inst bool)) (.var_mono rfl)) .nil)))
   subst h
   exact .lam (.var_mono rfl)
 
-/-- A constrained scheme: `let inc = fun x -> succ x` gets
-`∀α. α ≤ int ⇒ α → int`; the body of `inc` uses the constraint to pass
-`x : α` to `succ`. Here it is used at `int`. -/
+/-- A constrained scheme: `inc : ∀α. α ≤ int ⇒ α → int`, used at `int`. -/
 theorem typ_letConstrained :
     Typ E builtins
       (.letIn false "inc" (.lam "x" (.app (.var "succ") (.var "x")))
         (.app (.var "inc") (.lit 1)))
       int := by
-  let σ : Scheme := .poly [0] [⟨.fvar 0, int, true⟩] (.arrow (.fvar 0) int)
-  have hint : Holds E int int := ⟨Sub.of_step .prim, fun _ => by simp [int, Ty.field]; exact Sub.abs⟩
+  let σ : Scheme := .poly [0] [⟨.fvar 0, int⟩] (.arrow (.fvar 0) int)
   have inst : σ.Instance E (.arrow int int) :=
-    ⟨fun y => if y = 0 then some int else none,
-      fun y hy => by by_cases h : y = 0 <;> simp_all [σ],
-      fun p hp => by
-        simp only [σ, List.mem_singleton] at hp; subst hp
-        exact ⟨fun _ => by simpa [Ty.substM, int] using hint.1,
-          fun l => by simpa [Ty.substM, int] using hint.2 l⟩,
-      by simp [σ, Ty.substM, int]⟩
+    ⟨Subst.one 0 int, fun _ _ h => by simp [σ, Subst.one_dom h],
+      fun c hc => by
+        simp only [σ, List.mem_singleton] at hc; subst hc
+        simp only [SatAfter, Ty.substM, Subst.one, int]; exact Sub.refl,
+      by simp [σ, Ty.substM, Subst.one, int]⟩
   refine .letIn (σ := σ) (fun τ' ⟨m, _, hcs, h⟩ => ?_) inst (.app (.var rfl inst) .lit)
   subst h
-  have hc := (hcs _ (List.mem_singleton.mpr rfl)).1 rfl
-  simp only [Ty.substM] at hc ⊢
+  have hc : SatAfter E m ⟨Ty.fvar 0, int⟩ := hcs _ (List.mem_singleton.mpr rfl)
+  simp only [SatAfter, Ty.substM] at hc ⊢
   exact .lam (.app (.var_mono rfl) (.sub (.var_mono rfl) hc))
 
 end Examples
 
 /-! ## Selection needs a present field
 
-`Abs` is strictly above `⊤` (`not_abs_le_top`): a field of type `Abs` may be
-missing, a field whose type is below `⊤` is there. So selecting a label that
-a record literal does not have is not typable, at any type; before `Abs`
-and `⊤` were told apart, `{}.x` had type `⊤`. -/
+Selecting a label that a record literal does not have is not typable: the
+literal's row gives the label `Abs`, and `Abs ≰ pre τ`. -/
 
-/-- The types of a selection: a present field's type, and its supertypes. -/
-theorem Typ.sel_inv {t : Term} {l : String} : ∀ {Γ : Ctx} {u : Term} {τ : Ty},
+theorem Typ.sel_inv {t : Term} {l : String} : ∀ {Γ : Ctx} {u : Term} {τ : Ty .ty},
     Typ E Γ u τ → u = .sel t l →
-    ∃ τ', Typ E Γ t (.record (.cons l τ' .nil) .abs) ∧ Sub E τ' .top ∧ Sub E τ' τ
-  | _, _, _, .sel h ht, e => by cases e; exact ⟨_, h, ht, Sub.refl⟩
-  | _, _, _, .sub h hs, e =>
-    let ⟨τ', h₁, h₂, h₃⟩ := Typ.sel_inv h e; ⟨τ', h₁, h₂, h₃.trans hs⟩
-  | _, _, _, .lit, e => nomatch e
-  | _, _, _, .var _ _, e => nomatch e
-  | _, _, _, .lam _, e => nomatch e
-  | _, _, _, .app _ _, e => nomatch e
-  | _, _, _, .rcd _, e => nomatch e
-  | _, _, _, .ext _ _, e => nomatch e
-  | _, _, _, .extNil _, e => nomatch e
-  | _, _, _, .letIn _ _ _, e => nomatch e
-  | _, _, _, .letRec _ _ _ _, e => nomatch e
+    ∃ τ', Typ E Γ t (.rcd (.cons l (.pre τ') .top)) ∧ Sub E τ' τ
+  | _, _, _, .sel h, e => by cases e; exact ⟨_, h, Sub.refl⟩
+  | _, _, _, .sub h hs, e => let ⟨τ', h₁, h₂⟩ := Typ.sel_inv h e; ⟨τ', h₁, h₂.trans hs⟩
+  | _, _, _, .lit, e | _, _, _, .var _ _, e | _, _, _, .lam _, e | _, _, _, .app _ _, e
+  | _, _, _, .rcd _, e | _, _, _, .ext _ _, e | _, _, _, .extNil _, e
+  | _, _, _, .letIn _ _ _, e | _, _, _, .letRec _ _ _ _, e => nomatch e
 
-/-- The types of a record literal: its record type, and its supertypes. -/
-theorem Typ.rcd_inv {fs : List (String × Term)} : ∀ {Γ : Ctx} {u : Term} {τ : Ty},
-    Typ E Γ u τ → u = .rcd fs → ∃ F, TypFields E Γ fs F ∧ Sub E (.record F .abs) τ
+theorem Typ.rcd_inv {fs : List (String × Term)} : ∀ {Γ : Ctx} {u : Term} {τ : Ty .ty},
+    Typ E Γ u τ → u = .rcd fs → ∃ F, TypFields E Γ fs F ∧ Sub E (Ty.record F) τ
   | _, _, _, .rcd h, e => by cases e; exact ⟨_, h, Sub.refl⟩
   | _, _, _, .sub h hs, e => let ⟨F, hF, hs'⟩ := Typ.rcd_inv h e; ⟨F, hF, hs'.trans hs⟩
-  | _, _, _, .lit, e => nomatch e
-  | _, _, _, .var _ _, e => nomatch e
-  | _, _, _, .lam _, e => nomatch e
-  | _, _, _, .app _ _, e => nomatch e
-  | _, _, _, .sel _ _, e => nomatch e
-  | _, _, _, .ext _ _, e => nomatch e
-  | _, _, _, .extNil _, e => nomatch e
-  | _, _, _, .letIn _ _ _, e => nomatch e
-  | _, _, _, .letRec _ _ _ _, e => nomatch e
+  | _, _, _, .lit, e | _, _, _, .var _ _, e | _, _, _, .lam _, e | _, _, _, .app _ _, e
+  | _, _, _, .sel _, e | _, _, _, .ext _ _, e | _, _, _, .extNil _, e
+  | _, _, _, .letIn _ _ _, e | _, _, _, .letRec _ _ _ _, e => nomatch e
 
-theorem TypFields.lookup_none {Γ : Ctx} {l : String} :
-    ∀ {fs : List (String × Term)} {F : Fields}, TypFields E Γ fs F → (∀ p ∈ fs, p.1 ≠ l) →
-      F.lookup l = none
-  | _, _, .nil, _ => rfl
+theorem TypFields.labels {Γ : Ctx} {l : String} :
+    ∀ {fs : List (String × Term)} {F : List (String × Ty .ty)}, TypFields E Γ fs F →
+      (∀ p ∈ fs, p.1 ≠ l) → ∀ p ∈ F, p.1 ≠ l
+  | _, _, .nil, _ => fun _ h => nomatch h
   | _, _, .cons (l := l') (t := t) _ h, hl => by
-    have hne : l' ≠ l := hl (l', t) (List.mem_cons_self ..)
-    simp only [Fields.lookup, hne, ite_false]
-    exact h.lookup_none fun p hp => hl p (List.mem_cons_of_mem _ hp)
+    intro p hp
+    rcases List.mem_cons.mp hp with rfl | hp
+    · exact hl (l', t) (List.mem_cons_self ..)
+    · exact h.labels (fun q hq => hl q (List.mem_cons_of_mem _ hq)) p hp
 
 /-- Selecting a label that a record literal does not have is not typable. -/
-theorem not_typ_sel_missing {Γ : Ctx} {fs : List (String × Term)} {l : String} {τ : Ty}
+theorem not_typ_sel_missing {Γ : Ctx} {fs : List (String × Term)} {l : String} {τ : Ty .ty}
     (hl : ∀ p ∈ fs, p.1 ≠ l) : ¬ Typ E Γ (.sel (.rcd fs) l) τ := fun h => by
-  obtain ⟨τ', h₁, h₂, _⟩ := Typ.sel_inv h rfl
+  obtain ⟨τ', h₁, _⟩ := Typ.sel_inv h rfl
   obtain ⟨F, hF, hs⟩ := Typ.rcd_inv h₁ rfl
   cases hs.step with
-  | record hf =>
-    have := hf l
-    simp [Ty.field, Fields.lookup, hF.lookup_none hl] at this
-    exact not_abs_le_of_le_top h₂ this
+  | rcd hr =>
+    have := hr.fields l
+    simp only [Ty.field_ofFields_none (hF.labels hl), Ty.field, ite_true] at this
+    exact not_abs_le_pre this
 
-/-- `{}.x` has no type. -/
-theorem not_typ_empty_sel {Γ : Ctx} {τ : Ty} : ¬ Typ E Γ (.sel (.rcd []) "x") τ :=
+theorem not_typ_empty_sel {Γ : Ctx} {τ : Ty .ty} : ¬ Typ E Γ (.sel (.rcd []) "x") τ :=
   not_typ_sel_missing fun _ h => nomatch h
 
-/-- `{a = 1}.b` has no type (a "missing field" error of `lib/typer.ml`). -/
-theorem not_typ_sel_other {Γ : Ctx} {τ : Ty} :
+theorem not_typ_sel_other {Γ : Ctx} {τ : Ty .ty} :
     ¬ Typ E Γ (.sel (.rcd [("a", .lit 1)]) "b") τ :=
   not_typ_sel_missing fun p hp => by simp at hp; subst hp; decide
+
+/-! `Abs` is a field, not a type, so no term has type `Abs`: `⊢ 1 : Abs`
+cannot even be stated. -/
 
 end BoltCore

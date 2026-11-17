@@ -8,14 +8,15 @@ now, Bolt's compiler later) emits a *certificate* of its result, and a
 checker decides whether it is valid. This file states what a certificate
 is, what validity means, and proves the two theorems a checker rests on:
 
-* **Soundness** (`CTyp.sound`): a valid certificate with a typing
-  skeleton for `t` gives `t` its type in the declarative system. This is
-  Theorem 1 for certificates; nothing about how the certificate was
-  produced is assumed.
-* **Adequacy** (`TypeTerm.certificate`): every run of the algorithm model
-  yields a valid certificate and a skeleton for its term. So the format
-  can express everything the algorithm does, and a correct inferencer is
-  never rejected.
+* **Soundness** (`PTyp.sound_top`, `PolyLet.lean`): a valid certificate
+  with a typing skeleton for `t` gives `t` its type in the declarative
+  system. This is Theorem 1 for certificates; nothing about how the
+  certificate was produced is assumed.
+* **Adequacy** (`TypeTerm.certificate`, `Adequacy.lean`): every run of the
+  algorithm model yields a valid certificate and a skeleton for its term.
+  So the format can express everything the algorithm does, and a correct
+  inferencer is never rejected. Validity is proved here
+  (`TypeTerm.certificateValid`).
 
 A certificate holds the accepted constraints, the bounds of each variable,
 and the kinds of the variables, as finite lists (variables not listed have
@@ -26,12 +27,10 @@ function component (`LogNAC`), and the kind discipline (`KLog`). Each one
 quantifies only over the certificate's lists, so it is decidable; the
 executable checker will come with proofs that it decides them.
 
-The typing skeleton (`CTyp`) gives each node of the term a simple type and
-requires, at each place where the algorithm constrains, that the
-constraint is accepted by the certificate. It mirrors `TypeTerm` without
-the state: `let` is monomorphic, as in the model. A selection also checks
-that the type it gives the field is that of a present field
-(`SType.Present`): not `Abs`, and not a row variable.
+The typing skeleton (`PTyp`, `PolyLet.lean`) gives each node of the term a
+simple type and requires, at each place where the algorithm constrains,
+that the constraint is accepted by the certificate. Its soundness and the
+adequacy of skeletons are in `PolyLet.lean` and `Adequacy.lean`.
 -/
 
 namespace BoltCore.Alg
@@ -76,42 +75,6 @@ structure Valid (c : Certificate) : Prop where
 
 end Certificate
 
-/-! ## Typing skeletons -/
-
-/-- The type of a present field: not `Abs`, and not a row variable. A
-selection may only read such a field (`Abs` allows it to be missing). -/
-def SType.Present (K : Nat → List String) : SType → Prop
-  | .abs => False
-  | .var v => K v = []
-  | _ => True
-
-instance (K : Nat → List String) (st : SType) : Decidable (st.Present K) := by
-  cases st <;> simp only [SType.Present] <;> infer_instance
-
-mutual
-/-- A typing skeleton for a term, checked against a certificate. -/
-inductive CTyp (c : Certificate) : SCtx → Term → SType → Prop where
-  | lit : CTyp c Γ (.lit n) (.prim "int")
-  | var : Γ.lookup x = some st → CTyp c Γ (.var x) st
-  | lam : CTyp c ((x, st₁) :: Γ) t st₂ → CTyp c Γ (.lam x t) (.arrow st₁ st₂)
-  | app : CTyp c Γ f stf → CTyp c Γ a sta → stf ≠ .abs →
-      c.Accepts stf (.arrow sta st) → CTyp c Γ (.app f a) st
-  | rcd : CFields c Γ fs F → CTyp c Γ (.rcd fs) (.record F .abs)
-  | sel : CTyp c Γ t st₀ → st₀ ≠ .abs →
-      c.Accepts st₀ (.record (.cons l st .nil) .abs) → st.Present c.kind →
-      CTyp c Γ (.sel t l) st
-  | ext : CTyp c Γ t st₀ → CFields c Γ fs F → st₀ ≠ .abs →
-      c.Accepts st₀ (.record F.absOf ρ) → CTyp c Γ (.ext t fs) (.record F ρ)
-  | extNil : CTyp c Γ t st → CTyp c Γ (.ext t []) st
-  | letIn : CTyp c Γ r str → CTyp c ((x, str) :: Γ) b st → CTyp c Γ (.letIn false x r b) st
-  | letRec : r.IsFun → CTyp c ((x, stx) :: Γ) r inf → inf ≠ .abs → c.Accepts inf stx →
-      CTyp c ((x, stx) :: Γ) b st → CTyp c Γ (.letIn true x r b) st
-
-inductive CFields (c : Certificate) : SCtx → List (String × Term) → SFields → Prop where
-  | nil : CFields c Γ [] .nil
-  | cons : CTyp c Γ t st → CFields c Γ fs F → CFields c Γ ((l, t) :: fs) (.cons l st F)
-end
-
 /-! ## Soundness -/
 
 /-- A valid certificate's state satisfies everything the solution theorem
@@ -120,127 +83,6 @@ theorem Certificate.Valid.final {c : Certificate} (hv : c.Valid) :
     Final c.state (kindRank (loggedLabels c.state) c.kind) :=
   ⟨hv.inv, hv.inLog, hv.nac,
     kinds_tailRanked ⟨rfl, hv.kinds, fun _ _ _ h => nomatch h⟩ hv.inLog⟩
-
-theorem Certificate.Valid.sub {c : Certificate} (hv : c.Valid) (h : c.Accepts a b)
-    (ha : a ≠ .abs) : Sub (defsOf c.state) a.toTy b.toTy :=
-  hv.final.sub (s := c.state) h (fun _ h => h) ha
-
-/-! ### Interpretations
-
-Generalizing a `let` needs the right-hand side typed with some variables
-read as *free* type variables instead of graph variables. So soundness is
-stated for any interpretation `I` of the variables: if every accepted
-constraint holds under `I`, the skeleton gives a typing under `I`. -/
-
-mutual
-/-- A simple type, with variable `v` read as `I v`. -/
-def SType.interp (I : Nat → Ty) : SType → Ty
-  | .var v => I v
-  | .prim n => .prim n
-  | .arrow a b => .arrow (a.interp I) (b.interp I)
-  | .record fs t => .record (fs.interp I) (t.interp I)
-  | .abs => .abs
-
-def SFields.interp (I : Nat → Ty) : SFields → Fields
-  | .nil => .nil
-  | .cons n f fs => .cons n (f.interp I) (fs.interp I)
-end
-
-mutual
-theorem SType.interp_gvar : ∀ a : SType, a.interp .gvar = a.toTy
-  | .var _ | .prim _ | .abs => rfl
-  | .arrow a b => by simp only [SType.interp, SType.toTy, SType.interp_gvar a, SType.interp_gvar b]
-  | .record fs t => by
-    simp only [SType.interp, SType.toTy, SFields.interp_gvar fs, SType.interp_gvar t]
-
-theorem SFields.interp_gvar : ∀ fs : SFields, fs.interp .gvar = fs.toFields
-  | .nil => rfl
-  | .cons _ g fs => by
-    simp only [SFields.interp, SFields.toFields, SType.interp_gvar g, SFields.interp_gvar fs]
-end
-
-theorem SFields.interp_absOf (I : Nat → Ty) : ∀ F : SFields,
-    F.absOf.interp I = (F.interp I).absOf
-  | .nil => rfl
-  | .cons _ _ F => by
-    simp only [SFields.absOf, SFields.interp, SType.interp, Fields.absOf, SFields.interp_absOf I F]
-
-/-- The context, interpreted. -/
-def SCtx.toCtxI (I : Nat → Ty) (Γ : SCtx) : Ctx :=
-  Γ.map fun p => (p.1, Scheme.mono (p.2.interp I))
-
-theorem SCtx.toCtxI_gvar (Γ : SCtx) : Γ.toCtxI .gvar = Γ.toCtx := by
-  simp only [SCtx.toCtxI, SCtx.toCtx, SType.interp_gvar]
-
-theorem SCtx.lookup_toCtxI {I : Nat → Ty} {Γ : SCtx} {x : String} {st : SType}
-    (h : Γ.lookup x = some st) : (Γ.toCtxI I).lookup x = some (.mono (st.interp I)) := by
-  induction Γ with
-  | nil => simp [SCtx.lookup] at h
-  | cons p Γ ih =>
-    simp only [SCtx.lookup, List.find?_cons] at h
-    simp only [SCtx.toCtxI, List.map_cons, Ctx.lookup, List.find?_cons]
-    by_cases hp : p.1 = x
-    · simp only [hp, decide_true] at h ⊢
-      simp at h
-      subst h
-      rfl
-    · simp only [hp, decide_false] at h ⊢
-      have := ih h
-      simpa [SCtx.toCtxI, Ctx.lookup] using this
-
-/-- The certificate's constraints hold under `I` in `E`, and `I` reads
-ordinary type variables as types (below `⊤`). -/
-structure Certificate.HoldsUnder (c : Certificate) (E : Defs) (I : Nat → Ty) : Prop where
-  sub : ∀ a b, c.Accepts a b → a ≠ .abs → Sub E (a.interp I) (b.interp I)
-  top : ∀ v, c.kind v = [] → Sub E (I v) .top
-
-/-- The type of a present field is below `⊤`, when type variables are. -/
-theorem SType.Present.top {K : Nat → List String} {E : Defs} {I : Nat → Ty} :
-    ∀ {st : SType}, st.Present K → (∀ v, K v = [] → Sub E (I v) .top) →
-      Sub E (st.interp I) .top
-  | .var v, h, H => H v h
-  | .prim _, _, _ | .arrow _ _, _, _ | .record _ _, _, _ => Sub.top trivial
-  | .abs, h, _ => h.elim
-
-mutual
-/-- **Soundness under an interpretation**: if the certificate's constraints
-hold under `I`, a typing skeleton gives a declarative typing under `I`. -/
-theorem CTyp.soundI {c : Certificate} {E : Defs} {I : Nat → Ty} (H : c.HoldsUnder E I) :
-    CTyp c Γ t st → Typ E (Γ.toCtxI I) t (st.interp I)
-  | .lit => .lit
-  | .var hx => Typ.var_mono (SCtx.lookup_toCtxI hx)
-  | .lam h => .lam (h.soundI H)
-  | .app h₁ h₂ ha hc => .app (.sub (h₁.soundI H) (H.sub _ _ hc ha)) (h₂.soundI H)
-  | .rcd h => .rcd (h.soundI H)
-  | .sel h ha hc hp => .sel (.sub (h.soundI H) (H.sub _ _ hc ha)) (hp.top H.top)
-  | .ext h₁ h₂ ha hc => by
-    have hs := H.sub _ _ hc ha
-    simp only [SType.interp, SFields.interp_absOf] at hs
-    exact .ext (.sub (h₁.soundI H) hs) (h₂.soundI H)
-  | .extNil h => .extNil (h.soundI H)
-  | .letIn h₁ h₂ => Typ.letIn_mono (h₁.soundI H) (h₂.soundI H)
-  | .letRec hf h₁ ha hc h₂ =>
-    Typ.letRec_mono hf (.sub (h₁.soundI H) (H.sub _ _ hc ha)) (h₂.soundI H)
-
-theorem CFields.soundI {c : Certificate} {E : Defs} {I : Nat → Ty} (H : c.HoldsUnder E I) :
-    CFields c Γ fs F → TypFields E (Γ.toCtxI I) fs (F.interp I)
-  | .nil => .nil
-  | .cons h₁ h₂ => .cons (h₁.soundI H) (h₂.soundI H)
-end
-
-/-- A valid certificate's constraints hold of its solution. -/
-theorem Certificate.Valid.holds {c : Certificate} (hv : c.Valid) :
-    c.HoldsUnder (defsOf c.state) .gvar where
-  sub := fun a b h ha => by rw [SType.interp_gvar, SType.interp_gvar]; exact hv.sub h ha
-  top := fun _ hk => Sub.of_step (TyVar.here hk).le_top
-
-/-- **Theorem 1 for certificates**: a typing skeleton checked against a
-valid certificate gives a declarative typing, at the type the skeleton
-assigns translated through the certificate's solution. -/
-theorem CTyp.sound {c : Certificate} (hv : c.Valid) (h : CTyp c Γ t st) :
-    Typ (defsOf c.state) Γ.toCtx t st.toTy := by
-  have := h.soundI hv.holds
-  rwa [SCtx.toCtxI_gvar, SType.interp_gvar] at this
 
 /-! ## Adequacy: every run yields a valid certificate -/
 
@@ -408,91 +250,18 @@ theorem Logged.accepts {s : State} {c : Certificate} (hlog : ∀ p, p ∈ s.log 
   | .inl h => .inl h
   | .inr h => .inr (hlog _ h)
 
-mutual
-/-- A run of the algorithm gives a typing skeleton, checked against any
-certificate that accepts the constraints it logged and keeps its ordinary
-type variables (`hK`). -/
-theorem TypeTerm.skeleton {c : Certificate} (hK : ∀ v, K v = [] → c.kind v = []) :
-    TypeTerm Γ s t st s' → CtxNAC Γ → Inv₂ s → LogNAC s →
-    (∀ p, p ∈ s'.log → p ∈ c.log) → s.kind = K → CTyp c Γ t st
-  | .lit, _, _, _, _, _ => .lit
-  | .var hx, _, _, _, _, _ => .var hx
-  | .lam _ h, hΓ, i, n, hlog, hk =>
-    .lam (h.skeleton hK (hΓ.cons trivial (fun h => nomatch h)) i.fresh n hlog hk)
-  | .app _ h₁ h₂ hc, hΓ, i, n, hlog, hk => by
-    have i₁ := h₁.inv₂ i.fresh
-    have r₁ := h₁.nac hΓ i.fresh n
-    have hlog₂ : ∀ p, p ∈ _ → p ∈ c.log := fun p hp => hlog p (hc.log_grows p hp)
-    have hlog₁ : ∀ p, p ∈ _ → p ∈ c.log := fun p hp => hlog₂ p (h₂.log_grows p hp)
-    exact .app (h₁.skeleton hK hΓ i.fresh n hlog₁ hk)
-      (h₂.skeleton hK hΓ i₁ r₁.1 hlog₂ (h₁.kind_eq.trans hk)) r₁.2.2 (hc.logged.accepts hlog)
-  | .rcd h, hΓ, i, n, hlog, hk => .rcd (h.skeleton hK hΓ i n hlog hk)
-  | .sel hn h hc, hΓ, i, n, hlog, hk => by
-    have r := h.nac hΓ i.fresh n
-    exact .sel (h.skeleton hK hΓ i.fresh n (fun p hp => hlog p (hc.log_grows p hp)) hk) r.2.2
-      (hc.logged.accepts hlog) (hK _ (hk ▸ hn))
-  | .extNil h, hΓ, i, n, hlog, hk => .extNil (h.skeleton hK hΓ i n hlog hk)
-  | .ext _ h₁ h₂ _ hc, hΓ, i, n, hlog, hk => by
-    have i₁ := h₁.inv₂ i
-    have r₁ := h₁.nac hΓ i n
-    have hlog₂ : ∀ p, p ∈ _ → p ∈ c.log := fun p hp => hlog p (hc.log_grows p hp)
-    have hlog₁ : ∀ p, p ∈ _ → p ∈ c.log := fun p hp => hlog₂ p (h₂.log_grows p hp)
-    exact .ext (h₁.skeleton hK hΓ i n hlog₁ hk)
-      (h₂.skeleton hK hΓ i₁ r₁.1 hlog₂ (h₁.kind_eq.trans hk)) r₁.2.2 (hc.logged.accepts hlog)
-  | .letIn h₁ h₂, hΓ, i, n, hlog, hk => by
-    have r₁ := h₁.nac hΓ i n
-    exact .letIn (h₁.skeleton hK hΓ i n (fun p hp => hlog p (h₂.log_grows p hp)) hk)
-      (h₂.skeleton hK (hΓ.cons r₁.2.1 r₁.2.2) (h₁.inv₂ i) r₁.1 hlog (h₁.kind_eq.trans hk))
-  | .letRec hf _ h₁ hc h₂, hΓ, i, n, hlog, hk => by
-    have r₁ := h₁.nac (hΓ.cons trivial (fun h => nomatch h)) i.fresh n
-    have i₁ := h₁.inv₂ i.fresh
-    have hlog₂ : ∀ p, p ∈ _ → p ∈ c.log := fun p hp => hlog p (h₂.log_grows p hp)
-    have hlog₁ : ∀ p, p ∈ _ → p ∈ c.log := fun p hp => hlog₂ p (hc.log_grows p hp)
-    exact .letRec hf (h₁.skeleton hK (hΓ.cons trivial (fun h => nomatch h)) i.fresh n hlog₁ hk)
-      r₁.2.2 (hc.logged.accepts hlog₂)
-      (h₂.skeleton hK (hΓ.cons trivial (fun h => nomatch h)) (hc.inv₂ i₁)
-        (hc.nac i₁ r₁.2.1 trivial r₁.1) hlog ((hc.kind_eq.trans h₁.kind_eq).trans hk))
-
-theorem TypeFields.skeleton {c : Certificate} (hK : ∀ v, K v = [] → c.kind v = []) :
-    TypeFields Γ s fs F s' → CtxNAC Γ → Inv₂ s → LogNAC s →
-    (∀ p, p ∈ s'.log → p ∈ c.log) → s.kind = K → CFields c Γ fs F
-  | .nil, _, _, _, _, _ => .nil
-  | .cons h₁ h₂, hΓ, i, n, hlog, hk =>
-    have r₁ := h₁.nac hΓ i n
-    .cons (h₁.skeleton hK hΓ i n (fun p hp => hlog p (h₂.log_grows p hp)) hk)
-      (h₂.skeleton hK hΓ (h₁.inv₂ i) r₁.1 hlog (h₁.kind_eq.trans hk))
-end
-
 /-- The model *accepts* `t` at `st`: a run from scratch, ending in a state
 without structural recursive types. -/
 def Infers (K : Nat → List String) (t : Term) (st : SType) (s' : State) : Prop :=
   TypeTerm builtins (State.initK K) t st s' ∧ ∃ r, StructRanked s'.bounds r
 
-/-- **Adequacy**: an accepted run yields a valid certificate, with a typing
-skeleton for the term at the inferred type. -/
-theorem TypeTerm.certificate (h : TypeTerm builtins (State.initK K) t st s')
-    (hr : StructRanked s'.bounds r) :
-    (s'.certificate r).Valid ∧ CTyp (s'.certificate r) builtins t st :=
-  ⟨State.certificate_valid h.inv_init (h.inv₂ Inv₂.init)
-      (h.nac builtins_NAC Inv₂.init LogNAC.init).1 (h.kinds builtins_K Inv₂.init KInv.init).1 hr,
-    h.skeleton (fun _ hv => State.certificate_kind_nil (h.kind_eq ▸ hv)) builtins_NAC Inv₂.init
-      LogNAC.init (fun _ hp => hp) rfl⟩
+/-- **Adequacy of validity**: an accepted run yields a valid certificate. -/
+theorem TypeTerm.certificateValid (h : TypeTerm builtins (State.initK K) t st s')
+    (hr : StructRanked s'.bounds r) : (s'.certificate r).Valid :=
+  State.certificate_valid h.inv_init (h.inv₂ Inv₂.init)
+    (h.nac builtins_NAC Inv₂.init LogNAC.init).1 (h.kinds builtins_K Inv₂.init KInv.init).1 hr
 
-/-! ## No recursive types in the solution -/
-
-mutual
-theorem SType.toTy_gvars : ∀ a : SType, a.toTy.gvars = a.vars
-  | .var _ | .prim _ | .abs => rfl
-  | .arrow a b => by simp only [SType.toTy, Ty.gvars, SType.vars, SType.toTy_gvars a, SType.toTy_gvars b]
-  | .record fs t => by
-    simp only [SType.toTy, Ty.gvars, SType.vars, SFields.toFields_gvars fs, SType.toTy_gvars t]
-
-theorem SFields.toFields_gvars : ∀ fs : SFields, fs.toFields.gvars = fs.vars
-  | .nil => rfl
-  | .cons _ g fs => by
-    simp only [SFields.toFields, Fields.gvars, SFields.vars, SType.toTy_gvars g,
-      SFields.toFields_gvars fs]
-end
+/-! ## No recursive types -/
 
 /-- Along a chain of variable bounds the rank does not grow; the variables
 of the non-variable bound at its end rank strictly lower. -/
@@ -500,24 +269,5 @@ theorem Clo.ranked {σ : Nat → Bounds} {r : Nat → Nat} (hr : StructRanked σ
     Clo σ n u → ∀ m ∈ u.vars, r m < r n
   | .here hu hnv, m, hm => (hr _ _ (.inl hu)).2 hnv m hm
   | .step hv hc, m, hm => Nat.lt_of_lt_of_le (hc.ranked hr m hm) ((hr _ _ (.inl hv)).1 _ rfl)
-
-/-- **No recursive types**: the solution of a valid certificate defines
-each graph variable only in terms of graph variables of lower rank. -/
-theorem Certificate.Valid.nonrec {c : Certificate} (hv : c.Valid) :
-    Defs.Ranked (defsOf c.state) c.rank := by
-  rintro n _ (⟨u, hc, rfl⟩ | ⟨_, rfl⟩) m hm
-  · rw [SType.toTy_gvars] at hm
-    exact hc.ranked hv.acyclic m hm
-  · exact nomatch hm
-
-/-- Theorem 1 again, through certificates: an accepted run has a valid
-certificate whose skeleton gives the declarative typing, over a solution
-without recursive types. -/
-theorem theorem1_cert (h : Infers K t st s') :
-    ∃ c : Certificate, Typ (defsOf c.state) builtins.toCtx t st.toTy ∧
-      ∃ r, Defs.Ranked (defsOf c.state) r := by
-  obtain ⟨h, r, hr⟩ := h
-  have hc := h.certificate hr
-  exact ⟨_, CTyp.sound hc.1 hc.2, _, hc.1.nonrec⟩
 
 end BoltCore.Alg

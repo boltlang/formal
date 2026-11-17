@@ -112,8 +112,7 @@ theorem valid : cert.Valid := by
         exact ⟨(fun _ h => nomatch h), fun _ w hw => by simp [SType.vars, int] at hw⟩
       · simp [h1, h2] at hvb
 
-/-- The skeleton: `id : ∀0. 0 ≤ ⊤ ⇒ 0 → 0` (`0` is an ordinary type
-variable, so its instances are types), used at the copy `1`. -/
+/-- The skeleton: `id : ∀0. 0 → 0`, used at the copy `1`. -/
 def ρ : Nat → Nat := fun v => if v = 0 then 1 else v
 
 def prog : Term :=
@@ -136,7 +135,6 @@ theorem skeleton : PTyp cert [] prog (.var 2) := by
         (.arrow (.var 1) (.var 1)) :=
       .inst (gen := [0]) (st := .arrow (.var 0) (.var 0)) (ρ := ρ) rfl ⟨fun v hv => by
           simp only [List.mem_singleton] at hv; simp [ρ, hv],
-        fun _ _ => rfl,
         fun α hα u hu => by
           simp only [List.mem_singleton] at hα; subst hα; rw [bounds_eq] at hu
           simp at hu,
@@ -146,7 +144,7 @@ theorem skeleton : PTyp cert [] prog (.var 2) := by
     exact .app hinst .lit (fun h => nomatch h) (.inr (by simp [cert, int]))
 
 /-- `id 1 : θ(2)`, in the declarative system, with `id` given the scheme
-`∀0. 0 ≤ ⊤ ⇒ 0 → 0` by the generalizing `let`. -/
+`∀0. 0 → 0` by the generalizing `let`. -/
 theorem typed : Typ (defsOf cert.state) [] prog (.gvar 2) :=
   PTyp.sound_top valid skeleton
 
@@ -157,13 +155,13 @@ def ann : Ann :=
 /-- The executable checker accepts the certificate and the skeleton. -/
 theorem checked : cert.check = true ∧ infer cert [] ann = some (.var 2) := by decide
 
-/-- The same in the sorted system, through the checker. -/
-example : Sorted.Typ (sdefsOf cert.state) [] prog (.gvar 2) := check_sound checked.1 checked.2
+/-- The same, through the checker. -/
+example : Typ (defsOf cert.state) [] prog (.gvar 2) := check_sound checked.1 checked.2
 
 /-! ## A constrained example
 
 `let inc = fun x -> succ x in inc 1`:
-`inc : ∀0 3. 0 ≤ int, int ≤ 3, 0 ≤ ⊤, 3 ≤ ⊤ ⇒ 0 → 3`, used at the copies `1`
+`inc : ∀0 3. 0 ≤ int, int ≤ 3 ⇒ 0 → 3`, used at the copies `1`
 and `4` of `0` and `3`, which carry the renamed bounds `1 ≤ int` and
 `int ≤ 4`; `2` is the result. -/
 
@@ -299,7 +297,6 @@ theorem skeleton : PTyp cert Γ prog (.var 2) := by
       .inst (gen := [0, 3]) (st := .arrow (.var 0) (.var 3)) (ρ := ρ) rfl ⟨fun v hv => by
           simp only [List.mem_cons, List.not_mem_nil, or_false, not_or] at hv
           simp [ρ, hv.1, hv.2],
-        fun _ _ => rfl,
         fun α hα u hu => by
           simp only [List.mem_cons, List.not_mem_nil, or_false] at hα
           rcases hα with rfl | rfl
@@ -319,8 +316,8 @@ theorem skeleton : PTyp cert Γ prog (.var 2) := by
     exact .app hinst .lit (fun h => nomatch h) (.inr (by simp [cert, int]))
 
 /-- `inc 1 : θ(2)`, with `inc` given the constrained scheme
-`∀0 3. 0 ≤ int, int ≤ 3, 0 ≤ ⊤, 3 ≤ ⊤ ⇒ 0 → 3` by the generalizing `let`. -/
-theorem typed : Typ (defsOf cert.state) (Γ.toCtx cert.bounds cert.kind .gvar) prog (.gvar 2) :=
+`∀0 3. 0 ≤ int, int ≤ 3 ⇒ 0 → 3` by the generalizing `let`. -/
+theorem typed : Typ (defsOf cert.state) (Γ.toCtx cert.bounds .gv) prog (.gvar 2) :=
   PTyp.sound_top valid skeleton
 
 def ann : Ann :=
@@ -329,7 +326,7 @@ def ann : Ann :=
 
 theorem checked : cert.check = true ∧ infer cert Γ ann = some (.var 2) := by decide
 
-example : Sorted.Typ (sdefsOf cert.state) (Γ.toSCtx cert.bounds .gv) prog (.gvar 2) :=
+example : Typ (defsOf cert.state) (Γ.toCtx cert.bounds .gv) prog (.gvar 2) :=
   check_sound checked.1 checked.2
 
 end Constrained

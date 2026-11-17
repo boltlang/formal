@@ -3,557 +3,421 @@ import BoltCore.Types
 /-!
 # Declarative subtyping
 
-Subtyping between graph variables, whose definitions may be cyclic, must be
-coinductive, but only in a *guarded* way: splitting unions and
-intersections, unfolding graph variables and comparing row tails may
-happen only finitely often between two type constructors. This is the
-formal content of the paper's `▷`/`◁` discipline (Fig. 10), where an
-assumption only becomes usable after passing through a function or record
-type.
+`Step E R` is one layer of subtyping,
+defined inductively, using the coinductive hypothesis `R` only under a
+function type or a record (the paper's `▷`/`◁`), and `Sub` is its greatest
+fixed point (Knaster–Tarski), with the coinduction principle `Sub.coind`.
+Graph variables (`gvar`) are defined by sets of upper bounds (`Defs`):
+named, possibly mutually recursive definitions without binders, which is
+how solutions are expressed. With sorts:
 
-We encode this without any coinduction support from Lean:
+* `⊤` is the top of every sort, with no side condition. At sort `field` it
+  is `Abs`: `pre τ ≤ Abs` is an instance of the `top` rule, and nothing
+  derives `Abs ≤ pre τ` (`not_abs_le_pre`). So `Abs` is strictly above every
+  present field, `pre ⊤` included, by the shape of the rules.
+* Rows are compared label by label, in one layer (`row`), and records
+  compare their rows under the hypothesis (`rcd`). Every comparison of rows
+  holds field by field (`Step.fields`), so a constraint between rows needs no
+  separate field-wise reading.
+* Fields: `pre τ₁ ≤ pre τ₂` when `τ₁ ≤ τ₂` (S-Pre), in the same layer.
 
-* `Step E R a b` is one layer of subtyping, defined *inductively*. It uses the
-  relation `R` only under a function type or a record field.
-* `Sub` is the greatest fixed point of `Step`: `a ≤ b` iff some relation `R`
-  containing `(a, b)` is closed under `Step` (Knaster–Tarski).
-  `Sub.coind` is the corresponding coinduction principle.
-
-Records are compared as rows, i.e. total maps from labels to fields (as
-in `Rows.lean`): `{fs | t} ≤ {gs | u}` holds when *every* label's field is
-related, where `Ty.field` looks a label up in the explicit fields and
-otherwise in the tail. The comparison of each field goes through the
-coinductive hypothesis (a record field is a constructor), and tails need no
-separate rule. A row variable's fields are opaque atoms `proj l ρ`, related
-only to themselves (and to `Abs`), or through a graph variable's
-definitions.
-
-`Abs` is *strictly above* `⊤`. `Abs` is the top of everything: it promises
-nothing about a field, not even that it is there. `⊤` is the top of types:
-some value. So `Abs ≤ ⊤` fails (`not_abs_le_top`), `{} ≤ {x : ⊤}` fails, and
-"`τ ≤ ⊤`" says that a field of type `τ` is present, which is what the
-typing rule for selection asks (`Typing.lean`).
-
-There are no structural recursive types (`Types.lean`); a recursive type
-can only arise through graph-variable definitions, which the model only
-allows without a cycle through a type constructor. The MLsub lattice
-equations that the simplifier relies on (merging intersections of
-functions or records, distributivity) are not included.
+Cut elimination splits by sort. For types and fields it is an induction on
+the two finite derivations (`cut_nr`, through a *pending cut*, `Pend`):
+their derivations never compare rows, since rows only occur under `rcd`,
+i.e. under the hypothesis. Rows are then cut field by field. The MLsub
+lattice equations are not included (`Lattice.lean`).
 -/
 
 namespace BoltCore
 
-/-- Definitions of graph variables (`Ty.gvar`): `E n` is a set of upper
-bounds, and `gvar n` stands for their intersection. This is how solutions of
-constraint systems are expressed (see `Solution.lean`): named, possibly
-mutually recursive definitions, without binders. Using a *set* (rather than
-one type) lets the set be given by an inductive reachability predicate, so
-that cycles between variables need no special treatment. -/
-abbrev Defs := Nat → Ty → Prop
+/-- Definitions of graph variables, by sort: `gvar n` at sort `s` stands for
+the intersection of the `u` with `E s n u`. -/
+abbrev Defs := (s : Srt) → Nat → Ty s → Prop
+
+/-- Relations between terms of the same sort. -/
+abbrev Rel := (s : Srt) → Ty s → Ty s → Prop
 
 variable {E : Defs}
 
-mutual
-/-- The graph variables occurring in a type. -/
-def Ty.gvars : Ty → List Nat
-  | .gvar n => [n]
-  | .top | .bot | .abs | .prim _ | .fvar _ => []
-  | .union a b | .inter a b | .arrow a b => a.gvars ++ b.gvars
-  | .record fs t => fs.gvars ++ t.gvars
-  | .proj _ t => t.gvars
+/-- Definitions without recursive types: definitions only mention graph
+variables of strictly lower rank. -/
+def Defs.Ranked (E : Defs) (r : Nat → Nat) : Prop :=
+  ∀ s n (u : Ty s), E s n u → ∀ m ∈ u.gvars, r m < r n
 
-def Fields.gvars : Fields → List Nat
-  | .nil => []
-  | .cons _ f fs => f.gvars ++ fs.gvars
-end
-
-/-- Definitions without recursive types: a graph variable's definitions
-only mention graph variables of strictly lower rank. -/
-def Defs.Ranked (E : Defs) (r : Nat → Nat) : Prop := ∀ n u, E n u → ∀ m ∈ u.gvars, r m < r n
-
-/-- Syntactically a type: not `Abs`, a field of an opaque row, or
-something whose meaning depends on its parts or its definitions. Only these
-are below `⊤` outright; unions, intersections and graph variables are below
-`⊤` through their own rules. So `Abs` (any value, *or no field at all*) is
-strictly above `⊤` (any value). -/
-def Ty.IsType : Ty → Prop
-  | .top | .prim _ | .arrow _ _ | .record _ _ | .fvar _ => True
+/-- Atoms: variables, primitives and opaque fields. -/
+def Ty.IsAtom : Ty s → Prop
+  | .fvar _ | .gvar _ | .prim _ | .proj _ _ => True
   | _ => False
 
 /-- One layer of subtyping, relative to the coinductive hypothesis `R`. -/
-inductive Step (E : Defs) (R : Ty → Ty → Prop) : Ty → Ty → Prop where
-  /-- Every type is below `⊤`; `Abs` is not. -/
-  | top : a.IsType → Step E R a .top
+inductive Step (E : Defs) (R : Rel) : {s : Srt} → Ty s → Ty s → Prop where
+  | top : Step E R a .top
   | bot : Step E R .bot b
-  /-- `Abs` is the top field and the top row. -/
-  | abs : Step E R a .abs
-  | prim : Step E R (.prim n) (.prim n)
-  | fvar : Step E R (.fvar x) (.fvar x)
   | unionL : Step E R a₁ b → Step E R a₂ b → Step E R (.union a₁ a₂) b
   | unionR₁ : Step E R a b₁ → Step E R a (.union b₁ b₂)
   | unionR₂ : Step E R a b₂ → Step E R a (.union b₁ b₂)
   | interL₁ : Step E R a₁ b → Step E R (.inter a₁ a₂) b
   | interL₂ : Step E R a₂ b → Step E R (.inter a₁ a₂) b
   | interR : Step E R a b₁ → Step E R a b₂ → Step E R a (.inter b₁ b₂)
-  /-- Function types: the hypothesis `R` becomes usable here (◁). -/
-  | arrow : R b₁ a₁ → R a₂ b₂ → Step E R (.arrow a₁ a₂) (.arrow b₁ b₂)
-  /-- Records, compared as rows: every label's field, under `R` (◁). -/
-  | record :
-      (∀ l, R ((Ty.record fs t).field l) ((Ty.record gs u).field l)) →
-      Step E R (.record fs t) (.record gs u)
-  /-- A field of an opaque row is only known to be itself. -/
-  | proj : Step E R (.proj l t) (.proj l t)
+  | fvar : Step E R (.fvar x : Ty s) (.fvar x)
   /-- A graph variable is related to itself. -/
-  | gvar : Step E R (.gvar n) (.gvar n)
+  | gvar : Step E R (.gvar n : Ty s) (.gvar n)
   /-- A graph variable is below each of its upper bounds (like `interL`). -/
-  | defL : E n u → Step E R u b → Step E R (.gvar n) b
+  | defL : E s n u → Step E R u b → Step E R (.gvar n) b
   /-- Below all upper bounds of a graph variable is below it (like `interR`). -/
-  | defR : (∀ u, E n u → Step E R a u) → Step E R a (.gvar n)
-  /-- The same for a field of a graph row variable. -/
-  | projDefL : E n u → Step E R (u.field l) b → Step E R (.proj l (.gvar n)) b
-  | projDefR : (∀ u, E n u → Step E R a (u.field l)) → Step E R a (.proj l (.gvar n))
+  | defR : (∀ u, E s n u → Step E R a u) → Step E R a (.gvar n)
+  | prim : Step E R (.prim n) (.prim n)
+  /-- Function types: the hypothesis `R` becomes usable here (◁). -/
+  | arrow : R .ty b₁ a₁ → R .ty a₂ b₂ → Step E R (.arrow a₁ a₂) (.arrow b₁ b₂)
+  /-- Records compare their rows under the hypothesis (◁). -/
+  | rcd : R .row ρ₁ ρ₂ → Step E R (.rcd ρ₁) (.rcd ρ₂)
+  /-- Rows are compared label by label. -/
+  | row {ρ₁ ρ₂ : Ty .row} : (∀ l, Step E R (ρ₁.field l) (ρ₂.field l)) → Step E R ρ₁ ρ₂
+  /-- S-Pre. -/
+  | pre : Step E R τ₁ τ₂ → Step E R (.pre τ₁) (.pre τ₂)
+  /-- A field of an opaque row is only known to be itself. -/
+  | proj : Step E R (.proj l ρ) (.proj l ρ)
+  /-- The field of a graph row variable, through its definitions. -/
+  | projDefL {u : Ty .row} {b : Ty .field} : E .row n u → Step E R (u.field l) b →
+      Step E R (.proj l (.gvar n)) b
+  | projDefR {a : Ty .field} : (∀ u : Ty .row, E .row n u → Step E R a (u.field l)) →
+      Step E R a (.proj l (.gvar n))
 
-theorem Step.mono (hR : ∀ x y, R x y → R' x y) : Step E R a b → Step E R' a b := by
+theorem Step.mono {R R' : Rel} (hR : ∀ s x y, R s x y → R' s x y) {s : Srt} {a b : Ty s} :
+    Step E R a b → Step E R' a b := by
   intro h
   induction h with
-  | top h => exact .top h
+  | top => exact .top
   | bot => exact .bot
-  | abs => exact .abs
-  | prim => exact .prim
-  | fvar => exact .fvar
   | unionL _ _ ih₁ ih₂ => exact .unionL ih₁ ih₂
   | unionR₁ _ ih => exact .unionR₁ ih
   | unionR₂ _ ih => exact .unionR₂ ih
   | interL₁ _ ih => exact .interL₁ ih
   | interL₂ _ ih => exact .interL₂ ih
   | interR _ _ ih₁ ih₂ => exact .interR ih₁ ih₂
-  | arrow h₁ h₂ => exact .arrow (hR _ _ h₁) (hR _ _ h₂)
-  | record hf => exact .record (fun l => hR _ _ (hf l))
-  | proj => exact .proj
+  | fvar => exact .fvar
   | gvar => exact .gvar
   | defL hd _ ih => exact .defL hd ih
   | defR _ ih => exact .defR ih
+  | prim => exact .prim
+  | arrow h₁ h₂ => exact .arrow (hR _ _ _ h₁) (hR _ _ _ h₂)
+  | rcd h => exact .rcd (hR _ _ _ h)
+  | row _ ih => exact .row ih
+  | pre _ ih => exact .pre ih
+  | proj => exact .proj
   | projDefL hd _ ih => exact .projDefL hd ih
   | projDefR _ ih => exact .projDefR ih
 
-/-- Subtyping: the greatest fixed point of `Step`. -/
-def Sub (E : Defs) (a b : Ty) : Prop :=
-  ∃ R : Ty → Ty → Prop, (∀ x y, R x y → Step E R x y) ∧ R a b
+/-- **Rows compare field by field**: every comparison of rows, by any rule,
+gives one between each pair of fields. -/
+theorem Step.fields {R : Rel} {s : Srt} {a b : Ty s} (h : Step E R a b) (l : String) :
+    Step E R (a.field l) (b.field l) := by
+  induction h with
+  | top => cases ‹Srt› <;> simp only [Ty.field] <;> exact .top
+  | bot => cases ‹Srt› <;> simp only [Ty.field] <;> first | exact .top | exact .bot
+  | unionL _ _ ih₁ ih₂ =>
+    cases ‹Srt› <;> simp only [Ty.field] at * <;> first | exact .top | exact .unionL ih₁ ih₂
+  | unionR₁ _ ih =>
+    cases ‹Srt› <;> simp only [Ty.field] at * <;> first | exact .top | exact .unionR₁ ih
+  | unionR₂ _ ih =>
+    cases ‹Srt› <;> simp only [Ty.field] at * <;> first | exact .top | exact .unionR₂ ih
+  | interL₁ _ ih =>
+    cases ‹Srt› <;> simp only [Ty.field] at * <;> first | exact .top | exact .interL₁ ih
+  | interL₂ _ ih =>
+    cases ‹Srt› <;> simp only [Ty.field] at * <;> first | exact .top | exact .interL₂ ih
+  | interR _ _ ih₁ ih₂ =>
+    cases ‹Srt› <;> simp only [Ty.field] at * <;> first | exact .top | exact .interR ih₁ ih₂
+  | fvar => cases ‹Srt› <;> simp only [Ty.field] <;> first | exact .top | exact .proj
+  | gvar => cases ‹Srt› <;> simp only [Ty.field] <;> first | exact .top | exact .proj
+  | defL hd _ ih =>
+    cases ‹Srt› <;> simp only [Ty.field] at * <;> first | exact .top | exact .projDefL hd ih
+  | defR _ ih =>
+    cases ‹Srt› <;> simp only [Ty.field] at * <;> first | exact .top | exact .projDefR ih
+  | prim | arrow | rcd | pre | proj | projDefL | projDefR =>
+    first | exact .top | (simp only [Ty.field]; exact .top)
+  | row h _ => exact h l
 
-/-- Coinduction: to show `a ≤ b`, give a relation containing `(a, b)` that
-is closed under one layer of subtyping. -/
-theorem Sub.coind (R : Ty → Ty → Prop) (hR : ∀ x y, R x y → Step E R x y) (h : R a b) :
-    Sub E a b :=
+/-! ## The greatest fixed point -/
+
+/-- Subtyping: the greatest fixed point of `Step`. -/
+def Sub (E : Defs) {s : Srt} (a b : Ty s) : Prop :=
+  ∃ R : Rel, (∀ s x y, R s x y → Step E R x y) ∧ R s a b
+
+/-- `Sub` as a relation at every sort. -/
+abbrev SubR (E : Defs) : Rel := fun _ a b => Sub E a b
+
+theorem Sub.coind (R : Rel) (hR : ∀ s x y, R s x y → Step E R x y) {s : Srt} {a b : Ty s}
+    (h : R s a b) : Sub E a b :=
   ⟨R, hR, h⟩
 
-/-- `Sub` is a post-fixed point: every subtyping fact unfolds one layer. -/
-theorem Sub.step (h : Sub E a b) : Step E (Sub E) a b := by
+theorem Sub.step {s : Srt} {a b : Ty s} (h : Sub E a b) : Step E (SubR E) a b := by
   obtain ⟨R, hR, hab⟩ := h
-  exact (hR _ _ hab).mono (fun _ _ hxy => ⟨R, hR, hxy⟩)
+  exact (hR _ _ _ hab).mono (fun _ _ _ hxy => ⟨R, hR, hxy⟩)
 
-/-- `Sub` is a pre-fixed point: one layer over `Sub` is a subtyping fact. -/
-theorem Sub.of_step (h : Step E (Sub E) a b) : Sub E a b := by
-  refine ⟨fun x y => Sub E x y ∨ (x = a ∧ y = b), ?_, Or.inr ⟨rfl, rfl⟩⟩
-  have up : ∀ x y, Sub E x y → Sub E x y ∨ (x = a ∧ y = b) := fun _ _ h => Or.inl h
-  rintro x y (hs | ⟨rfl, rfl⟩)
+theorem Sub.of_step {s : Srt} {a b : Ty s} (h : Step E (SubR E) a b) : Sub E a b := by
+  refine ⟨fun s' x y => Sub E x y ∨ (∃ e : s' = s, e ▸ x = a ∧ e ▸ y = b), ?_, Or.inr ⟨rfl, rfl, rfl⟩⟩
+  have up : ∀ s' (x y : Ty s'), Sub E x y →
+      Sub E x y ∨ (∃ e : s' = s, e ▸ x = a ∧ e ▸ y = b) := fun _ _ _ h => Or.inl h
+  rintro s' x y (hs | ⟨rfl, rfl, rfl⟩)
   · exact hs.step.mono up
   · exact h.mono up
 
-/-! ## Basic lattice facts -/
+theorem Sub.top {s : Srt} {a : Ty s} : Sub E a .top := Sub.of_step .top
+theorem Sub.bot {s : Srt} {b : Ty s} : Sub E .bot b := Sub.of_step .bot
 
-theorem Sub.top (h : a.IsType) : Sub E a .top := Sub.of_step (.top h)
-theorem Sub.bot : Sub E .bot b := Sub.of_step .bot
-theorem Sub.abs : Sub E a .abs := Sub.of_step .abs
+/-- Rows related by subtyping are related field by field. -/
+theorem Sub.fields {a b : Ty .row} (h : Sub E a b) (l : String) : Sub E (a.field l) (b.field l) :=
+  Sub.of_step (h.step.fields l)
+
+/-- Rows related field by field are related. -/
+theorem Sub.row {a b : Ty .row} (h : ∀ l, Sub E (a.field l) (b.field l)) : Sub E a b :=
+  Sub.of_step (.row fun l => (h l).step)
 
 /-! ## Reflexivity -/
 
-theorem step_refl : (t : Ty) → Step E Eq t t
-  | .top => .top trivial
-  | .bot => .bot
-  | .abs => .abs
-  | .prim _ => .prim
-  | .fvar _ => .fvar
-  | .union a b => .unionL (.unionR₁ (step_refl a)) (.unionR₂ (step_refl b))
-  | .inter a b => .interR (.interL₁ (step_refl a)) (.interL₂ (step_refl b))
-  | .arrow _ _ => .arrow rfl rfl
-  | .record _ _ => .record fun _ => rfl
-  | .proj _ _ => .proj
-  | .gvar _ => .gvar
+theorem step_refl : {s : Srt} → (t : Ty s) → Step E (fun _ => Eq) t t
+  | _, .top => .top
+  | _, .bot => .bot
+  | _, .union a b => .unionL (.unionR₁ (step_refl a)) (.unionR₂ (step_refl b))
+  | _, .inter a b => .interR (.interL₁ (step_refl a)) (.interL₂ (step_refl b))
+  | _, .fvar _ => .fvar
+  | _, .gvar _ => .gvar
+  | _, .prim _ => .prim
+  | _, .arrow _ _ => .arrow rfl rfl
+  | _, .rcd _ => .rcd rfl
+  | _, .cons l θ ρ => .row fun l' => by
+      simp only [Ty.field]
+      split
+      · exact step_refl θ
+      · exact (step_refl ρ).fields l'
+  | _, .pre τ => .pre (step_refl τ)
+  | _, .proj _ _ => .proj
 
-/-- Every type is a subtype of itself. -/
-theorem Sub.refl : Sub E t t :=
-  Sub.coind Eq (by rintro x y rfl; exact step_refl x) rfl
+theorem Sub.refl {s : Srt} {t : Ty s} : Sub E t t :=
+  Sub.coind (fun _ => Eq) (by rintro _ x y rfl; exact step_refl x) rfl
 
-/-! ## Transitivity
+/-! ## Transitivity -/
 
-Transitivity is coinductive too: the composition `Comp` of `Sub` with
-itself is closed under `Step`. That reduces to a cut-elimination lemma on
-single layers (`cut`): from finite derivations of `x ≤ y` and `y ≤ z`, build
-one of `x ≤ z` whose guarded premises are again compositions. It goes by
-induction on the left derivation; when that derivation ends with a rule
-that takes `y` apart (`unionR`, `interR`, or a constructor rule),
-one of the `cut_*` lemmas below does an induction on the right derivation:
-rules that take `z` apart commute outward, and the rule that takes `y`
-apart must be the matching one (`unionL`, `interL`, the same
-constructor), which cuts on smaller derivations. No rule takes `⊤` or `Abs`
-apart on the left, so those cases are vacuous. When the right derivation
-ends with the `⊤` rule, `y` is syntactically a type, and so is `x`, since
-the left derivation ended with the rule for `y`'s constructor. -/
-
-/-- A relation, or its composition with itself. Including `R` itself lets
-a cut against the reflexive atom rule of a *defined* variable reuse the
-original derivation. The cut works for any relation `R` in the guarded
-premises; transitivity of `Sub` is the case `R = Sub E`. -/
-def RComp (R : Ty → Ty → Prop) (x z : Ty) : Prop := R x z ∨ ∃ y, R x y ∧ R y z
-
-/-- Subtyping, or the composition of subtyping with itself. -/
-abbrev Comp (E : Defs) : Ty → Ty → Prop := RComp (Sub E)
+/-- A relation, or its composition with itself. -/
+def RComp (R : Rel) : Rel := fun _ x z => R _ x z ∨ ∃ y, R _ x y ∧ R _ y z
 
 section Cut
 
-variable {x : Ty} {R : Ty → Ty → Prop}
+variable {R : Rel}
 
-/- Each `cut_*` lemma handles one shape of the middle type `y`, by
-induction on the right derivation. Rules that take `z` apart commute
-outward; the rule that takes `y` apart must be the matching one. -/
+theorem Step.toComp {s : Srt} {a b : Ty s} (h : Step E R a b) : Step E (RComp R) a b :=
+  h.mono fun _ _ _ h => .inl h
 
-/-- Lift a subtyping derivation into the hypothesis of the cut. -/
-theorem Step.toComp (h : Step E R a b) : Step E (RComp R) a b :=
-  h.mono fun _ _ h => .inl h
+/-- A *pending cut*: `x ≤ y` was derived by a rule that takes `y` apart (or
+`y` is an atom equal to `x`, or `⊤`), with what is needed to cut it against
+any derivation from `y`: the induction hypotheses for the smaller
+derivations, or the guarded premises. -/
+inductive Pend (E : Defs) (R : Rel) : {s : Srt} → Ty s → Ty s → Prop where
+  | top : Pend E R x .top
+  | atom : x.IsAtom → Pend E R x x
+  | unionR₁ : (∀ z, Step E R y₁ z → Step E (RComp R) x z) → Pend E R x (.union y₁ y₂)
+  | unionR₂ : (∀ z, Step E R y₂ z → Step E (RComp R) x z) → Pend E R x (.union y₁ y₂)
+  | interR : (∀ z, Step E R y₁ z → Step E (RComp R) x z) →
+      (∀ z, Step E R y₂ z → Step E (RComp R) x z) → Pend E R x (.inter y₁ y₂)
+  | defR : (∀ u, E s n u → Step E R x u) →
+      (∀ u, E s n u → ∀ z, Step E R u z → Step E (RComp R) x z) → Pend E R x (.gvar n)
+  | projDefR {x : Ty .field} : (∀ u : Ty .row, E .row n u → Step E R x (u.field l)) →
+      (∀ u : Ty .row, E .row n u → ∀ z, Step E R (u.field l) z → Step E (RComp R) x z) →
+      Pend E R x (.proj l (.gvar n))
+  | arrow : R .ty b₁ a₁ → R .ty a₂ b₂ → Pend E R (.arrow a₁ a₂) (.arrow b₁ b₂)
+  | rcd : R .row ρ₁ ρ₂ → Pend E R (.rcd ρ₁) (.rcd ρ₂)
+  | pre : (∀ z, Step E R τ₂ z → Step E (RComp R) τ₁ z) → Pend E R (.pre τ₁) (.pre τ₂)
 
-theorem cut_top (hx : x.IsType) : ∀ y z, Step E R y z → y = .top → Step E (RComp R) x z := by
-  intro y z h
+/-- A pending cut against a derivation from `y`, at a sort other than `row`,
+by induction on that derivation: rules that take `z` apart commute outward,
+and the rule that takes `y` apart meets the matching pending rule. -/
+theorem cut_right {s : Srt} {y z : Ty s} (h : Step E R y z) :
+    s ≠ .row → ∀ {x}, Pend E R x y → Step E (RComp R) x z := by
   induction h with
-  | top _ => intro _; exact .top hx
-  | abs => intro _; exact .abs
-  | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
-  | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
-  | interR _ _ ih₁' ih₂' => intro hy; exact .interR (ih₁' hy) (ih₂' hy)
-  | defR _ ih' => intro hy; exact .defR fun u hu => ih' u hu hy
-  | projDefR _ ih' => intro hy; exact .projDefR fun u hu => ih' u hu hy
-  | bot | prim | fvar | proj | gvar | unionL | interL₁ | interL₂ | arrow | record | defL | projDefL =>
-    intro hy; cases hy
+  | top => intro _ _ _; exact .top
+  | unionR₁ _ ih => intro hs _ hp; exact .unionR₁ (ih hs hp)
+  | unionR₂ _ ih => intro hs _ hp; exact .unionR₂ (ih hs hp)
+  | interR _ _ ih₁ ih₂ => intro hs _ hp; exact .interR (ih₁ hs hp) (ih₂ hs hp)
+  | defR _ ih => intro hs _ hp; exact .defR fun u hu => ih u hu hs hp
+  | projDefR _ ih => intro _ _ hp; exact .projDefR fun u hu => ih u hu (by decide) hp
+  | row => intro hs; exact absurd rfl hs
+  | bot => intro _ _ hp; cases hp with | atom h => simp [Ty.IsAtom] at h
+  | fvar => intro _ _ hp; cases hp with | atom => exact .fvar
+  | prim => intro _ _ hp; cases hp with | atom => exact .prim
+  | gvar => intro _ _ hp; cases hp with
+    | atom => exact .gvar
+    | defR hl _ => exact (Step.defR hl).toComp
+  | proj => intro _ _ hp; cases hp with
+    | atom => exact .proj
+    | projDefR hl _ => exact (Step.projDefR hl).toComp
+  | unionL h₁ h₂ _ _ => intro _ _ hp; cases hp with
+    | atom h => simp [Ty.IsAtom] at h
+    | unionR₁ ih => exact ih _ h₁
+    | unionR₂ ih => exact ih _ h₂
+  | interL₁ h _ => intro _ _ hp; cases hp with
+    | atom h => simp [Ty.IsAtom] at h
+    | interR ih _ => exact ih _ h
+  | interL₂ h _ => intro _ _ hp; cases hp with
+    | atom h => simp [Ty.IsAtom] at h
+    | interR _ ih => exact ih _ h
+  | defL hd h _ => intro _ _ hp; cases hp with
+    | atom => exact (Step.defL hd h).toComp
+    | defR _ ih => exact ih _ hd _ h
+  | projDefL hd h _ => intro _ _ hp; cases hp with
+    | atom => exact (Step.projDefL hd h).toComp
+    | projDefR _ ih => exact ih _ hd _ h
+  | arrow g₁ g₂ => intro _ _ hp; cases hp with
+    | atom h => simp [Ty.IsAtom] at h
+    | arrow h₁ h₂ => exact .arrow (.inr ⟨_, g₁, h₁⟩) (.inr ⟨_, h₂, g₂⟩)
+  | rcd g => intro _ _ hp; cases hp with
+    | atom h => simp [Ty.IsAtom] at h
+    | rcd h => exact .rcd (.inr ⟨_, h, g⟩)
+  | pre g => intro _ _ hp; cases hp with
+    | atom h => simp [Ty.IsAtom] at h
+    | pre ih => exact .pre (ih _ g)
 
-theorem cut_abs : ∀ y z, Step E R y z → y = .abs → Step E (RComp R) x z := by
-  intro y z h
-  induction h with
-  | top ht => intro hy; subst hy; exact ht.elim
-  | abs => intro _; exact .abs
-  | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
-  | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
-  | interR _ _ ih₁' ih₂' => intro hy; exact .interR (ih₁' hy) (ih₂' hy)
-  | defR _ ih' => intro hy; exact .defR fun u hu => ih' u hu hy
-  | projDefR _ ih' => intro hy; exact .projDefR fun u hu => ih' u hu hy
-  | bot | prim | fvar | proj | gvar | unionL | interL₁ | interL₂ | arrow | record | defL | projDefL =>
-    intro hy; cases hy
+/-- Cut for one layer, at the sorts of types and fields (whose derivations
+never compare rows), by induction on the left derivation. -/
+theorem cut_nr {s : Srt} {x y : Ty s} (hl : Step E R x y) :
+    s ≠ .row → ∀ z, Step E R y z → Step E (RComp R) x z := by
+  induction hl with
+  | top => intro hs z hr; exact cut_right hr hs .top
+  | bot => intro _ _ _; exact .bot
+  | fvar => intro hs z hr; exact cut_right hr hs (.atom trivial)
+  | gvar => intro hs z hr; exact cut_right hr hs (.atom trivial)
+  | prim => intro hs z hr; exact cut_right hr hs (.atom trivial)
+  | proj => intro hs z hr; exact cut_right hr hs (.atom trivial)
+  | unionL _ _ ih₁ ih₂ => intro hs z hr; exact .unionL (ih₁ hs z hr) (ih₂ hs z hr)
+  | unionR₁ _ ih => intro hs z hr; exact cut_right hr hs (.unionR₁ (ih hs))
+  | unionR₂ _ ih => intro hs z hr; exact cut_right hr hs (.unionR₂ (ih hs))
+  | interL₁ _ ih => intro hs z hr; exact .interL₁ (ih hs z hr)
+  | interL₂ _ ih => intro hs z hr; exact .interL₂ (ih hs z hr)
+  | interR _ _ ih₁ ih₂ => intro hs z hr; exact cut_right hr hs (.interR (ih₁ hs) (ih₂ hs))
+  | defL hd _ ih => intro hs z hr; exact .defL hd (ih hs z hr)
+  | defR hl ih => intro hs z hr; exact cut_right hr hs (.defR hl fun u hu => ih u hu hs)
+  | arrow h₁ h₂ => intro hs z hr; exact cut_right hr hs (.arrow h₁ h₂)
+  | rcd h => intro hs z hr; exact cut_right hr hs (.rcd h)
+  | row => intro hs; exact absurd rfl hs
+  | pre _ ih => intro hs z hr; exact cut_right hr hs (.pre (ih (by decide)))
+  | projDefL hd _ ih => intro _ z hr; exact .projDefL hd (ih (by decide) z hr)
+  | projDefR hl ih =>
+    intro hs z hr; exact cut_right hr hs (.projDefR hl fun u hu => ih u hu (by decide))
 
-/-- Atoms (`prim`, `fvar`, `proj`, `gvar`): `x` is the atom itself. A graph
-variable may also be unfolded by the right derivation, which is then
-already a derivation from `x`. -/
-theorem cut_atom
-    (hatom : (∃ n, x = .prim n) ∨ (∃ v, x = .fvar v) ∨ (∃ l t, x = .proj l t) ∨
-      (∃ n, x = .gvar n)) :
-    ∀ y z, Step E R y z → y = x → Step E (RComp R) x z := by
-  intro y z h
-  induction h with
-  | top ht => intro hy; subst hy; exact .top ht
-  | abs => intro _; exact .abs
-  | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
-  | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
-  | interR _ _ ih₁' ih₂' => intro hy; exact .interR (ih₁' hy) (ih₂' hy)
-  | defR _ ih' => intro hy; exact .defR fun u hu => ih' u hu hy
-  | projDefR _ ih' => intro hy; exact .projDefR fun u hu => ih' u hu hy
-  | prim => intro hy; subst hy; exact .prim
-  | fvar => intro hy; subst hy; exact .fvar
-  | proj => intro hy; subst hy; exact .proj
-  | gvar => intro hy; subst hy; exact .gvar
-  | defL hd h' _ => intro hy; subst hy; exact (Step.defL hd h').toComp
-  | projDefL hd h' _ => intro hy; subst hy; exact (Step.projDefL hd h').toComp
-  | bot | unionL | interL₁ | interL₂ | arrow | record =>
-    intro hy; subst hy
-    rcases hatom with ⟨_, h⟩ | ⟨_, h⟩ | ⟨_, _, h⟩ | ⟨_, h⟩ <;> cases h
-
-theorem cut_unionR₁ (ih : ∀ z, Step E R y₁ z → Step E (RComp R) x z) :
-    ∀ y z, Step E R y z → y = .union y₁ y₂ → Step E (RComp R) x z := by
-  intro y z h
-  induction h with
-  | top ht => intro hy; subst hy; exact ht.elim
-  | abs => intro _; exact .abs
-  | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
-  | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
-  | interR _ _ ih₁' ih₂' => intro hy; exact .interR (ih₁' hy) (ih₂' hy)
-  | defR _ ih' => intro hy; exact .defR fun u hu => ih' u hu hy
-  | projDefR _ ih' => intro hy; exact .projDefR fun u hu => ih' u hu hy
-  | unionL h₁ _ _ _ => intro hy; cases hy; exact ih _ h₁
-  | bot | prim | fvar | proj | gvar | interL₁ | interL₂ | arrow | record | defL | projDefL =>
-    intro hy; cases hy
-
-theorem cut_unionR₂ (ih : ∀ z, Step E R y₂ z → Step E (RComp R) x z) :
-    ∀ y z, Step E R y z → y = .union y₁ y₂ → Step E (RComp R) x z := by
-  intro y z h
-  induction h with
-  | top ht => intro hy; subst hy; exact ht.elim
-  | abs => intro _; exact .abs
-  | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
-  | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
-  | interR _ _ ih₁' ih₂' => intro hy; exact .interR (ih₁' hy) (ih₂' hy)
-  | defR _ ih' => intro hy; exact .defR fun u hu => ih' u hu hy
-  | projDefR _ ih' => intro hy; exact .projDefR fun u hu => ih' u hu hy
-  | unionL _ h₂ _ _ => intro hy; cases hy; exact ih _ h₂
-  | bot | prim | fvar | proj | gvar | interL₁ | interL₂ | arrow | record | defL | projDefL =>
-    intro hy; cases hy
-
-theorem cut_interR (ih₁ : ∀ z, Step E R y₁ z → Step E (RComp R) x z)
-    (ih₂ : ∀ z, Step E R y₂ z → Step E (RComp R) x z) :
-    ∀ y z, Step E R y z → y = .inter y₁ y₂ → Step E (RComp R) x z := by
-  intro y z h
-  induction h with
-  | top ht => intro hy; subst hy; exact ht.elim
-  | abs => intro _; exact .abs
-  | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
-  | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
-  | interR _ _ ih₁' ih₂' => intro hy; exact .interR (ih₁' hy) (ih₂' hy)
-  | defR _ ih' => intro hy; exact .defR fun u hu => ih' u hu hy
-  | projDefR _ ih' => intro hy; exact .projDefR fun u hu => ih' u hu hy
-  | interL₁ h _ => intro hy; cases hy; exact ih₁ _ h
-  | interL₂ h _ => intro hy; cases hy; exact ih₂ _ h
-  | bot | prim | fvar | proj | gvar | unionL | arrow | record | defL | projDefL =>
-    intro hy; cases hy
-
-/-- The middle type is a graph variable, reached by `defR` on the left (so
-`x` is below all its upper bounds): against the right's atom rule the left
-derivation itself is the result; against `defL` (one upper bound below `z`)
-the two cut on that upper bound. -/
-theorem cut_defR (hl : ∀ u, E n u → Step E R x u)
-    (ih : ∀ u, E n u → ∀ z, Step E R u z → Step E (RComp R) x z) :
-    ∀ y z, Step E R y z → y = .gvar n → Step E (RComp R) x z := by
-  intro y z h
-  induction h with
-  | top ht => intro hy; subst hy; exact ht.elim
-  | abs => intro _; exact .abs
-  | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
-  | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
-  | interR _ _ ih₁' ih₂' => intro hy; exact .interR (ih₁' hy) (ih₂' hy)
-  | defR _ ih' => intro hy; exact .defR fun u hu => ih' u hu hy
-  | projDefR _ ih' => intro hy; exact .projDefR fun u hu => ih' u hu hy
-  | gvar => intro hy; cases hy; exact (Step.defR hl).toComp
-  | defL hd h _ => intro hy; cases hy; exact ih _ hd _ h
-  | bot | prim | fvar | proj | unionL | interL₁ | interL₂ | arrow | record | projDefL =>
-    intro hy; cases hy
-
-theorem cut_projDefR (hl : ∀ u, E n u → Step E R x (u.field l))
-    (ih : ∀ u, E n u → ∀ z, Step E R (u.field l) z → Step E (RComp R) x z) :
-    ∀ y z, Step E R y z → y = .proj l (.gvar n) → Step E (RComp R) x z := by
-  intro y z h
-  induction h with
-  | top ht => intro hy; subst hy; exact ht.elim
-  | abs => intro _; exact .abs
-  | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
-  | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
-  | interR _ _ ih₁' ih₂' => intro hy; exact .interR (ih₁' hy) (ih₂' hy)
-  | defR _ ih' => intro hy; exact .defR fun u hu => ih' u hu hy
-  | projDefR _ ih' => intro hy; exact .projDefR fun u hu => ih' u hu hy
-  | proj => intro hy; cases hy; exact (Step.projDefR hl).toComp
-  | projDefL hd h _ => intro hy; cases hy; exact ih _ hd _ h
-  | bot | prim | fvar | gvar | unionL | interL₁ | interL₂ | arrow | record | defL =>
-    intro hy; cases hy
-
-theorem cut_arrow (h₁ : R b₁ a₁) (h₂ : R a₂ b₂) :
-    ∀ y z, Step E R y z → y = .arrow b₁ b₂ → Step E (RComp R) (.arrow a₁ a₂) z := by
-  intro y z h
-  induction h with
-  | top _ => intro _; exact .top trivial
-  | abs => intro _; exact .abs
-  | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
-  | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
-  | interR _ _ ih₁' ih₂' => intro hy; exact .interR (ih₁' hy) (ih₂' hy)
-  | defR _ ih' => intro hy; exact .defR fun u hu => ih' u hu hy
-  | projDefR _ ih' => intro hy; exact .projDefR fun u hu => ih' u hu hy
-  | arrow g₁ g₂ => intro hy; cases hy; exact .arrow (.inr ⟨_, g₁, h₁⟩) (.inr ⟨_, h₂, g₂⟩)
-  | bot | prim | fvar | proj | gvar | unionL | interL₁ | interL₂ | record | defL | projDefL =>
-    intro hy; cases hy
-
-theorem cut_record
-    (hf : ∀ l, R ((Ty.record fs t).field l) ((Ty.record gs u).field l)) :
-    ∀ y z, Step E R y z → y = .record gs u → Step E (RComp R) (.record fs t) z := by
-  intro y z h
-  induction h with
-  | top _ => intro _; exact .top trivial
-  | abs => intro _; exact .abs
-  | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
-  | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
-  | interR _ _ ih₁' ih₂' => intro hy; exact .interR (ih₁' hy) (ih₂' hy)
-  | defR _ ih' => intro hy; exact .defR fun u hu => ih' u hu hy
-  | projDefR _ ih' => intro hy; exact .projDefR fun u hu => ih' u hu hy
-  | record hg => intro hy; cases hy; exact .record fun l => .inr ⟨_, hf l, hg l⟩
-  | bot | prim | fvar | proj | gvar | unionL | interL₁ | interL₂ | arrow | defL | projDefL =>
-    intro hy; cases hy
+/-- **Cut elimination for one layer**, at every sort: rows are cut field by
+field. -/
+theorem cut {s : Srt} {x y z : Ty s} (hl : Step E R x y) (hr : Step E R y z) :
+    Step E (RComp R) x z := by
+  cases s with
+  | row => exact .row fun l => cut_nr (hl.fields l) (by decide) _ (hr.fields l)
+  | ty => exact cut_nr hl (by decide) z hr
+  | field => exact cut_nr hl (by decide) z hr
 
 end Cut
 
-/-- **Cut elimination for one layer**: `x ≤ y` and `y ≤ z` give `x ≤ z`,
-with guarded premises that are subtyping facts or compositions. -/
-theorem cut : Step E R x y → ∀ z, Step E R y z → Step E (RComp R) x z := by
-  intro hl
-  induction hl with
-  | top hx => intro z hr; exact cut_top hx _ z hr rfl
-  | abs => intro z hr; exact cut_abs _ z hr rfl
-  | bot => intro _ _; exact .bot
-  | prim => intro z hr; exact cut_atom (Or.inl ⟨_, rfl⟩) _ z hr rfl
-  | fvar => intro z hr; exact cut_atom (Or.inr (Or.inl ⟨_, rfl⟩)) _ z hr rfl
-  | proj => intro z hr; exact cut_atom (Or.inr (Or.inr (Or.inl ⟨_, _, rfl⟩))) _ z hr rfl
-  | gvar => intro z hr; exact cut_atom (Or.inr (Or.inr (Or.inr ⟨_, rfl⟩))) _ z hr rfl
-  | unionL _ _ ih₁ ih₂ => intro z hr; exact .unionL (ih₁ z hr) (ih₂ z hr)
-  | unionR₁ _ ih => intro z hr; exact cut_unionR₁ ih _ z hr rfl
-  | unionR₂ _ ih => intro z hr; exact cut_unionR₂ ih _ z hr rfl
-  | interL₁ _ ih => intro z hr; exact .interL₁ (ih z hr)
-  | interL₂ _ ih => intro z hr; exact .interL₂ (ih z hr)
-  | interR _ _ ih₁ ih₂ => intro z hr; exact cut_interR ih₁ ih₂ _ z hr rfl
-  | arrow h₁ h₂ => intro z hr; exact cut_arrow h₁ h₂ _ z hr rfl
-  | record hf => intro z hr; exact cut_record hf _ z hr rfl
-  | defL hd _ ih => intro z hr; exact .defL hd (ih z hr)
-  | defR hl ih => intro z hr; exact cut_defR hl ih _ z hr rfl
-  | projDefL hd _ ih => intro z hr; exact .projDefL hd (ih z hr)
-  | projDefR hl ih => intro z hr; exact cut_projDefR hl ih _ z hr rfl
-
 /-- **Transitivity** of subtyping. -/
-theorem Sub.trans (hab : Sub E a b) (hbc : Sub E b c) : Sub E a c := by
-  refine Sub.coind (Comp E) ?_ (.inr ⟨b, hab, hbc⟩)
-  rintro x z (h | ⟨_, hxy, hyz⟩)
+theorem Sub.trans {s : Srt} {a b c : Ty s} (hab : Sub E a b) (hbc : Sub E b c) : Sub E a c := by
+  refine Sub.coind (RComp (SubR E)) ?_ (.inr ⟨b, hab, hbc⟩)
+  rintro _ x z (h | ⟨_, hxy, hyz⟩)
   · exact h.step.toComp
-  · exact cut hxy.step z hyz.step
+  · exact cut hxy.step hyz.step
 
-/-! ## `Abs` is strictly above `⊤`
+/-! ## `Abs` is strictly above every present field -/
 
-`Abs` says nothing about a field, not even that it is there; `⊤` says it
-holds some value. So a type that is below `⊤` is a *present* field, and
-nothing above `Abs` is one. This is what makes selecting a field safe. -/
+/-- `Abs ≰ pre τ`: no rule derives it. -/
+theorem not_abs_le_pre {τ : Ty .ty} : ¬ Sub E Ty.abs (.pre τ) := fun h => by
+  cases h.step
 
-theorem not_abs_le_top : ¬ Sub E .abs .top := fun h => by
-  cases h.step with | top ht => exact ht
-
-/-- Nothing above `Abs` is a type. -/
-theorem not_abs_le_of_le_top (h : Sub E τ .top) : ¬ Sub E .abs τ :=
-  fun h' => not_abs_le_top (h'.trans h)
+/-- Nothing above `Abs` is below a present field. -/
+theorem not_abs_le_of_le_pre {θ : Ty .field} {τ : Ty .ty} (h : Sub E θ (.pre τ)) :
+    ¬ Sub E Ty.abs θ :=
+  fun h' => not_abs_le_pre (h'.trans h)
 
 /-! ## Coinduction up to transitivity -/
 
-/-- The transitive closure of a relation. -/
-inductive TC (R : Ty → Ty → Prop) : Ty → Ty → Prop where
-  | base : R x y → TC R x y
-  | trans : TC R x y → TC R y z → TC R x z
+/-- The transitive closure of a relation, at each sort. -/
+inductive TC (R : Rel) : Rel where
+  | base : R s x y → TC R s x y
+  | trans : TC R s x y → TC R s y z → TC R s x z
 
-theorem TC.step {R : Ty → Ty → Prop} (hR : ∀ x y, R x y → Step E (TC R) x y) :
-    TC R a b → Step E (TC R) a b := by
+theorem TC.step {R : Rel} (hR : ∀ s x y, R s x y → Step E (TC R) x y) {s : Srt} {a b : Ty s} :
+    TC R s a b → Step E (TC R) a b := by
   intro h
   induction h with
-  | base h => exact hR _ _ h
+  | base h => exact hR _ _ _ h
   | trans _ _ ih₁ ih₂ =>
-    refine (cut ih₁ _ ih₂).mono fun _ _ h => ?_
+    refine (cut ih₁ ih₂).mono fun _ _ _ h => ?_
     rcases h with h | ⟨_, h₁, h₂⟩
     · exact h
     · exact .trans h₁ h₂
 
-/-- **Coinduction up to transitivity**: if every pair of `R` takes a step
-whose guarded premises are chains of `R`, then `R` is contained in
-subtyping. -/
-theorem Sub.coind_trans (R : Ty → Ty → Prop) (hR : ∀ x y, R x y → Step E (TC R) x y)
-    (h : R a b) : Sub E a b :=
-  Sub.coind (TC R) (fun _ _ h => TC.step hR h) (.base h)
+/-- **Coinduction up to transitivity.** -/
+theorem Sub.coind_trans (R : Rel) (hR : ∀ s x y, R s x y → Step E (TC R) x y) {s : Srt}
+    {a b : Ty s} (h : R s a b) : Sub E a b :=
+  Sub.coind (TC R) (fun _ _ _ h => TC.step hR h) (.base h)
 
-/-! ## The paper's example (Sec. 5.1.3), with graph variables
-
-`A = τ → τ → A ≤ B = τ → B`: the two recursive types never unfold to the
-same syntax, so the proof needs a genuine coinductive hypothesis. They are
-written as graph variables `0` and `1`, defined by their unfoldings. -/
+/-! ## The paper's example (Sec. 5.1.3), with graph variables -/
 
 namespace PaperExample
 
-def τ : Ty := .prim "t"
-def A : Ty := .gvar 0
-def B : Ty := .gvar 1
+def τ : Ty .ty := .prim "t"
+def A : Ty .ty := .gvar 0
+def B : Ty .ty := .gvar 1
 
 /-- `A` is defined as `τ → τ → A`, `B` as `τ → B`. -/
-def E₀ : Defs := fun n t =>
-  (n = 0 ∧ t = .arrow τ (.arrow τ A)) ∨ (n = 1 ∧ t = .arrow τ B)
+def E₀ : Defs := fun s n t =>
+  ∃ e : s = .ty, (n = 0 ∧ e ▸ t = .arrow τ (.arrow τ A)) ∨ (n = 1 ∧ e ▸ t = .arrow τ B)
 
 theorem paper_example : Sub E₀ A B := by
   refine Sub.coind
-    (fun x y => (x = A ∧ y = B) ∨ (x = .arrow τ A ∧ y = B) ∨ (x = τ ∧ y = τ))
-    ?_ (Or.inl ⟨rfl, rfl⟩)
-  rintro x y (⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩)
-  · -- B's only definition is `τ → B`; use A's: τ → (τ → A) ≤ τ → B
-    refine .defR fun u hu => ?_
-    rcases hu with ⟨h, _⟩ | ⟨_, rfl⟩
+    (fun s x y => ∃ e : s = .ty,
+      (e ▸ x = A ∧ e ▸ y = B) ∨ (e ▸ x = .arrow τ A ∧ e ▸ y = B) ∨ (e ▸ x = τ ∧ e ▸ y = τ))
+    ?_ ⟨rfl, .inl ⟨rfl, rfl⟩⟩
+  rintro s x y ⟨rfl, ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩⟩
+  · refine .defR fun u hu => ?_
+    obtain ⟨_, ⟨h, _⟩ | ⟨_, rfl⟩⟩ := hu
     · exact absurd h (by decide)
-    · exact .defL (Or.inl ⟨rfl, rfl⟩)
-        (.arrow (Or.inr (Or.inr ⟨rfl, rfl⟩)) (Or.inr (Or.inl ⟨rfl, rfl⟩)))
-  · -- τ → A ≤ τ → B
-    refine .defR fun u hu => ?_
-    rcases hu with ⟨h, _⟩ | ⟨_, rfl⟩
+    · exact .defL ⟨rfl, .inl ⟨rfl, rfl⟩⟩
+        (.arrow ⟨rfl, .inr (.inr ⟨rfl, rfl⟩)⟩ ⟨rfl, .inr (.inl ⟨rfl, rfl⟩)⟩)
+  · refine .defR fun u hu => ?_
+    obtain ⟨_, ⟨h, _⟩ | ⟨_, rfl⟩⟩ := hu
     · exact absurd h (by decide)
-    · exact .arrow (Or.inr (Or.inr ⟨rfl, rfl⟩)) (Or.inl ⟨rfl, rfl⟩)
+    · exact .arrow ⟨rfl, .inr (.inr ⟨rfl, rfl⟩)⟩ ⟨rfl, .inl ⟨rfl, rfl⟩⟩
   · exact .prim
 
 end PaperExample
 
-/-! ## Rows: facts the previous record rule could not derive
-
-The first version of the record rule looked only at explicit fields,
-treating a label missing on the left as `Abs`, and only let extra fields
-into the right tail when it was a top row. These three true facts were
-not derivable with it; comparing rows as maps makes them so. -/
+/-! ## Rows -/
 
 section Rows
 
-private def bool : Ty := .prim "bool"
-private def int : Ty := .prim "int"
+private def bool : Ty .ty := .prim "bool"
+private def int : Ty .ty := .prim "int"
 
-/-- A field hidden in a compound tail: `{ | 'b ∧ {done: bool}} ≤ {done: bool}`.
-This is the shape the simplifier produces for `count`. -/
+/-- A field hidden in a compound tail: `{ | 'b ∧ {done: bool}} ≤ {done: bool}`,
+the shape the simplifier produces for `count`. -/
 theorem field_in_compound_tail :
-    Sub E (.record .nil (.inter (.fvar 0) (.record (.cons "done" bool .nil) .abs)))
-        (.record (.cons "done" bool .nil) .abs) := by
-  refine Sub.of_step (.record fun l => ?_)
+    Sub E (.rcd (.inter (.fvar 0) (.cons "done" (.pre bool) .top)))
+        (.rcd (.cons "done" (.pre bool) .top)) := by
+  refine Sub.of_step (.rcd (Sub.row fun l => ?_))
   by_cases h : l = "done"
   · subst h
-    exact Sub.of_step (show Step E (Sub E) (.inter (.proj "done" (.fvar 0)) bool) bool from
-      .interL₂ .prim)
+    exact Sub.of_step (.interL₂ (by simp only [Ty.field, ite_true]; exact .pre .prim))
   · have h' : ¬ "done" = l := fun e => h e.symm
-    simp only [Ty.field, Fields.lookup, h']
-    exact Sub.abs
+    simp only [Ty.field, h', ite_false]
+    exact Sub.top
 
 /-- The bottom row gives every field `⊥`: `{ | ⊥} ≤ {x: int}`. -/
-theorem bottom_tail : Sub E (.record .nil .bot) (.record (.cons "x" int .nil) .abs) := by
-  refine Sub.of_step (.record fun l => ?_)
-  by_cases h : l = "x"
-  · subst h; exact Sub.bot
-  · have h' : ¬ "x" = l := fun e => h e.symm
-    simp only [Ty.field, Fields.lookup, h']
-    exact Sub.abs
+theorem bottom_tail : Sub E (.rcd .bot) (.rcd (.cons "x" (.pre int) .top)) :=
+  Sub.of_step (.rcd (Sub.row fun _ => Sub.bot))
 
-/-- A flat row and the same row nested in a tail:
-`{x: int | ρ} ≤ { | {x: int | ρ}}`. -/
-theorem nested_tail :
-    Sub E (.record (.cons "x" int .nil) (.fvar 0))
-        (.record .nil (.record (.cons "x" int .nil) (.fvar 0))) := by
-  refine Sub.of_step (.record fun l => ?_)
-  by_cases h : l = "x"
-  · subst h; exact Sub.of_step (show Step E (Sub E) int int from .prim)
-  · have h' : ¬ "x" = l := fun e => h e.symm
-    simp only [Ty.field, Fields.lookup, h']
-    exact Sub.of_step .proj
-
-/-- And soundness in the other direction: `{ } ≰ {x: int}`, since the
-absent field is not an `int`. -/
-theorem not_empty_le_field : ¬ Sub E (.record .nil .abs) (.record (.cons "x" int .nil) .abs) := by
+/-- `{} ≰ {x: int}`: the field `x` of the empty record is `Abs`. -/
+theorem not_empty_le_field : ¬ Sub E (.rcd .top) (.rcd (.cons "x" (.pre int) .top)) := by
   intro h
-  have hs := h.step
-  cases hs with
-  | record hf =>
-    have := (hf "x").step
-    simp only [Ty.field, Fields.lookup] at this
-    cases this
+  cases h.step with
+  | rcd hr =>
+    have := hr.fields "x"
+    simp only [Ty.field, ite_true] at this
+    exact not_abs_le_pre this
 
 end Rows
 

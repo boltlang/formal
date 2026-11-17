@@ -43,8 +43,10 @@ it (`typ_ext`).
   but S-Ignore (`Pre τ ≤ Abs`) makes `Abs` the *top* field, and we follow
   the rule: a record with an `Abs` field may have the field or not. Plain
   records `{x: τ}` are rows with tail `Abs`, so width subtyping is
-  unchanged. In Lean, `Abs` is strictly above `⊤`: only present fields are
-  below `⊤`, so `{} ≤ {x : ⊤}` fails (`not_abs_le_top`). There is no "known
+  unchanged. In Lean, types, rows and fields are separate sorts, as in the
+  paper's grammar: `Abs` is the top field and never a type, a present field
+  `pre τ` is below it and nothing derives the converse, so `{} ≤ {x : ⊤}`
+  fails (`not_abs_le_pre`). There is no "known
   absent" field yet; issue #2 proposes one.
 - **No field variables.** The paper's `with` rule takes `t₁ : {l : α; ρ}`
   for a fresh field variable `α`. Since `Abs` is the top field, we constrain

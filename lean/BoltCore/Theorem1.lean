@@ -5,49 +5,23 @@ import BoltCore.Typing
 # Theorem 1: soundness of type inference
 
 If the algorithm types a term, the term has the inferred type, translated
-through the solution, in the declarative type system (`Typ`, over `Sub`).
-This is the paper's Theorem 1 for our model (monomorphic `let`, rows, and
-the contractive and `Abs` conventions of the previous files).
+through the solution, in the declarative system (`Typ`, over `Sub`). This
+is the paper's Theorem 1 for our model (monomorphic `let`, rows, no
+structural recursive types).
 
 The solution is the one for the *final* state: every constraint accepted
-along the way is still logged there (the log only grows), so
-`solution_rows` relates all of them at once. Each `constrain` the
-algorithm performed becomes a subsumption step; the side condition that
-its left side is not `Abs` holds because it is always the inferred type of
-a subterm (`TypeTerm.nac`). The result of a selection is an ordinary type
-variable (its kind is empty), so its solution is below `⊤`: the selected
-field is present, as the declarative rule requires.
+along the way is still logged there (the log only grows), so the solution
+theorem relates all of them at once. Each `constrain` the algorithm
+performed becomes a subsumption step, at the type sort since its left side
+is an inferred type, never `Abs` (`TypeTerm.nac`). A selection needs no
+side condition: the typing rule asks for a present field (`pre τ`) by its
+shape. Record literals and extensions need their field types to be present
+(not `Abs`), which inferred types are.
 -/
 
 namespace BoltCore.Alg
 
 open State
-
-/-! ## Contexts and logs -/
-
-/-- The algorithm's (monomorphic) context as a declarative one. -/
-def SCtx.toCtx (Γ : SCtx) : Ctx := Γ.map fun p => (p.1, Scheme.mono p.2.toTy)
-
-theorem SCtx.lookup_toCtx : ∀ {Γ : SCtx} {x : String} {st : SType},
-    Γ.lookup x = some st → Γ.toCtx.lookup x = some (.mono st.toTy)
-  | [], _, _, h => by simp [SCtx.lookup] at h
-  | (y, t) :: Γ, x, st, h => by
-    simp only [SCtx.lookup, List.find?_cons] at h
-    simp only [SCtx.toCtx, List.map_cons, Ctx.lookup, List.find?_cons]
-    by_cases hy : y = x
-    · simp only [hy, decide_true] at h ⊢
-      simp at h
-      subst h
-      rfl
-    · simp only [hy, decide_false] at h ⊢
-      have := SCtx.lookup_toCtx (Γ := Γ) h
-      simpa [SCtx.toCtx, Ctx.lookup] using this
-
-theorem SFields.toFields_absOf : ∀ F : SFields, F.absOf.toFields = F.toFields.absOf
-  | .nil => rfl
-  | .cons _ _ F => by
-    simp only [SFields.absOf, SFields.toFields, Fields.absOf, SType.toTy]
-    rw [SFields.toFields_absOf F]
 
 /-- A top-level `constrain` call accepts its constraint (no invariant needed). -/
 theorem ConstrainTop.logged {s s' : State} (h : ConstrainTop s a b s') : Logged s' a b := by
@@ -115,13 +89,6 @@ theorem Logged.of_log {s s' : State} (hlog : ∀ p, p ∈ s.log → p ∈ s'.log
   | .inl h => .inl h
   | .inr h => .inr (hlog _ h)
 
-/-- An accepted constraint whose left side is an inferred type (so not
-`Abs`) holds of the final solution. -/
-theorem Final.sub {s sf : State} {rank : Nat → Nat} (hf : Final sf rank)
-    (hl : Logged s a b) (hlog : ∀ p, p ∈ s.log → p ∈ sf.log) (ha : a ≠ .abs) :
-    Sub (defsOf sf) a.toTy b.toTy :=
-  solution_rows hf.inv hf.nac hf.ranked (hl.of_log hlog) (.inl ha)
-
 /-! ## Renaming type variables
 
 Let-polymorphism instantiates a type scheme by copying its generalized
@@ -161,125 +128,167 @@ theorem SType.rename_ne_abs {f : Nat → Nat} : ∀ {a : SType}, a ≠ .abs → 
   | .var _, _ | .prim _, _ | .arrow _ _, _ | .record _ _, _ => fun h => nomatch h
   | .abs, h => absurd rfl h
 
-/-- The algorithm's (monomorphic) context as a declarative one, renamed. -/
+/-! ## Fields of inferred records -/
+
+/-- The fields as a list of label and type. -/
+def SFields.toList : SFields → List (String × Ty .ty)
+  | .nil => []
+  | .cons n f fs => (n, f.toTy) :: fs.toList
+
+/-- Every field is present: none is `Abs`. -/
+def SFields.Pres : SFields → Prop
+  | .nil => True
+  | .cons _ f fs => f ≠ .abs ∧ fs.Pres
+
+theorem SFields.toRowOn_pres {ρ : Ty .row} :
+    ∀ {F : SFields}, F.Pres → F.toRowOn ρ = Ty.ofFields F.toList ρ
+  | .nil, _ => rfl
+  | .cons n f F, ⟨hf, hF⟩ => by
+    rw [SFields.toRowOn_cons, SType.toField_of_ne hf, SFields.toRowOn_pres hF]; rfl
+
+theorem SFields.toRowOn_absOf {ρ : Ty .row} :
+    ∀ F : SFields, F.absOf.toRowOn ρ = Ty.absFields F.toList ρ
+  | .nil => rfl
+  | .cons n f F => by
+    simp only [SFields.absOf, SFields.toRowOn_cons, SFields.toRowOn_absOf F]; rfl
+
+theorem SFields.Pres.rename {f : Nat → Nat} : ∀ {F : SFields}, F.Pres → (F.rename f).Pres
+  | .nil, _ => trivial
+  | .cons _ _ _, ⟨hg, hF⟩ => ⟨SType.rename_ne_abs hg, hF.rename⟩
+
+/-! ## Contexts -/
+
 def SCtx.toCtxR (f : Nat → Nat) (Γ : SCtx) : Ctx :=
   Γ.map fun p => (p.1, Scheme.mono (p.2.rename f).toTy)
+
+def SCtx.toCtx (Γ : SCtx) : Ctx := Γ.map fun p => (p.1, Scheme.mono p.2.toTy)
 
 theorem SCtx.toCtxR_id (Γ : SCtx) : Γ.toCtxR id = Γ.toCtx := by
   simp only [SCtx.toCtxR, SCtx.toCtx, SType.rename_id]
 
-theorem SCtx.lookup_toCtxR {f : Nat → Nat} {Γ : SCtx} {x : String} {st : SType}
-    (h : Γ.lookup x = some st) : (Γ.toCtxR f).lookup x = some (.mono (st.rename f).toTy) := by
-  have := SCtx.lookup_toCtx (Γ := Γ.map fun p => (p.1, p.2.rename f)) (x := x)
-    (st := st.rename f) (by
-      induction Γ with
-      | nil => simp [SCtx.lookup] at h
-      | cons p Γ ih =>
-        simp only [SCtx.lookup, List.map_cons, List.find?_cons] at h ⊢
-        split at h
-        · next hp => simp only [hp]; simp at h ⊢; rw [h]
-        · next hp => simp only [hp]; exact ih h)
-  simpa [SCtx.toCtx, SCtx.toCtxR, Function.comp_def] using this
+theorem SCtx.lookup_toCtxR {f : Nat → Nat} : ∀ {Γ : SCtx} {x : String} {st : SType},
+    Γ.lookup x = some st → (Γ.toCtxR f).lookup x = some (.mono (st.rename f).toTy)
+  | [], _, _, h => by simp [SCtx.lookup] at h
+  | (y, t) :: Γ, x, st, h => by
+    simp only [SCtx.lookup, List.find?_cons] at h
+    simp only [SCtx.toCtxR, List.map_cons, Ctx.lookup, List.find?_cons]
+    by_cases hy : y = x
+    · simp only [hy, decide_true] at h ⊢
+      simp at h
+      subst h
+      rfl
+    · simp only [hy, decide_false] at h ⊢
+      have := SCtx.lookup_toCtxR (f := f) (Γ := Γ) h
+      simpa [SCtx.toCtxR, Ctx.lookup] using this
 
-/-- What the renamed soundness proof needs: every accepted constraint whose
-left side is not `Abs` holds, renamed, in `E`, and every ordinary type
-variable is, renamed, below `⊤` (so the field a selection reads is
-present). -/
+/-! ## The theorem -/
+
+/-- What the renamed proof needs: accepted constraints whose left side is
+not `Abs` hold, renamed, at the type sort. -/
 structure RenSound (E : Defs) (f : Nat → Nat) (sf : State) : Prop where
   sub : ∀ {s : State} {a b : SType}, Logged s a b → (∀ p, p ∈ s.log → p ∈ sf.log) → a ≠ .abs →
     Sub E (a.rename f).toTy (b.rename f).toTy
-  top : ∀ v, sf.kind v = [] → Sub E (.gvar (f v)) .top
 
-/-- The final state's solution satisfies the unrenamed requirement. -/
 theorem Final.renSound {sf : State} {rank : Nat → Nat} (hf : Final sf rank) :
     RenSound (defsOf sf) id sf where
-  sub := fun hl hlog ha => by simp only [SType.rename_id]; exact hf.sub hl hlog ha
-  top := fun _ hv => Sub.of_step (TyVar.here hv).le_top
+  sub := fun hl hlog ha => by
+    simp only [SType.rename_id]
+    exact solution_ty hf.inv hf.nac hf.ranked (hl.of_log hlog) (.inl ha)
 
 mutual
 /-- **Theorem 1, renamed**: if the algorithm types `t` with `st`, and the
 accepted constraints hold (renamed by `f`) in `E`, then `t` has the renamed
-type `f(st)` in the renamed context. The kinds are those of `sf`. -/
+type `f(st)` in the renamed context. -/
 theorem TypeTerm.soundR {E : Defs} {f : Nat → Nat} {sf : State} (H : RenSound E f sf) :
     TypeTerm Γ s t st s' → CtxNAC Γ → Inv₂ s → LogNAC s →
-    (∀ p, p ∈ s'.log → p ∈ sf.log) → s.kind = sf.kind →
+    (∀ p, p ∈ s'.log → p ∈ sf.log) →
     Typ E (Γ.toCtxR f) t (st.rename f).toTy
-  | .lit, _, _, _, _, _ => .lit
-  | .var hx, _, _, _, _, _ => Typ.var_mono (SCtx.lookup_toCtxR hx)
-  | .lam _ h, hΓ, i, n, hlog, hk =>
-    .lam (h.soundR H (hΓ.cons trivial (fun h => nomatch h)) i.fresh n hlog hk)
-  | .app _ h₁ h₂ hc, hΓ, i, n, hlog, hk => by
+  | .lit, _, _, _, _ => .lit
+  | .var hx, _, _, _, _ => Typ.var_mono (SCtx.lookup_toCtxR hx)
+  | .lam _ h, hΓ, i, n, hlog =>
+    .lam (h.soundR H (hΓ.cons trivial (fun h => nomatch h)) i.fresh n hlog)
+  | .app _ h₁ h₂ hc, hΓ, i, n, hlog => by
     have i₁ := h₁.inv₂ i.fresh
     have r₁ := h₁.nac hΓ i.fresh n
-    have r₂ := h₂.nac hΓ i₁ r₁.1
     have hlog₂ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog p (hc.log_grows p hp)
     have hlog₁ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog₂ p (h₂.log_grows p hp)
-    exact .app (.sub (h₁.soundR H hΓ i.fresh n hlog₁ hk) (H.sub hc.logged hlog r₁.2.2))
-      (h₂.soundR H hΓ i₁ r₁.1 hlog₂ (h₁.kind_eq.trans hk))
-  | .rcd h, hΓ, i, n, hlog, hk => .rcd (h.soundR H hΓ i n hlog hk)
-  | .sel hn h hc, hΓ, i, n, hlog, hk => by
+    exact .app (.sub (h₁.soundR H hΓ i.fresh n hlog₁) (H.sub hc.logged hlog r₁.2.2))
+      (h₂.soundR H hΓ i₁ r₁.1 hlog₂)
+  | .rcd (F := F) h, hΓ, i, n, hlog => by
+    obtain ⟨hF, hp⟩ := h.soundR H hΓ i n hlog
+    have e : ((SType.record F .abs).rename f).toTy = Ty.record (F.rename f).toList := by
+      simp only [SType.rename, SType.toTy, Ty.record]
+      exact congrArg Ty.rcd (SFields.toRowOn_pres hp.rename)
+    rw [e]
+    exact .rcd hF
+  | .sel _ h hc, hΓ, i, n, hlog => by
     have r := h.nac hΓ i.fresh n
-    -- the result is an ordinary type variable, so the field is present
-    exact .sel (.sub (h.soundR H hΓ i.fresh n (fun p hp => hlog p (hc.log_grows p hp)) hk)
-      (H.sub hc.logged hlog r.2.2)) (H.top _ (hk ▸ hn))
-  | .extNil h, hΓ, i, n, hlog, hk => .extNil (h.soundR H hΓ i n hlog hk)
-  | .ext _ h₁ h₂ _ hc, hΓ, i, n, hlog, hk => by
+    exact .sel (.sub (h.soundR H hΓ i.fresh n (fun p hp => hlog p (hc.log_grows p hp)))
+      (H.sub hc.logged hlog r.2.2))
+  | .extNil h, hΓ, i, n, hlog => .extNil (h.soundR H hΓ i n hlog)
+  | .ext (F := F) (s₂ := s₂) _ h₁ h₂ _ hc, hΓ, i, n, hlog => by
     have i₁ := h₁.inv₂ i
     have r₁ := h₁.nac hΓ i n
-    have r₂ := h₂.nac hΓ i₁ r₁.1
     have hlog₂ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog p (hc.log_grows p hp)
     have hlog₁ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog₂ p (h₂.log_grows p hp)
     have hs := H.sub hc.logged hlog r₁.2.2
-    simp only [SType.rename, SFields.rename_absOf, SType.toTy, SFields.toFields_absOf] at hs
-    exact .ext (.sub (h₁.soundR H hΓ i n hlog₁ hk) hs)
-      (h₂.soundR H hΓ i₁ r₁.1 hlog₂ (h₁.kind_eq.trans hk))
-  | .letIn h₁ h₂, hΓ, i, n, hlog, hk => by
+    simp only [SType.rename, SFields.rename_absOf, SType.toTy, SFields.toRowOn_absOf] at hs
+    obtain ⟨hF, hp⟩ := h₂.soundR H hΓ i₁ r₁.1 hlog₂
+    have e : ((SType.record F (.var s₂.next)).rename f).toTy =
+        .rcd (Ty.ofFields (F.rename f).toList (.gvar (f s₂.next))) := by
+      simp only [SType.rename, SType.toTy, SType.toRow]
+      exact congrArg Ty.rcd (SFields.toRowOn_pres hp.rename)
+    rw [e]
+    exact .ext (.sub (h₁.soundR H hΓ i n hlog₁) hs) hF
+  | .letIn h₁ h₂, hΓ, i, n, hlog => by
     have r₁ := h₁.nac hΓ i n
-    exact Typ.letIn_mono (h₁.soundR H hΓ i n (fun p hp => hlog p (h₂.log_grows p hp)) hk)
-      (h₂.soundR H (hΓ.cons r₁.2.1 r₁.2.2) (h₁.inv₂ i) r₁.1 hlog (h₁.kind_eq.trans hk))
-  | .letRec hf _ h₁ hc h₂, hΓ, i, n, hlog, hk => by
+    exact Typ.letIn_mono (h₁.soundR H hΓ i n (fun p hp => hlog p (h₂.log_grows p hp)))
+      (h₂.soundR H (hΓ.cons r₁.2.1 r₁.2.2) (h₁.inv₂ i) r₁.1 hlog)
+  | .letRec hf _ h₁ hc h₂, hΓ, i, n, hlog => by
     have r₁ := h₁.nac (hΓ.cons trivial (fun h => nomatch h)) i.fresh n
     have i₁ := h₁.inv₂ i.fresh
     have hlog₂ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog p (h₂.log_grows p hp)
     have hlog₁ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog₂ p (hc.log_grows p hp)
     exact Typ.letRec_mono hf
-      (.sub (h₁.soundR H (hΓ.cons trivial (fun h => nomatch h)) i.fresh n hlog₁ hk)
+      (.sub (h₁.soundR H (hΓ.cons trivial (fun h => nomatch h)) i.fresh n hlog₁)
         (H.sub hc.logged hlog₂ r₁.2.2))
       (h₂.soundR H (hΓ.cons trivial (fun h => nomatch h)) (hc.inv₂ i₁)
-        (hc.nac i₁ r₁.2.1 trivial r₁.1) hlog ((hc.kind_eq.trans h₁.kind_eq).trans hk))
+        (hc.nac i₁ r₁.2.1 trivial r₁.1) hlog)
 
+/-- Fields: their typing, and that every field is present. -/
 theorem TypeFields.soundR {E : Defs} {f : Nat → Nat} {sf : State} (H : RenSound E f sf) :
     TypeFields Γ s fs F s' → CtxNAC Γ → Inv₂ s → LogNAC s →
-    (∀ p, p ∈ s'.log → p ∈ sf.log) → s.kind = sf.kind →
-    TypFields E (Γ.toCtxR f) fs (F.rename f).toFields
-  | .nil, _, _, _, _, _ => .nil
-  | .cons h₁ h₂, hΓ, i, n, hlog, hk =>
+    (∀ p, p ∈ s'.log → p ∈ sf.log) →
+    TypFields E (Γ.toCtxR f) fs (F.rename f).toList ∧ F.Pres
+  | .nil, _, _, _, _ => ⟨.nil, trivial⟩
+  | .cons h₁ h₂, hΓ, i, n, hlog =>
     have r₁ := h₁.nac hΓ i n
-    .cons (h₁.soundR H hΓ i n (fun p hp => hlog p (h₂.log_grows p hp)) hk)
-      (h₂.soundR H hΓ (h₁.inv₂ i) r₁.1 hlog (h₁.kind_eq.trans hk))
+    have ih := h₂.soundR H hΓ (h₁.inv₂ i) r₁.1 hlog
+    ⟨.cons (h₁.soundR H hΓ i n (fun p hp => hlog p (h₂.log_grows p hp))) ih.1, r₁.2.2, ih.2⟩
 end
 
 /-- **Theorem 1** (soundness of inference): if the algorithm types `t` with
 `st`, starting from a state and context satisfying the invariants, then `t`
 has type `θ(st)` in the declarative system, for the solution `θ` of any
-later state `sf` with the same kinds (in particular the final one). -/
+later state with the invariants (in particular the final one). -/
 theorem TypeTerm.sound {rank : Nat → Nat} {sf : State} (hf : Final sf rank)
     (h : TypeTerm Γ s t st s') (hΓ : CtxNAC Γ) (i : Inv₂ s) (n : LogNAC s)
-    (hlog : ∀ p, p ∈ s'.log → p ∈ sf.log) (hk : s.kind = sf.kind) :
+    (hlog : ∀ p, p ∈ s'.log → p ∈ sf.log) :
     Typ (defsOf sf) Γ.toCtx t st.toTy := by
-  have := h.soundR hf.renSound hΓ i n hlog hk
+  have := h.soundR hf.renSound hΓ i n hlog
   rwa [SCtx.toCtxR_id, SType.rename_id] at this
+
 
 /-- **Theorem 1, from scratch**: if the algorithm types `t` with `st` in the
 built-in context, ending in state `s'`, and the row-variable tails of `s'`
 are acyclic, then `t : θ(st)` in the declarative system, where `θ` is the
-solution of `s'`. The acyclicity assumption is discharged by kinds:
-see `theorem1` in `Kinds.lean`. -/
+solution of `s'`. Kinds discharge the acyclicity assumption (`theorem1` in
+`Kinds.lean`). -/
 theorem soundness {K : Nat → List String} {rank : Nat → Nat}
-    (h : TypeTerm builtins (State.initK K) t st s')
-    (hr : TailRanked s' rank) : Typ (defsOf s') builtins.toCtx t st.toTy := by
+    (h : TypeTerm builtins (State.initK K) t st s') (hr : TailRanked s' rank) :
+    Typ (defsOf s') builtins.toCtx t st.toTy := by
   have hn := h.nac builtins_NAC Inv₂.init LogNAC.init
   exact TypeTerm.sound ⟨h.inv_init, (h.inv₂ Inv₂.init).inLog, hn.1, hr⟩ h builtins_NAC Inv₂.init
-    LogNAC.init (fun _ hp => hp) h.kind_eq.symm
+    LogNAC.init (fun _ hp => hp)
 
 end BoltCore.Alg

@@ -5,70 +5,41 @@ import BoltCore.Sub
 # A solution of the inferred constraints
 
 Soundness of constraining (`Soundness.lean`) says that the algorithm's log
-of accepted constraints is self-justifying and its bounds consistent. Here
-we turn that into actual subtyping facts: we interpret every type variable
-`v` of the state as the graph variable `gvar v`, defined (`Defs`, see
-`Sub.lean`) as the intersection of its upper bounds (and of `⊤`, if `v`
-stands for a type rather than a row: `TyVar`), and prove that every
-accepted constraint `a ≤ b` gives `θ(a) ≤ θ(b)` in the declarative relation
-`Sub`. This is the paper's *unifying coalescing* (Fig. 12): each variable is
-instantiated to the greatest type consistent with its bounds.
+of accepted constraints is self-justifying and its bounds consistent. The
+solution turns that into subtyping facts: every type variable `v` becomes
+the graph variable `gvar v`, defined (`Defs`, see `Sub.lean`) as the
+intersection of its upper bounds, and every accepted constraint holds of
+it (`SolutionRows.lean`). This is the paper's *unifying coalescing*
+(Fig. 12): each variable is instantiated to the greatest type consistent
+with its bounds.
 
-The upper bounds of `v` that define it are the *non-variable* upper bounds
-reachable from `v` through variable-to-variable upper bounds (`Clo`), since
-the algorithm does not close such chains itself, and they may be cyclic.
-Being an inductive predicate, `Clo` needs no visited set and no fuel.
+The upper bounds that define `v` are its *non-variable* upper bounds
+reachable through variable-to-variable upper bounds (`Clo`), since the
+algorithm does not close such chains itself, and they may be cyclic. Being
+an inductive predicate, `Clo` needs no visited set and no fuel.
 
-This file sets up the solution and the invariants it needs; the solution
-theorem itself, for all simple types, is in `SolutionRows.lean`.
+The algorithm's simple types are unsorted; a simple type is translated by
+the position it is used in (`docs/design/sorts.md`):
+
+* `toTy` as a type: a record is `rcd` of its row;
+* `toRow` as a row: a record's fields go in front of its tail's row, and the
+  top row `Abs` is `⊤`;
+* `toField` as a field: `Abs` is `⊤`, any other type `τ` is `pre τ`.
+
+A variable becomes the graph variable of the same number at the sort of its
+position, and every graph variable is defined at every sort, by its
+reachable upper bounds translated at that sort (`defsOf`).
 -/
 
 namespace BoltCore.Alg
 
 open State
 
-/-! ## From simple types to types -/
-
-mutual
-/-- A simple type as a type: variables become graph variables. -/
-def SType.toTy : SType → Ty
-  | .var v => .gvar v
-  | .prim n => .prim n
-  | .arrow a b => .arrow a.toTy b.toTy
-  | .record fs t => .record fs.toFields t.toTy
-  | .abs => .abs
-
-def SFields.toFields : SFields → Fields
-  | .nil => .nil
-  | .cons n f fs => .cons n f.toTy fs.toFields
-end
-
 /-- `u` is a non-variable upper bound of `n`, possibly through a chain of
 variable upper bounds. -/
 inductive Clo (σ : Nat → Bounds) : Nat → SType → Prop where
   | here : u ∈ (σ n).upper → (∀ w, u ≠ .var w) → Clo σ n u
   | step : .var m ∈ (σ n).upper → Clo σ m u → Clo σ n u
-
-/-- `n` stands for a type, not a row: it is an ordinary type variable (its
-kind is empty), or it is accepted below one. -/
-inductive TyVar (s : State) : Nat → Prop where
-  | here : s.kind n = [] → TyVar s n
-  | under : (.var n, .var m) ∈ s.log → TyVar s m → TyVar s n
-
-/-- The definitions of the solution: `gvar n` is the intersection of the
-(translated) non-variable upper bounds reachable from `n`, and of `⊤` if `n`
-stands for a type. So an unconstrained type variable is `⊤`, a present
-field, while an unconstrained row variable is the top row, `Abs`. -/
-def defsOf (s : State) : Defs := fun n τ =>
-  (∃ u, Clo s.bounds n u ∧ τ = u.toTy) ∨ (TyVar s n ∧ τ = .top)
-
-/-- A reachable upper bound is a definition. -/
-theorem defsOf.clo {s : State} (h : Clo s.bounds n u) : defsOf s n u.toTy := .inl ⟨u, h, rfl⟩
-
-/-- A variable that stands for a type is below `⊤`. -/
-theorem TyVar.le_top {s : State} {R : Ty → Ty → Prop} (h : TyVar s n) :
-    Step (defsOf s) R (.gvar n) .top :=
-  .defL (.inr ⟨h, rfl⟩) (.top trivial)
 
 theorem Clo.nonvar : Clo σ n u → ∀ w, u ≠ .var w
   | .here _ h => h
@@ -184,5 +155,101 @@ theorem Justified.step {s : State} (h : Justified s) (hp : (a, b) ∈ s.log) :
   rcases h _ hp with h | h
   · exact nomatch h
   · exact h
+
+/-! ## Translations -/
+
+mutual
+/-- A simple type as a type. (`Abs` is not a type; it is sent to `⊤`, which
+only matters for ill-sorted input.) -/
+def SType.toTy : SType → Ty .ty
+  | .var v => .gvar v
+  | .prim n => .prim n
+  | .arrow a b => .arrow a.toTy b.toTy
+  | .record fs t => .rcd (fs.toRowOn t.toRow)
+  | .abs => .top
+
+/-- A simple type as a row. Primitive and function types have no fields. -/
+def SType.toRow : SType → Ty .row
+  | .var v => .gvar v
+  | .record fs t => fs.toRowOn t.toRow
+  | .prim _ | .arrow _ _ | .abs => .top
+
+/-- Fields in front of a row. -/
+def SFields.toRowOn : SFields → Ty .row → Ty .row
+  | .nil, ρ => ρ
+  | .cons n f fs, ρ =>
+    .cons n (match f with
+      | .abs => .top
+      | f => .pre f.toTy) (fs.toRowOn ρ)
+end
+
+/-- A simple type as a field. -/
+def SType.toField : SType → Ty .field
+  | .abs => .top
+  | f => .pre f.toTy
+
+/-- A simple type at a sort. -/
+def SType.toAt (t : SType) : (srt : Srt) → Ty srt
+  | .ty => t.toTy
+  | .row => t.toRow
+  | .field => t.toField
+
+theorem SFields.toRowOn_cons (n : String) (f : SType) (fs : SFields) (ρ : Ty .row) :
+    (SFields.cons n f fs).toRowOn ρ = .cons n f.toField (fs.toRowOn ρ) := by
+  cases f <;> rfl
+
+theorem SType.toField_of_ne {f : SType} (h : f ≠ .abs) : f.toField = .pre f.toTy := by
+  cases f <;> first | rfl | exact absurd rfl h
+
+/-! ## The definitions of the solution -/
+
+/-- `gvar n`, at each sort, is the intersection of the reachable
+non-variable upper bounds of `n`, translated at that sort. -/
+def defsOf (s : State) : Defs := fun srt n τ => ∃ u, Clo s.bounds n u ∧ τ = u.toAt srt
+
+theorem defsOf.clo {s : State} (srt : Srt) (h : Clo s.bounds n u) : defsOf s srt n (u.toAt srt) :=
+  ⟨u, h, rfl⟩
+
+/-! ## Fields of translated rows -/
+
+theorem field_toRowOn (l : String) (ρ : Ty .row) : ∀ fs : SFields,
+    (fs.toRowOn ρ).field l = match fs.lookup l with
+      | some f => f.toField
+      | none => ρ.field l
+  | .nil => rfl
+  | .cons n f fs => by
+    rw [SFields.toRowOn_cons]
+    simp only [Ty.field, SFields.lookup]
+    by_cases h : n = l
+    · simp [h]
+    · simp [h, field_toRowOn l ρ fs]
+
+theorem field_record (l : String) (fs : SFields) (t : SType) :
+    (SType.record fs t).toRow.field l = match fs.lookup l with
+      | some f => f.toField
+      | none => t.toRow.field l :=
+  field_toRowOn l _ fs
+
+theorem SFields.toRowOn_append (ρ : Ty .row) : ∀ fs gs : SFields,
+    (fs.append gs).toRowOn ρ = fs.toRowOn (gs.toRowOn ρ)
+  | .nil, _ => rfl
+  | .cons n f fs, gs => by
+    simp only [SFields.append, SFields.toRowOn_cons]
+    rw [SFields.toRowOn_append ρ fs gs]
+
+/-- A row is the record of its flattened fields over its flattened tail. -/
+theorem toRow_rowView : ∀ x : SType, x.toRow = (SType.record (rowView x).1 (rowView x).2).toRow
+  | .record fs t => by
+    simp only [rowView, SType.toRow]
+    rw [SFields.toRowOn_append, toRow_rowView t]; rfl
+  | .var _ | .prim _ | .arrow _ _ | .abs => rfl
+
+theorem field_restRow (l : String) (ex : SFields) (t : SType) :
+    (restRow ex t).toRow.field l = match ex.lookup l with
+      | some f => f.toField
+      | none => t.toRow.field l := by
+  cases ex with
+  | nil => simp [restRow, SFields.lookup]
+  | cons => simp only [restRow]; exact field_record ..
 
 end BoltCore.Alg

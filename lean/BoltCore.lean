@@ -14,14 +14,6 @@ import BoltCore.Kinds
 import BoltCore.Certificate
 import BoltCore.SolutionGen
 import BoltCore.PolyLet
+import BoltCore.Adequacy
 import BoltCore.Examples
 import BoltCore.Check
-import BoltCore.Sorted.Types
-import BoltCore.Sorted.Sub
-import BoltCore.Sorted.Lattice
-import BoltCore.Sorted.Typing
-import BoltCore.Sorted.Solution
-import BoltCore.Sorted.Theorem1
-import BoltCore.Sorted.SolutionGen
-import BoltCore.Sorted.PolyLet
-import BoltCore.Sorted.Certificate

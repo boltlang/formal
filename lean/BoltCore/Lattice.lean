@@ -13,6 +13,9 @@ The OCaml implementation relies on five equations that the rules of
 5. `{fs | t₁ ∨ t₂} ≤ {fs | t₁} ∨ {fs | t₂}` (rows over tail unions; an
    instance of 4 since rows are compared fieldwise)
 
+and, with sorts, `pre (τ₁ ∨ τ₂) ≤ pre τ₁ ∨ pre τ₂`, which merging the fields
+of two rows needs (`not_pre_union`).
+
 `not_fun_merge` proves that the first one is genuinely missing. Distributivity
 (`(a ∨ b) ∧ c ≤ (a ∧ c) ∨ (b ∧ c)`) is missing for the same reason, though
 this is not proved here: the left rules for `∧` and the right rules for
@@ -49,35 +52,42 @@ section Gap
 
 variable {E : Defs}
 
-private def P : Ty := .prim "p"
-private def Q : Ty := .prim "q"
-private def R' : Ty := .prim "r"
-private def S : Ty := .prim "s"
+private def P : Ty .ty := .prim "p"
+private def Q : Ty .ty := .prim "q"
+private def R' : Ty .ty := .prim "r"
+private def S : Ty .ty := .prim "s"
 
-/-- Different primitive types are unrelated, at any layer. -/
-private theorem step_prim_prim {R : Ty → Ty → Prop} {a b : String} (h : a ≠ b) :
+private theorem step_prim_prim {R : Rel} {a b : String} (h : a ≠ b) :
     ¬ Step E R (.prim a) (.prim b) := by
   intro hs
   cases hs
   exact h rfl
 
-/-- **Gap 1**: `(p→q) ∧ (r→s) ≤ (p∨r) → (q∧s)` is not derivable with the
-current rules, although MLsub (and the simplifier) treat both sides as
-equal. -/
+/-- `(p→q) ∧ (r→s) ≤ (p∨r) → (q∧s)` is not derivable. -/
 theorem not_fun_merge :
     ¬ Sub E (.inter (.arrow P Q) (.arrow R' S)) (.arrow (.union P R') (.inter Q S)) := by
   rintro ⟨R, hR, h⟩
-  cases hR _ _ h with
+  cases hR _ _ _ h with
   | interL₁ h₁ =>
     cases h₁ with
     | arrow hp _ =>
-      cases hR _ _ hp with
+      cases hR _ _ _ hp with
       | unionL _ h₂ => exact step_prim_prim (by decide) h₂
   | interL₂ h₁ =>
     cases h₁ with
     | arrow hp _ =>
-      cases hR _ _ hp with
+      cases hR _ _ _ hp with
       | unionL h₂ _ => exact step_prim_prim (by decide) h₂
+
+theorem pre_union_le {τ₁ τ₂ : Ty .ty} : Sub E (.union (.pre τ₁) (.pre τ₂)) (.pre (.union τ₁ τ₂)) :=
+  Sub.of_step (.unionL (.pre (.unionR₁ Sub.refl.step)) (.pre (.unionR₂ Sub.refl.step)))
+
+/-- `pre (p ∪ q) ≤ pre p ∪ pre q` is not derivable. -/
+theorem not_pre_union : ¬ Sub E (.pre (.union P Q)) (.union (.pre P) (.pre Q)) := by
+  intro h
+  cases h.step with
+  | unionR₁ h₁ => cases h₁ with | pre h₂ => cases h₂ with | unionL _ h₃ => exact step_prim_prim (by decide) h₃
+  | unionR₂ h₁ => cases h₁ with | pre h₂ => cases h₂ with | unionL h₃ _ => exact step_prim_prim (by decide) h₃
 
 end Gap
 
