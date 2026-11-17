@@ -13,6 +13,7 @@ dune exec -- boltcore --rectypes -e '...'   # allow recursive types, as in the p
 dune exec -- boltcore -e '...' --expect "'a -> 'a"   # check modulo equivalence
 dune exec -- boltcore --self-check program.sub      # simplified ≡ raw, per item
 dune exec -- boltcore --compare "⊤ -> int" "'a -> int" # relate two type schemes
+dune exec -- boltcore --cert cert.json program.sub     # print a certificate (see below)
 dune test                                # cram snapshots in test/*.t
 ```
 
@@ -405,10 +406,54 @@ proof, where they are needed.
      types (`Valid.nonrec`). Adequacy (`TypeTerm.certificate`): every
      accepted run of the model yields a valid certificate and skeleton,
      so a correct inferencer is never rejected.
-   - 6b, programs: to do. Boolean checks with proofs that they decide
-     validity and skeletons, and certificate output from `lib/typer.ml`.
+   - 6b, programs: done (`Check.lean`, `Main.lean`, `lib/cert.ml`).
+     `Certificate.check` and `infer` are Boolean checks of validity and of
+     polymorphic skeletons, over the certificate's finite lists, with
+     `check_sound`: if both accept, the term has the type `infer` computed
+     in the declarative system. Only this direction is proved; a
+     rejection proves nothing. The skeleton comes from an *annotated term*
+     (`Ann`): the term with the types a skeleton cannot compute bottom-up
+     (parameter and result types, extension rows, the generalized
+     variables of each `let`, the renaming at each use). `lake exe
+     boltcore-check FILE` runs the checks on a JSON certificate and
+     explains a rejection. It computes the ranks itself, since `rankedB`
+     checks them anyway. Not verified: the JSON parser, and that the
+     annotated term is the program as written.
+
+     `boltcore --cert FILE` prints the certificate. The log is what
+     `constrain` accepts, plus what inference uses without constraining:
+     the relation of each extruded type to its original, and at each
+     instantiation the renamed copy of the scheme's constraints. Every
+     generalized variable needs a copy there, so variables that
+     `freshen_above` does not reach get one too. Each `let` generalizes
+     all variables above its level that its right-hand side created, not
+     only those reachable from its type: otherwise unreachable ones (an
+     unused parameter's bounds, say) mention generalized ones and
+     generalization fails (`GenOK`). A program is one term: each item is a
+     `let` around the rest, and ill-typed items are left out.
+
+     `scripts/check-certs.sh` certifies every example and test program
+     (and `test/certs.txt`, which stresses extrusion under nested `let`s):
+     89 programs, 86 accepted (14 of them without their ill-typed items),
+     2 that do not parse, and one known rejection. That is `rows.sub`'s
+     `{a = 0} with {a = 1; a = true}`: OCaml keeps the last binding of a
+     repeated label, so the result is `{a: bool}`, while `Typ.ext` takes
+     the field list as given, and looking `a` up finds `int` first. The
+     Lean model assumes distinct labels (`Algorithm.lean`), so the
+     checker rightly refuses this certificate. `--rectypes` programs are
+     not certified, since the Lean development has no recursive types.
+
+     Adequacy, tested: extrusion needed nothing beyond the extruded
+     pairs. In particular, the rule for `w ≤ n` through a variable that is
+     an upper bound of `w` and a lower bound of `n` was never needed.
+     Dropping the extruded pairs or the instantiated constraints from the
+     log makes the checker reject; the remaining completions (bounds as
+     constraints, lower bounds below upper ones) were never needed.
 
 ## Not yet implemented
 
+- Repeated labels in a `with`: OCaml keeps the last one, the Lean model
+  the first (found by the certificate checker, see 6b). Records agree:
+  both take the first.
 - Boolean-algebra types (negation, MLstruct), and rejecting uninhabited
   types such as `int ∧ bool`.
