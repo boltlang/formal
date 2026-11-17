@@ -130,27 +130,30 @@ theorem SType.rename_ne_abs {f : Nat → Nat} : ∀ {a : SType}, a ≠ .abs → 
 
 /-! ## Fields of inferred records -/
 
-/-- The fields as a list of label and type. -/
-def SFields.toList : SFields → List (String × Ty .ty)
+/-- The fields as a list of label and type, under an interpretation. -/
+def SFields.toListI (I : SInterp) : SFields → List (String × Ty .ty)
   | .nil => []
-  | .cons n f fs => (n, f.toTy) :: fs.toList
+  | .cons n f fs => (n, f.toTyI I) :: fs.toListI I
 
 /-- Every field is present: none is `Abs`. -/
 def SFields.Pres : SFields → Prop
   | .nil => True
   | .cons _ f fs => f ≠ .abs ∧ fs.Pres
 
-theorem SFields.toRowOn_pres {ρ : Ty .row} :
-    ∀ {F : SFields}, F.Pres → F.toRowOn ρ = Ty.ofFields F.toList ρ
+theorem SFields.toRowOnI_pres {I : SInterp} {ρ : Ty .row} :
+    ∀ {F : SFields}, F.Pres → F.toRowOnI I ρ = Ty.ofFields (F.toListI I) ρ
   | .nil, _ => rfl
   | .cons n f F, ⟨hf, hF⟩ => by
-    rw [SFields.toRowOn_cons, SType.toField_of_ne hf, SFields.toRowOn_pres hF]; rfl
+    rw [SFields.toRowOnI_cons, SType.toFieldI_of_ne hf, SFields.toRowOnI_pres hF]; rfl
 
-theorem SFields.toRowOn_absOf {ρ : Ty .row} :
-    ∀ F : SFields, F.absOf.toRowOn ρ = Ty.absFields F.toList ρ
+theorem SFields.toRowOnI_absOf {I : SInterp} {ρ : Ty .row} :
+    ∀ F : SFields, F.absOf.toRowOnI I ρ = Ty.absFields (F.toListI I) ρ
   | .nil => rfl
   | .cons n f F => by
-    simp only [SFields.absOf, SFields.toRowOn_cons, SFields.toRowOn_absOf F]; rfl
+    simp only [SFields.absOf, SFields.toRowOnI_cons, SFields.toRowOnI_absOf F]; rfl
+
+/-- The fields as a list, in the solution. -/
+abbrev SFields.toList (F : SFields) : List (String × Ty .ty) := F.toListI .gv
 
 theorem SFields.Pres.rename {f : Nat → Nat} : ∀ {F : SFields}, F.Pres → (F.rename f).Pres
   | .nil, _ => trivial
@@ -166,20 +169,11 @@ def SCtx.toCtx (Γ : SCtx) : Ctx := Γ.map fun p => (p.1, Scheme.mono p.2.toTy)
 theorem SCtx.toCtxR_id (Γ : SCtx) : Γ.toCtxR id = Γ.toCtx := by
   simp only [SCtx.toCtxR, SCtx.toCtx, SType.rename_id]
 
-theorem SCtx.lookup_toCtxR {f : Nat → Nat} : ∀ {Γ : SCtx} {x : String} {st : SType},
-    Γ.lookup x = some st → (Γ.toCtxR f).lookup x = some (.mono (st.rename f).toTy)
-  | [], _, _, h => by simp [SCtx.lookup] at h
-  | (y, t) :: Γ, x, st, h => by
-    simp only [SCtx.lookup, List.find?_cons] at h
-    simp only [SCtx.toCtxR, List.map_cons, Ctx.lookup, List.find?_cons]
-    by_cases hy : y = x
-    · simp only [hy, decide_true] at h ⊢
-      simp at h
-      subst h
-      rfl
-    · simp only [hy, decide_false] at h ⊢
-      have := SCtx.lookup_toCtxR (f := f) (Γ := Γ) h
-      simpa [SCtx.toCtxR, Ctx.lookup] using this
+theorem SCtx.lookup_toCtxR {f : Nat → Nat} {Γ : SCtx} {x : String} {st : SType}
+    (h : Γ.lookup x = some st) : (Γ.toCtxR f).lookup x = some (.mono (st.rename f).toTy) := by
+  simp only [SCtx.lookup] at h
+  simp only [Ctx.lookup, SCtx.toCtxR]
+  rw [lookup_map (fun t : SType => Scheme.mono (t.rename f).toTy), h]; rfl
 
 /-! ## The theorem -/
 
@@ -218,7 +212,7 @@ theorem TypeTerm.soundR {E : Defs} {f : Nat → Nat} {sf : State} (H : RenSound 
     obtain ⟨hF, hp⟩ := h.soundR H hΓ i n hlog
     have e : ((SType.record F .abs).rename f).toTy = Ty.record (F.rename f).toList := by
       simp only [SType.rename, SType.toTy, Ty.record]
-      exact congrArg Ty.rcd (SFields.toRowOn_pres hp.rename)
+      exact congrArg Ty.rcd (SFields.toRowOnI_pres hp.rename)
     rw [e]
     exact .rcd hF
   | .sel _ h hc, hΓ, i, n, hlog => by
@@ -232,12 +226,16 @@ theorem TypeTerm.soundR {E : Defs} {f : Nat → Nat} {sf : State} (H : RenSound 
     have hlog₂ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog p (hc.log_grows p hp)
     have hlog₁ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog₂ p (h₂.log_grows p hp)
     have hs := H.sub hc.logged hlog r₁.2.2
-    simp only [SType.rename, SFields.rename_absOf, SType.toTy, SFields.toRowOn_absOf] at hs
+    have e' : ((SType.record F.absOf (.var s₂.next)).rename f).toTy =
+        .rcd (Ty.absFields (F.rename f).toList (.gvar (f s₂.next))) := by
+      simp only [SType.rename, SFields.rename_absOf]
+      exact congrArg Ty.rcd (SFields.toRowOnI_absOf _)
+    rw [e'] at hs
     obtain ⟨hF, hp⟩ := h₂.soundR H hΓ i₁ r₁.1 hlog₂
     have e : ((SType.record F (.var s₂.next)).rename f).toTy =
         .rcd (Ty.ofFields (F.rename f).toList (.gvar (f s₂.next))) := by
-      simp only [SType.rename, SType.toTy, SType.toRow]
-      exact congrArg Ty.rcd (SFields.toRowOn_pres hp.rename)
+      simp only [SType.rename]
+      exact congrArg Ty.rcd (SFields.toRowOnI_pres hp.rename)
     rw [e]
     exact .ext (.sub (h₁.soundR H hΓ i n hlog₁) hs) hF
   | .letIn h₁ h₂, hΓ, i, n, hlog => by

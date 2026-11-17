@@ -156,37 +156,61 @@ theorem Justified.step {s : State} (h : Justified s) (hp : (a, b) ∈ s.log) :
   · exact nomatch h
   · exact h
 
-/-! ## Translations -/
+/-! ## Translations
+
+The translations are given under an *interpretation* of the variables, a
+type and a row for each (`SInterp`), as generalizing a `let` needs
+(`SolutionRows.lean`); the solution's translations are those under the
+interpretation of each variable as its graph variable (`SInterp.gv`). -/
+
+/-- An interpretation of the variables, at the type and row sorts. -/
+abbrev SInterp := (srt : Srt) → Nat → Ty srt
+
+/-- The solution's interpretation: every variable is its graph variable. -/
+def SInterp.gv : SInterp := fun _ v => .gvar v
 
 mutual
 /-- A simple type as a type. (`Abs` is not a type; it is sent to `⊤`, which
 only matters for ill-sorted input.) -/
-def SType.toTy : SType → Ty .ty
-  | .var v => .gvar v
+def SType.toTyI (I : SInterp) : SType → Ty .ty
+  | .var v => I .ty v
   | .prim n => .prim n
-  | .arrow a b => .arrow a.toTy b.toTy
-  | .record fs t => .rcd (fs.toRowOn t.toRow)
+  | .arrow a b => .arrow (a.toTyI I) (b.toTyI I)
+  | .record fs t => .rcd (fs.toRowOnI I (t.toRowI I))
   | .abs => .top
 
 /-- A simple type as a row. Primitive and function types have no fields. -/
-def SType.toRow : SType → Ty .row
-  | .var v => .gvar v
-  | .record fs t => fs.toRowOn t.toRow
+def SType.toRowI (I : SInterp) : SType → Ty .row
+  | .var v => I .row v
+  | .record fs t => fs.toRowOnI I (t.toRowI I)
   | .prim _ | .arrow _ _ | .abs => .top
 
 /-- Fields in front of a row. -/
-def SFields.toRowOn : SFields → Ty .row → Ty .row
+def SFields.toRowOnI (I : SInterp) : SFields → Ty .row → Ty .row
   | .nil, ρ => ρ
   | .cons n f fs, ρ =>
     .cons n (match f with
       | .abs => .top
-      | f => .pre f.toTy) (fs.toRowOn ρ)
+      | f => .pre (f.toTyI I)) (fs.toRowOnI I ρ)
 end
 
 /-- A simple type as a field. -/
-def SType.toField : SType → Ty .field
+def SType.toFieldI (I : SInterp) : SType → Ty .field
   | .abs => .top
-  | f => .pre f.toTy
+  | f => .pre (f.toTyI I)
+
+theorem SFields.toRowOnI_cons (I : SInterp) (n : String) (f : SType) (fs : SFields)
+    (ρ : Ty .row) : (SFields.cons n f fs).toRowOnI I ρ = .cons n (f.toFieldI I) (fs.toRowOnI I ρ) := by
+  cases f <;> rfl
+
+theorem SType.toFieldI_of_ne {I : SInterp} {f : SType} (h : f ≠ .abs) : f.toFieldI I = .pre (f.toTyI I) := by
+  cases f <;> first | rfl | exact absurd rfl h
+
+/-- The solution's translations: every variable is its graph variable. -/
+abbrev SType.toTy (t : SType) : Ty .ty := t.toTyI .gv
+abbrev SType.toRow (t : SType) : Ty .row := t.toRowI .gv
+abbrev SFields.toRowOn (fs : SFields) (ρ : Ty .row) : Ty .row := fs.toRowOnI .gv ρ
+abbrev SType.toField (t : SType) : Ty .field := t.toFieldI .gv
 
 /-- A simple type at a sort. -/
 def SType.toAt (t : SType) : (srt : Srt) → Ty srt
@@ -195,11 +219,14 @@ def SType.toAt (t : SType) : (srt : Srt) → Ty srt
   | .field => t.toField
 
 theorem SFields.toRowOn_cons (n : String) (f : SType) (fs : SFields) (ρ : Ty .row) :
-    (SFields.cons n f fs).toRowOn ρ = .cons n f.toField (fs.toRowOn ρ) := by
-  cases f <;> rfl
+    (SFields.cons n f fs).toRowOn ρ = .cons n f.toField (fs.toRowOn ρ) :=
+  SFields.toRowOnI_cons .gv n f fs ρ
 
-theorem SType.toField_of_ne {f : SType} (h : f ≠ .abs) : f.toField = .pre f.toTy := by
-  cases f <;> first | rfl | exact absurd rfl h
+theorem SType.toField_of_ne {f : SType} (h : f ≠ .abs) : f.toField = .pre f.toTy :=
+  SType.toFieldI_of_ne h
+
+theorem SType.toTyI_gv (t : SType) : t.toTyI .gv = t.toTy := rfl
+theorem SType.toRowI_gv (t : SType) : t.toRowI .gv = t.toRow := rfl
 
 /-! ## The definitions of the solution -/
 
@@ -209,47 +236,5 @@ def defsOf (s : State) : Defs := fun srt n τ => ∃ u, Clo s.bounds n u ∧ τ 
 
 theorem defsOf.clo {s : State} (srt : Srt) (h : Clo s.bounds n u) : defsOf s srt n (u.toAt srt) :=
   ⟨u, h, rfl⟩
-
-/-! ## Fields of translated rows -/
-
-theorem field_toRowOn (l : String) (ρ : Ty .row) : ∀ fs : SFields,
-    (fs.toRowOn ρ).field l = match fs.lookup l with
-      | some f => f.toField
-      | none => ρ.field l
-  | .nil => rfl
-  | .cons n f fs => by
-    rw [SFields.toRowOn_cons]
-    simp only [Ty.field, SFields.lookup]
-    by_cases h : n = l
-    · simp [h]
-    · simp [h, field_toRowOn l ρ fs]
-
-theorem field_record (l : String) (fs : SFields) (t : SType) :
-    (SType.record fs t).toRow.field l = match fs.lookup l with
-      | some f => f.toField
-      | none => t.toRow.field l :=
-  field_toRowOn l _ fs
-
-theorem SFields.toRowOn_append (ρ : Ty .row) : ∀ fs gs : SFields,
-    (fs.append gs).toRowOn ρ = fs.toRowOn (gs.toRowOn ρ)
-  | .nil, _ => rfl
-  | .cons n f fs, gs => by
-    simp only [SFields.append, SFields.toRowOn_cons]
-    rw [SFields.toRowOn_append ρ fs gs]
-
-/-- A row is the record of its flattened fields over its flattened tail. -/
-theorem toRow_rowView : ∀ x : SType, x.toRow = (SType.record (rowView x).1 (rowView x).2).toRow
-  | .record fs t => by
-    simp only [rowView, SType.toRow]
-    rw [SFields.toRowOn_append, toRow_rowView t]; rfl
-  | .var _ | .prim _ | .arrow _ _ | .abs => rfl
-
-theorem field_restRow (l : String) (ex : SFields) (t : SType) :
-    (restRow ex t).toRow.field l = match ex.lookup l with
-      | some f => f.toField
-      | none => t.toRow.field l := by
-  cases ex with
-  | nil => simp [restRow, SFields.lookup]
-  | cons => simp only [restRow]; exact field_record ..
 
 end BoltCore.Alg

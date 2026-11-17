@@ -47,15 +47,14 @@ one unsorted syntax of simple types, translated into the sorts by position.
 | `BoltCore/Soundness.lean` | soundness of constraining on the bound graph: justification and consistency invariants, preserved by `constrain` and `typeTerm` |
 | `BoltCore/Solution.lean` | the solution of the inferred constraints (unifying coalescing via graph variables), simple types translated by position (`toTy`, `toRow`, `toField`), and its invariants |
 | `BoltCore/Sorts.lean` | `Abs` is never a function parameter or result (`NAC`), preserved by `constrain` and `typeTerm` |
-| `BoltCore/SolutionRows.lean` | the solution theorem at the type and row sorts (`solution_ty`, `solution_row`), rows and extrusion-shaped justifications included (assuming acyclic row-variable tails) |
+| `BoltCore/SolutionRows.lean` | the solution theorem at the type and row sorts, rows and extrusion-shaped justifications included (assuming acyclic row-variable tails), proved under a generalization (`solution_gen`: generalized variables read, at the type and row sorts, as an instance of their bounds); the plain theorem (`solution_ty`, `solution_row`) is the case where nothing is generalized |
 | `BoltCore/Theorem1.lean` | soundness of type inference (`soundness`), assuming acyclic row-variable tails; generalized over renamings of type variables (`soundR`), for instantiation |
 | `BoltCore/Kinds.lean` | kinds for row variables: the algorithm keeps rows well-kinded, so tails are acyclic; **Theorem 1** with no assumptions (`theorem1`) |
 | `BoltCore/Certificate.lean` | certificates (accepted constraints, bounds, kinds, ranks) and their validity; every accepted run yields a valid one (`TypeTerm.certificateValid`) |
-| `BoltCore/SolutionGen.lean` | the solution under a generalization: accepted constraints hold when generalized variables are read, at the type and row sorts, as an instance of their bounds (`solution_gen`) |
 | `BoltCore/PolyLet.lean` | typing skeletons with let-polymorphism: schemes from generalized variables and their bounds (`mkScheme`), checked generalization (`GenOK`) and instantiation (`InstOK`), soundness (`PTyp.sound_top`; uses classical logic), no recursive types (`Valid.nonrec`) |
 | `BoltCore/Adequacy.lean` | every accepted run of the model yields a valid certificate and a skeleton (`TypeTerm.certificate`); Theorem 1 through certificates (`theorem1_cert`) |
 | `BoltCore/Check.lean` | the executable checker: Boolean checks of validity (`Certificate.check`) and of polymorphic skeletons over annotated terms (`infer`), with `check_sound`: an accepted certificate types the term |
-| `BoltCore/Examples.lean` | example certificates with let-polymorphism, unconstrained and constrained, checked by hand and by the executable checker (`decide`) |
+| `BoltCore/Examples.lean` | example certificates with let-polymorphism, unconstrained and constrained, accepted by the executable checker (`decide`), which gives their validity, skeletons and typings |
 | `Main.lean` | `boltcore-check`: reads a JSON certificate, computes ranks, runs the checks, explains rejections (parsing and diagnostics are not verified) |
 
 ## Subtyping (`Sub.lean`, `Rows.lean`, `Lattice.lean`)
@@ -207,7 +206,7 @@ are needed ("option C").
      renaming of graph variables (`TypeTerm.soundR`), and skeleton
      soundness under any interpretation that is an instance of the
      generalized variables (`PTyp.sound`).
-   - 4c, generalization: done (`SolutionGen.lean`, `PolyLet.lean`).
+   - 4c, generalization: done (`SolutionRows.lean`, `PolyLet.lean`).
      `solution_gen`: if an interpretation reads a `let`'s generalized
      variables, at the type and row sorts, as satisfying their bounds, and
      every other variable as its graph variable, every accepted constraint

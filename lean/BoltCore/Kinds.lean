@@ -245,15 +245,6 @@ theorem KInv.addExp {s : State} (h : KInv K s) (hr : ∀ l, l ∈ K r ↔ l ∈ 
   · exact hr
   · exact h.exps w L' r' hm
 
-theorem lookup_mem {k : Nat × List String} {r : Nat} :
-    ∀ {xs : List ((Nat × List String) × Nat)}, xs.lookup k = some r → (k, r) ∈ xs
-  | [], h => by simp [List.lookup] at h
-  | (k', r') :: xs, h => by
-    simp only [List.lookup] at h
-    split at h
-    · next he => cases h; rw [beq_iff_eq.mp he]; exact List.mem_cons_self ..
-    · exact List.mem_cons_of_mem _ (lookup_mem h)
-
 /-- What expansion returns: the tail itself if it is not a row variable,
 otherwise a row variable lacking the tail's kind and the expanded labels
 (the tail itself when nothing is expanded). -/

@@ -52,7 +52,7 @@ imprecise `(Int ∨ Bool, Int ∨ Bool)`.
 - **First-class polymorphism.** We only have let-polymorphism. Moving to
   SuperF would make schemes ordinary types: `Ty` would need quantifiers,
   `Sub` instantiation and generalization rules, and cut elimination,
-  the solution theorem, kinds and `SolutionGen.lean` would all need
+  the solution theorem (with its generalization) and kinds would all need
   revisiting.
 - **MLsub's function merging is unsound with first-class polymorphism.**
   The paper notes that `id : ∀α. α → α` is below `(Int → Int) ∧ (Str →

@@ -1,4 +1,4 @@
-import BoltCore.SolutionGen
+import BoltCore.Certificate
 import BoltCore.Typing
 
 /-!
@@ -442,19 +442,9 @@ def PCtx.toCtx (σ : Nat → Bounds) (I : SInterp) (Γ : PCtx) : Ctx :=
 
 theorem PCtx.lookup_toCtx {σ : Nat → Bounds} {I : SInterp} {Γ : PCtx} {x : String} {e : CEntry}
     (h : Γ.lookup x = some e) : (Γ.toCtx σ I).lookup x = some (e.toScheme σ I) := by
-  induction Γ with
-  | nil => simp [PCtx.lookup] at h
-  | cons p Γ ih =>
-    simp only [PCtx.lookup, List.find?_cons] at h
-    simp only [PCtx.toCtx, List.map_cons, Ctx.lookup, List.find?_cons]
-    by_cases hp : p.1 = x
-    · simp only [hp, decide_true] at h ⊢
-      simp at h
-      subst h
-      rfl
-    · simp only [hp, decide_false] at h ⊢
-      have := ih h
-      simpa [PCtx.toCtx, Ctx.lookup] using this
+  simp only [PCtx.lookup] at h
+  simp only [Ctx.lookup, PCtx.toCtx]
+  rw [lookup_map (fun e : CEntry => e.toScheme σ I), h]; rfl
 
 theorem CEntry.toScheme_withGen {σ : Nat → Bounds} {I G : SInterp} {gen' : List Nat} {e : CEntry}
     (h : e.Avoids σ gen') : e.toScheme σ (withGen gen' G I) = e.toScheme σ I := by
@@ -517,23 +507,6 @@ theorem PFields.pres {c : Certificate} : PFields c Γ fs F → F.Pres
   | .cons _ h hF => ⟨h, hF.pres⟩
 
 /-! ## Soundness -/
-
-/-- The list of field types under an interpretation. -/
-def SFields.toListI (I : SInterp) : SFields → List (String × Ty .ty)
-  | .nil => []
-  | .cons n f fs => (n, f.toTyI I) :: fs.toListI I
-
-theorem SFields.toRowOnI_pres {I : SInterp} {ρ : Ty .row} :
-    ∀ {F : SFields}, F.Pres → F.toRowOnI I ρ = Ty.ofFields (F.toListI I) ρ
-  | .nil, _ => rfl
-  | .cons n f F, ⟨hf, hF⟩ => by
-    rw [SFields.toRowOnI_cons, SType.toFieldI_of_ne hf, SFields.toRowOnI_pres hF]; rfl
-
-theorem SFields.toRowOnI_absOf {I : SInterp} {ρ : Ty .row} :
-    ∀ F : SFields, F.absOf.toRowOnI I ρ = Ty.absFields (F.toListI I) ρ
-  | .nil => rfl
-  | .cons n f F => by
-    simp only [SFields.absOf, SFields.toRowOnI_cons, SFields.toRowOnI_absOf F]; rfl
 
 section
 variable {c : Certificate}
@@ -660,32 +633,27 @@ theorem PFields.sound (hv : c.Valid) {A : List Nat} {I : SInterp} (hg : GenHyp c
   | .cons h₁ _ h₂ => .cons (h₁.sound hv hg) (h₂.sound hv hg)
 end
 
-/-- No variable is generalized yet: the solution itself is an instance. -/
-theorem GenHyp.nil (c : Certificate) : GenHyp c.state [] .gv :=
-  ⟨fun _ _ _ => rfl, (fun _ _ _ _ _ _ h => nomatch h), (fun _ h => nomatch h),
-    (fun _ h => nomatch h)⟩
-
 /-- **Theorem 1 with let-polymorphism, for certificates**: a polymorphic
 skeleton checked against a valid certificate gives a declarative typing
 with constrained schemes. -/
 theorem PTyp.sound_top (hv : c.Valid) (h : PTyp c Γ t st) :
     Typ (defsOf c.state) (Γ.toCtx c.bounds .gv) t st.toTy := by
-  have := h.sound hv (GenHyp.nil c)
+  have := h.sound hv (GenHyp.nil c.state)
   rwa [SType.toTyI_gv] at this
 
 /-! ## No recursive types in the solution -/
 
 mutual
 theorem SType.toTy_gvars : ∀ a : SType, (∀ m ∈ a.toTy.gvars, m ∈ a.vars) ∧ (∀ m ∈ a.toRow.gvars, m ∈ a.vars)
-  | .var _ => ⟨fun m h => by simpa [SType.toTy, Ty.gvars, SType.vars] using h,
-      fun m h => by simpa [SType.toRow, Ty.gvars, SType.vars] using h⟩
-  | .prim _ | .abs => ⟨fun _ h => by simp [SType.toTy, Ty.gvars] at h,
-      fun _ h => by simp [SType.toRow, Ty.gvars] at h⟩
+  | .var _ => ⟨fun m h => by simpa [SType.toTy, SType.toTyI, SInterp.gv, Ty.gvars, SType.vars] using h,
+      fun m h => by simpa [SType.toRow, SType.toRowI, SInterp.gv, Ty.gvars, SType.vars] using h⟩
+  | .prim _ | .abs => ⟨fun _ h => by simp [SType.toTy, SType.toTyI, Ty.gvars] at h,
+      fun _ h => by simp [SType.toRow, SType.toRowI, Ty.gvars] at h⟩
   | .arrow a b => ⟨fun m h => by
-      simp only [SType.toTy, Ty.gvars, List.mem_append] at h
+      simp only [SType.toTy, SType.toTyI, Ty.gvars, List.mem_append] at h
       simp only [SType.vars, List.mem_append]
       exact h.imp ((SType.toTy_gvars a).1 m) ((SType.toTy_gvars b).1 m),
-      fun _ h => by simp [SType.toRow, Ty.gvars] at h⟩
+      fun _ h => by simp [SType.toRow, SType.toRowI, Ty.gvars] at h⟩
   | .record fs t =>
     have hf := SFields.toRowOn_gvars fs t.toRow
     have ht := (SType.toTy_gvars t).2
@@ -694,7 +662,7 @@ theorem SType.toTy_gvars : ∀ a : SType, (∀ m ∈ a.toTy.gvars, m ∈ a.vars)
       rcases hf m hm with h | h
       · exact .inl h
       · exact .inr (ht m h)
-    ⟨fun m hm => h m (by simpa [SType.toTy, Ty.gvars] using hm), h⟩
+    ⟨fun m hm => h m (by simpa [SType.toTy, SType.toTyI, SInterp.gv, Ty.gvars] using hm), h⟩
 
 theorem SFields.toRowOn_gvars : ∀ (fs : SFields) (ρ : Ty .row), ∀ m ∈ (fs.toRowOn ρ).gvars,
     m ∈ fs.vars ∨ m ∈ ρ.gvars
@@ -706,8 +674,8 @@ theorem SFields.toRowOn_gvars : ∀ (fs : SFields) (ρ : Ty .row), ∀ m ∈ (fs
     rcases h with h | h
     · refine .inl (.inl ?_)
       cases f with
-      | abs => simp [SType.toField, Ty.gvars] at h
-      | _ => exact (SType.toTy_gvars _).1 m (by simpa [SType.toField, Ty.gvars] using h)
+      | abs => simp [SType.toField, SType.toFieldI, Ty.gvars] at h
+      | _ => exact (SType.toTy_gvars _).1 m (by simpa [SType.toField, SType.toFieldI, Ty.gvars] using h)
     · rcases SFields.toRowOn_gvars fs ρ m h with h | h
       · exact .inl (.inr h)
       · exact .inr h
@@ -718,8 +686,8 @@ theorem SType.toAt_gvars (a : SType) : ∀ srt : Srt, ∀ m ∈ (a.toAt srt).gva
   | .row => (SType.toTy_gvars a).2
   | .field => fun m h => by
     cases a with
-    | abs => simp [SType.toAt, SType.toField, Ty.gvars] at h
-    | _ => exact (SType.toTy_gvars _).1 m (by simpa [SType.toAt, SType.toField, Ty.gvars] using h)
+    | abs => simp [SType.toAt, SType.toField, SType.toFieldI, Ty.gvars] at h
+    | _ => exact (SType.toTy_gvars _).1 m (by simpa [SType.toAt, SType.toField, SType.toFieldI, Ty.gvars] using h)
 
 /-- **No recursive types**: the solution of a valid certificate defines
 each graph variable only in terms of graph variables of lower rank. -/

@@ -12,7 +12,6 @@ import BoltCore.SolutionRows
 import BoltCore.Theorem1
 import BoltCore.Kinds
 import BoltCore.Certificate
-import BoltCore.SolutionGen
 import BoltCore.PolyLet
 import BoltCore.Adequacy
 import BoltCore.Examples

@@ -35,14 +35,9 @@ deriving instance DecidableEq for SType, SFields
 
 /-! ## Variables with bounds -/
 
-theorem lookup_some_mem {β : Type} :
-    ∀ {l : List (Nat × β)} {a : Nat} {b : β}, l.lookup a = some b → a ∈ l.map (·.1)
-  | [], _, _, h => by simp [List.lookup] at h
-  | (k, b') :: l, a, b, h => by
-    simp only [List.lookup] at h
-    split at h
-    · next he => simp [beq_iff_eq.mp he]
-    · exact List.mem_cons_of_mem _ (lookup_some_mem h)
+theorem lookup_some_mem {β : Type} {l : List (Nat × β)} {a : Nat} {b : β}
+    (h : l.lookup a = some b) : a ∈ l.map (·.1) :=
+  List.mem_map.mpr ⟨_, lookup_mem h, rfl⟩
 
 namespace Certificate
 

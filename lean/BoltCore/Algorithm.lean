@@ -282,6 +282,28 @@ abbrev SCtx := List (String × SType)
 
 def SCtx.lookup (Γ : SCtx) (x : String) : Option SType := (Γ.find? (·.1 = x)).map (·.2)
 
+/-- A binding found by `List.lookup` is in the list. -/
+theorem lookup_mem {α β : Type} [BEq α] [LawfulBEq α] {k : α} {r : β} :
+    ∀ {xs : List (α × β)}, xs.lookup k = some r → (k, r) ∈ xs
+  | [], h => by simp [List.lookup] at h
+  | (k', r') :: xs, h => by
+    simp only [List.lookup] at h
+    split at h
+    · next he => cases h; rw [beq_iff_eq.mp he]; exact List.mem_cons_self ..
+    · exact List.mem_cons_of_mem _ (lookup_mem h)
+
+/-- Looking a name up in a context mapped over its entries is looking it up
+in the context, mapped. -/
+theorem lookup_map {α β : Type} (g : α → β) (Γ : List (String × α)) (x : String) :
+    ((Γ.map fun p => (p.1, g p.2)).find? (·.1 = x)).map (·.2) =
+      ((Γ.find? (·.1 = x)).map (·.2)).map g := by
+  induction Γ with
+  | nil => rfl
+  | cons p Γ ih =>
+    by_cases h : p.1 = x
+    · simp [h]
+    · simp only [List.map_cons, List.find?_cons, h, decide_false]; exact ih
+
 mutual
 inductive TypeTerm : SCtx → State → Term → SType → State → Prop where
   | lit : TypeTerm Γ s (.lit n) (.prim "int") s
