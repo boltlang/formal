@@ -16,3 +16,7 @@ import BoltCore.SolutionGen
 import BoltCore.PolyLet
 import BoltCore.Examples
 import BoltCore.Check
+import BoltCore.Sorted.Types
+import BoltCore.Sorted.Sub
+import BoltCore.Sorted.Lattice
+import BoltCore.Sorted.Typing

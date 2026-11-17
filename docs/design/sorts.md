@@ -1,6 +1,6 @@
 # Design note: sorted types (types, rows, fields)
 
-Status: proposal, not implemented.
+Status: step 1 done (`lean/BoltCore/Sorted/`); steps 2–5 to do.
 
 ## The problem
 
@@ -161,9 +161,15 @@ Costs:
 Each step ends with `lake build`, `dune test` and `scripts/check-certs.sh`
 passing:
 
-1. **Sorted declarative core.** `T`, `Step`, `Sub` with cut elimination,
-   then `Rows.lean`, `Lattice.lean` and `Typing.lean`. Checkpoint: the
-   typing examples, and `not_typ_sel_missing` now by the shape of the rules.
+1. **Sorted declarative core.** Done, in `lean/BoltCore/Sorted/`, alongside
+   the unsorted files: `Types`, `Sub` (with cut elimination), `Lattice` and
+   `Typing`, with the typing examples and `not_typ_sel_missing`. `Rows.lean`
+   is abstract over field values and needs no change. Lean notes: `field`
+   is defined at every sort (`⊤` outside rows) and matches on the sort
+   first, which keeps its recursion structural, so it reduces by `rfl`.
+   Cut elimination goes through a *pending cut* predicate (`Pend`), so that
+   one induction on the right derivation covers every shape without casts
+   between sorts; rows are cut field by field.
 2. **Sorted solution.** The well-sortedness invariant (from `Sorts.lean`),
    the translations, and `defsOf` by sort, through `Solution.lean`,
    `SolutionRows.lean`, `Theorem1.lean` and `Kinds.lean`. Checkpoint:
