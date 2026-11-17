@@ -8,7 +8,8 @@ Soundness of constraining (`Soundness.lean`) says that the algorithm's log
 of accepted constraints is self-justifying and its bounds consistent. Here
 we turn that into actual subtyping facts: we interpret every type variable
 `v` of the state as the graph variable `gvar v`, defined (`Defs`, see
-`Sub.lean`) as the intersection of its upper bounds, and prove that every
+`Sub.lean`) as the intersection of its upper bounds (and of `⊤`, if `v`
+stands for a type rather than a row: `TyVar`), and prove that every
 accepted constraint `a ≤ b` gives `θ(a) ≤ θ(b)` in the declarative relation
 `Sub`. This is the paper's *unifying coalescing* (Fig. 12): each variable is
 instantiated to the greatest type consistent with its bounds.
@@ -48,9 +49,26 @@ inductive Clo (σ : Nat → Bounds) : Nat → SType → Prop where
   | here : u ∈ (σ n).upper → (∀ w, u ≠ .var w) → Clo σ n u
   | step : .var m ∈ (σ n).upper → Clo σ m u → Clo σ n u
 
+/-- `n` stands for a type, not a row: it is an ordinary type variable (its
+kind is empty), or it is accepted below one. -/
+inductive TyVar (s : State) : Nat → Prop where
+  | here : s.kind n = [] → TyVar s n
+  | under : (.var n, .var m) ∈ s.log → TyVar s m → TyVar s n
+
 /-- The definitions of the solution: `gvar n` is the intersection of the
-(translated) non-variable upper bounds reachable from `n`. -/
-def defsOf (s : State) : Defs := fun n τ => ∃ u, Clo s.bounds n u ∧ τ = u.toTy
+(translated) non-variable upper bounds reachable from `n`, and of `⊤` if `n`
+stands for a type. So an unconstrained type variable is `⊤`, a present
+field, while an unconstrained row variable is the top row, `Abs`. -/
+def defsOf (s : State) : Defs := fun n τ =>
+  (∃ u, Clo s.bounds n u ∧ τ = u.toTy) ∨ (TyVar s n ∧ τ = .top)
+
+/-- A reachable upper bound is a definition. -/
+theorem defsOf.clo {s : State} (h : Clo s.bounds n u) : defsOf s n u.toTy := .inl ⟨u, h, rfl⟩
+
+/-- A variable that stands for a type is below `⊤`. -/
+theorem TyVar.le_top {s : State} {R : Ty → Ty → Prop} (h : TyVar s n) :
+    Step (defsOf s) R (.gvar n) .top :=
+  .defL (.inr ⟨h, rfl⟩) (.top trivial)
 
 theorem Clo.nonvar : Clo σ n u → ∀ w, u ≠ .var w
   | .here _ h => h

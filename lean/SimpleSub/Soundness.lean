@@ -98,35 +98,38 @@ structure Grows (s s' : State) : Prop where
   upper : ∀ v x, x ∈ (s.bounds v).upper → x ∈ (s'.bounds v).upper
   log : ∀ p, p ∈ s.log → p ∈ s'.log
   cache : ∀ p, p ∈ s.cache → p ∈ s'.cache
+  /-- Kinds never change. -/
+  kind : s'.kind = s.kind
 
 namespace Grows
 
-theorem refl : Grows s s := ⟨fun _ _ h => h, fun _ _ h => h, fun _ h => h, fun _ h => h⟩
+theorem refl : Grows s s := ⟨fun _ _ h => h, fun _ _ h => h, fun _ h => h, fun _ h => h, rfl⟩
 
 theorem trans (h₁ : Grows s₁ s₂) (h₂ : Grows s₂ s₃) : Grows s₁ s₃ :=
   ⟨fun v x h => h₂.lower v x (h₁.lower v x h), fun v x h => h₂.upper v x (h₁.upper v x h),
-   fun p h => h₂.log p (h₁.log p h), fun p h => h₂.cache p (h₁.cache p h)⟩
+   fun p h => h₂.log p (h₁.log p h), fun p h => h₂.cache p (h₁.cache p h),
+   h₂.kind.trans h₁.kind⟩
 
 theorem remember : Grows s (s.remember a b) :=
   ⟨fun _ _ h => h, fun _ _ h => h,
-   fun _ h => List.mem_cons_of_mem _ h, fun _ h => List.mem_cons_of_mem _ h⟩
+   fun _ h => List.mem_cons_of_mem _ h, fun _ h => List.mem_cons_of_mem _ h, rfl⟩
 
 theorem addUpper : Grows s (s.addUpper v t) := by
-  refine ⟨fun w x h => ?_, fun w x h => ?_, fun _ h => h, fun _ h => h⟩
+  refine ⟨fun w x h => ?_, fun w x h => ?_, fun _ h => h, fun _ h => h, rfl⟩
   · simp only [State.addUpper]; split <;> simpa
   · simp only [State.addUpper]; split
     · next he => subst he; exact List.mem_cons_of_mem _ h
     · exact h
 
 theorem addLower : Grows s (s.addLower v t) := by
-  refine ⟨fun w x h => ?_, fun w x h => ?_, fun _ h => h, fun _ h => h⟩
+  refine ⟨fun w x h => ?_, fun w x h => ?_, fun _ h => h, fun _ h => h, rfl⟩
   · simp only [State.addLower]; split
     · next he => subst he; exact List.mem_cons_of_mem _ h
     · exact h
   · simp only [State.addLower]; split <;> simpa
 
 theorem expand : Grows s { s with next := n, exps := e } :=
-  ⟨fun _ _ h => h, fun _ _ h => h, fun _ h => h, fun _ h => h⟩
+  ⟨fun _ _ h => h, fun _ _ h => h, fun _ h => h, fun _ h => h, rfl⟩
 
 end Grows
 

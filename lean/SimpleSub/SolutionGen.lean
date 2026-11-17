@@ -33,7 +33,7 @@ instance (A : List Nat) (t : SType) : Decidable (Av A t) := by
 /-- What generalizing the variables `A` of the state `s` needs of the
 instance `I`: it is the solution outside `A`, bounds outside `A` do not
 mention `A`, and inside `A` it satisfies the bounds, as subtyping and
-field by field. -/
+field by field, and reads ordinary type variables as types (below `⊤`). -/
 structure GenHyp (s : State) (A : List Nat) (I : Nat → Ty) : Prop where
   out : ∀ v, v ∉ A → I v = .gvar v
   avoid : ∀ v, v ∉ A → ∀ b, (b ∈ (s.bounds v).upper ∨ b ∈ (s.bounds v).lower) → Av A b
@@ -41,6 +41,14 @@ structure GenHyp (s : State) (A : List Nat) (I : Nat → Ty) : Prop where
   low : ∀ α ∈ A, ∀ l ∈ (s.bounds α).lower,
     (l ≠ .abs → Sub (defsOf s) (l.interp I) (I α)) ∧
       ∀ f, Sub (defsOf s) ((l.interp I).field f) ((I α).field f)
+  top : ∀ α ∈ A, s.kind α = [] → Sub (defsOf s) (I α) .top
+
+/-- An instance reads every ordinary type variable as a type. -/
+theorem GenHyp.le_top {s : State} {A : List Nat} {I : Nat → Ty} (hg : GenHyp s A I) {v : Nat}
+    (hk : s.kind v = []) : Sub (defsOf s) (I v) .top := by
+  by_cases hv : v ∈ A
+  · exact hg.top v hv hk
+  · rw [hg.out v hv]; exact Sub.of_step (TyVar.here hk).le_top
 
 section
 variable {s : State} {A : List Nat} {I : Nat → Ty}
@@ -145,6 +153,12 @@ theorem St.toG (hi : Inv s) (hn : LogNAC s) (hr : TailRanked s rank) (h : St s x
     StG s I x y :=
   h.mono fun _ _ h => h.map fun _ _ h => .sub (SolR.sub hi hn hr h)
 
+/-- A type other than `Abs` and a variable is below `⊤`, however read. -/
+theorem stepTopG : ∀ {a : SType}, a ≠ .abs → (∀ w, a ≠ .var w) → StG s I (a.interp I) .top
+  | .prim _, _, _ | .arrow _ _, _, _ | .record _ _, _, _ => .top trivial
+  | .abs, h, _ => absurd rfl h
+  | .var w, _, h => absurd rfl (h w)
+
 /-- One layer for an accepted constraint between non-variable types. -/
 theorem stepNonvarG (hi : Inv s) (hn : LogNAC s) (hl : Logged s a b) (ha : a ≠ .abs)
     (hav : ∀ w, a ≠ .var w) (hbv : ∀ w, b ≠ .var w) : StG s I (a.interp I) (b.interp I) := by
@@ -198,17 +212,19 @@ theorem stepTyG (hi : Inv s) (hn : LogNAC s) (hr : TailRanked s rank) (hg : GenH
         rw [SType.interp_avoid hg b' (hg.avoid v hv _ (.inl hb))] at h
         show StG s I (I v) _
         rw [hg.out v hv]
-        exact .defL ⟨_, .here hb hbv, rfl⟩ h
+        exact .defL (defsOf.clo (.here hb hbv)) h
     | @viaR v a' _ hl' h₁ h₂ hav' haa hR =>
       by_cases hv : v ∈ A
       · exact (stepNonvarG hi hn hR haa hav' h₁).comp (StG.of_sub ((hg.low v hv _ hl').1 h₂))
       · show StG s I _ (I v)
         rw [hg.out v hv]
-        refine .defR fun τ ⟨u, hc, hτ⟩ => ?_
-        subst hτ
-        have h := stepNonvarG (I := I) hi hn hR haa hav' h₁
-        rw [SType.interp_avoid hg a' (hg.avoid v hv _ (.inr hl'))] at h
-        exact h.comp (((lower_chain hi hr hc _ hl' h₁ _ (Nat.le_refl _)).step hi hn h₂).toG hi hn hr)
+        refine .defR fun τ hτ => ?_
+        rcases hτ with ⟨u, hc, rfl⟩ | ⟨_, rfl⟩
+        · have h := stepNonvarG (I := I) hi hn hR haa hav' h₁
+          rw [SType.interp_avoid hg a' (hg.avoid v hv _ (.inr hl'))] at h
+          exact h.comp
+            (((lower_chain hi hr hc _ hl' h₁ _ (Nat.le_refl _)).step hi hn h₂).toG hi hn hr)
+        · exact stepTopG haa hav'
 
 /-- From a variable to one of its non-variable upper bounds, at a field:
 through the graph definition outside `A`, through the bound inside. -/
@@ -219,7 +235,7 @@ theorem boundField (hg : GenHyp s A I) {ρ : Nat} {x : SType} {l : String} {τ :
   · exact (StG.of_sub ((hg.up ρ hρ x hu).2 l)).comp h
   · show StG s I ((I ρ).field l) τ
     rw [hg.out ρ hρ, SType.interp_avoid hg x (hg.avoid ρ hρ _ (.inl hu))] at *
-    exact .projDefL ⟨x, .here hu hx, rfl⟩ h
+    exact .projDefL (defsOf.clo (.here hu hx)) h
 
 /-- One layer for a field pair of an accepted constraint with a non-variable
 left side, read through a generalization (see `stepFieldNV`). -/
@@ -344,13 +360,14 @@ theorem stepFieldNVG (hi : Inv s) (hn : LogNAC s) (hr : TailRanked s rank) (hg :
       · exact (ihRank a' a l hlt hR).comp (.of_sub ((hg.low v hv _ hl').2 l))
       · show StG s I _ ((I v).field l)
         rw [hg.out v hv]
-        refine .projDefR fun τ ⟨u, hc, hτ⟩ => ?_
-        subst hτ
-        have h := ihRank a' a l hlt hR
-        rw [SType.interp_avoid hg a' (hg.avoid v hv _ (.inr hl'))] at h
-        exact h.comp
-          (((lower_chain hi hr hc a' hl' h₁ _ (Nat.le_refl _)).fieldStep
-            fun x y hxy _ => stepField hi hn hr y x l hxy).toG hi hn hr)
+        refine .projDefR fun τ hτ => ?_
+        rcases hτ with ⟨u, hc, rfl⟩ | ⟨_, rfl⟩
+        · have h := ihRank a' a l hlt hR
+          rw [SType.interp_avoid hg a' (hg.avoid v hv _ (.inr hl'))] at h
+          exact h.comp
+            (((lower_chain hi hr hc a' hl' h₁ _ (Nat.le_refl _)).fieldStep
+              fun x y hxy _ => stepField hi hn hr y x l hxy).toG hi hn hr)
+        · exact .abs
 
 /-- One layer for a field pair of an accepted constraint, read through a
 generalization (see `stepFieldCore`). -/

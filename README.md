@@ -203,7 +203,15 @@ in `lean/`. Everything below is proved; there are no `sorry`s.
   Records are compared as rows, i.e. total maps from labels to fields:
   `{fs | t} ≤ {gs | u}` when every label's field is related. `Ty.field`
   looks a label up in the explicit fields, then in the tail. A row
-  variable's fields are opaque atoms `proj l ρ`. Not covered yet: the
+  variable's fields are opaque atoms `proj l ρ`.
+
+  `Abs` is strictly above `⊤` (`not_abs_le_top`). `Abs` promises nothing
+  about a field, not even that it is there; `⊤` is any value. Only types
+  are below `⊤`, so `τ ≤ ⊤` says a field of type `τ` is present, and
+  `{} ≤ {x : ⊤}` fails. This matches `lib/typer.ml`, where an absent field
+  never satisfies a present one.
+
+  Not covered yet: the
   MLsub lattice equations. The OCaml code uses five such equations that aren't derivable
   yet: merging intersections and unions of functions, merging intersections
   and unions of records, and distributing a row over a union of tails.
@@ -228,9 +236,13 @@ in `lean/`. Everything below is proved; there are no `sorry`s.
   file header records the sequent-style plan for adding the equations.
 - `SimpleSub/Typing.lean`: declarative typing over the minimal subtyping
   rules, with constrained schemes for built-ins and let-polymorphism, and
-  record extension. Examples: `typ_twice`, `typ_if`, `typ_ext` (the
+  record extension. Selection `t.l` requires a present field: `t : {l : τ}`
+  with `τ ≤ ⊤`. Examples: `typ_twice`, `typ_if`, `typ_ext` (the
   extension example of Marques et al.), `typ_letPoly`,
-  `typ_letConstrained`.
+  `typ_letConstrained`. Selecting a label that a record literal lacks has
+  no type (`not_typ_sel_missing`; `{}.x` and `{a = 1}.b`), a first step
+  towards type safety. There is no operational semantics yet, so progress
+  and preservation are not proved.
 - `SimpleSub/Algorithm.lean`: a model of `lib/typer.ml`, without levels.
   Coalescing only affects printing and is left for step 5. Like the
   OCaml code, the model rejects structural recursive types: an accepted
@@ -263,7 +275,10 @@ in `lean/`. Everything below is proved; there are no `sorry`s.
   coalescing). Each type variable `v` becomes a *graph variable* `gvar v`,
   defined as the intersection of the non-variable upper bounds reachable
   from `v` through variable-to-variable bounds (`Clo`, an inductive
-  predicate, so cycles need no special treatment).
+  predicate, so cycles need no special treatment), and of `⊤` when `v`
+  stands for a type: it is an ordinary type variable (empty kind) or is
+  accepted below one (`TyVar`). So an unconstrained type variable is `⊤`,
+  a present field, and an unconstrained row variable is the top row.
 - `SimpleSub/SolutionRows.lean`: every accepted constraint `a ≤ b` gives
   `θ(a) ≤ θ(b)` (`solution_rows`). The coinductive relation also holds the
   *field projections* of accepted constraints. Proving a field pair follows
@@ -334,7 +349,9 @@ proof, where they are needed.
      bounds of other variables not to mention the generalized ones.
      `PTyp` is the typing skeleton with let-polymorphism: contexts hold
      schemes (`mkScheme`: the generalized variables as fresh free type
-     variables, constrained by their bounds), and `let`/`let rec`
+     variables, constrained by their bounds, and by `α ≤ ⊤` for each
+     ordinary type variable `α`, so an instance never reads it as `Abs`),
+     and `let`/`let rec`
      generalize a list of variables the checker vets (`GenOK`).
      `PTyp.sound_top`: a valid certificate with such a skeleton gives a
      declarative typing with constrained schemes. Nested generalizations
@@ -356,13 +373,14 @@ proof, where they are needed.
        bounds".
      - Instantiation: done (`PolyLet.lean`). A use of a let-bound name
        carries the renaming `ρ` (`freshen_above`'s copies), and the
-       checker verifies `ρ` fixes every non-generalized variable and that
+       checker verifies `ρ` fixes every non-generalized variable, that
+       the copies keep the kinds of the originals, and that
        the copies' renamed bounds are accepted (`InstOK`). The copies'
        solution is then an instance of the scheme.
      - Examples (`Examples.lean`): certificates and skeletons for
-       `let id = fun x -> x in id 1` (`∀0. 0 → 0`) and
+       `let id = fun x -> x in id 1` (`∀0. 0 ≤ ⊤ ⇒ 0 → 0`) and
        `let inc = fun x -> succ x in inc 1`
-       (`∀0 3. 0 ≤ int, int ≤ 3 ⇒ 0 → 3`, used at copies carrying the
+       (`∀0 3. 0 ≤ int, int ≤ 3, 0 ≤ ⊤, 3 ≤ ⊤ ⇒ 0 → 3`, used at copies carrying the
        renamed bounds), checked by hand and typed by `PTyp.sound_top`.
      - Still to do: adequacy for polymorphic skeletons (the model has no
        levels or instantiation yet).
@@ -379,7 +397,9 @@ proof, where they are needed.
    - 6a, proofs: done (`Certificate.lean`). A certificate lists the
      accepted constraints, the bounds, the kinds and a rank per variable;
      validity is the invariants over those finite lists, including that
-     the ranks exclude structural recursive types. Soundness
+     the ranks exclude structural recursive types. A skeleton's
+     selection checks that the field's type is that of a present field
+     (not `Abs`, not a row variable). Soundness
      (`CTyp.sound`): a valid certificate with a typing skeleton for a
      term gives its declarative typing, and its solution has no recursive
      types (`Valid.nonrec`). Adequacy (`TypeTerm.certificate`): every

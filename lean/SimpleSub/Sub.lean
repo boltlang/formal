@@ -25,8 +25,14 @@ related, where `Ty.field` looks a label up in the explicit fields and
 otherwise in the tail. The comparison of each field goes through the
 coinductive hypothesis (a record field is a constructor), and tails need no
 separate rule. A row variable's fields are opaque atoms `proj l ρ`, related
-only to themselves (and to `⊤`/`Abs`), or through a graph variable's
+only to themselves (and to `Abs`), or through a graph variable's
 definitions.
+
+`Abs` is *strictly above* `⊤`. `Abs` is the top of everything: it promises
+nothing about a field, not even that it is there. `⊤` is the top of types:
+some value. So `Abs ≤ ⊤` fails (`not_abs_le_top`), `{} ≤ {x : ⊤}` fails, and
+"`τ ≤ ⊤`" says that a field of type `τ` is present, which is what the
+typing rule for selection asks (`Typing.lean`).
 
 There are no structural recursive types (`Types.lean`); a recursive type
 can only arise through graph-variable definitions, which the model only
@@ -65,9 +71,19 @@ end
 only mention graph variables of strictly lower rank. -/
 def Defs.Ranked (E : Defs) (r : Nat → Nat) : Prop := ∀ n u, E n u → ∀ m ∈ u.gvars, r m < r n
 
+/-- Syntactically a type: not `Abs`, a field of an opaque row, or
+something whose meaning depends on its parts or its definitions. Only these
+are below `⊤` outright; unions, intersections and graph variables are below
+`⊤` through their own rules. So `Abs` (any value, *or no field at all*) is
+strictly above `⊤` (any value). -/
+def Ty.IsType : Ty → Prop
+  | .top | .prim _ | .arrow _ _ | .record _ _ | .fvar _ => True
+  | _ => False
+
 /-- One layer of subtyping, relative to the coinductive hypothesis `R`. -/
 inductive Step (E : Defs) (R : Ty → Ty → Prop) : Ty → Ty → Prop where
-  | top : Step E R a .top
+  /-- Every type is below `⊤`; `Abs` is not. -/
+  | top : a.IsType → Step E R a .top
   | bot : Step E R .bot b
   /-- `Abs` is the top field and the top row. -/
   | abs : Step E R a .abs
@@ -100,7 +116,7 @@ inductive Step (E : Defs) (R : Ty → Ty → Prop) : Ty → Ty → Prop where
 theorem Step.mono (hR : ∀ x y, R x y → R' x y) : Step E R a b → Step E R' a b := by
   intro h
   induction h with
-  | top => exact .top
+  | top h => exact .top h
   | bot => exact .bot
   | abs => exact .abs
   | prim => exact .prim
@@ -145,14 +161,14 @@ theorem Sub.of_step (h : Step E (Sub E) a b) : Sub E a b := by
 
 /-! ## Basic lattice facts -/
 
-theorem Sub.top : Sub E a .top := Sub.of_step .top
+theorem Sub.top (h : a.IsType) : Sub E a .top := Sub.of_step (.top h)
 theorem Sub.bot : Sub E .bot b := Sub.of_step .bot
 theorem Sub.abs : Sub E a .abs := Sub.of_step .abs
 
 /-! ## Reflexivity -/
 
 theorem step_refl : (t : Ty) → Step E Eq t t
-  | .top => .top
+  | .top => .top trivial
   | .bot => .bot
   | .abs => .abs
   | .prim _ => .prim
@@ -180,7 +196,9 @@ one of the `cut_*` lemmas below does an induction on the right derivation:
 rules that take `z` apart commute outward, and the rule that takes `y`
 apart must be the matching one (`unionL`, `interL`, the same
 constructor), which cuts on smaller derivations. No rule takes `⊤` or `Abs`
-apart on the left, so those cases are vacuous. -/
+apart on the left, so those cases are vacuous. When the right derivation
+ends with the `⊤` rule, `y` is syntactically a type, and so is `x`, since
+the left derivation ended with the rule for `y`'s constructor. -/
 
 /-- A relation, or its composition with itself. Including `R` itself lets
 a cut against the reflexive atom rule of a *defined* variable reuse the
@@ -203,10 +221,10 @@ outward; the rule that takes `y` apart must be the matching one. -/
 theorem Step.toComp (h : Step E R a b) : Step E (RComp R) a b :=
   h.mono fun _ _ h => .inl h
 
-theorem cut_top : ∀ y z, Step E R y z → y = .top → Step E (RComp R) x z := by
+theorem cut_top (hx : x.IsType) : ∀ y z, Step E R y z → y = .top → Step E (RComp R) x z := by
   intro y z h
   induction h with
-  | top => intro _; exact .top
+  | top _ => intro _; exact .top hx
   | abs => intro _; exact .abs
   | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
   | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
@@ -219,7 +237,7 @@ theorem cut_top : ∀ y z, Step E R y z → y = .top → Step E (RComp R) x z :=
 theorem cut_abs : ∀ y z, Step E R y z → y = .abs → Step E (RComp R) x z := by
   intro y z h
   induction h with
-  | top => intro _; exact .top
+  | top ht => intro hy; subst hy; exact ht.elim
   | abs => intro _; exact .abs
   | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
   | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
@@ -238,7 +256,7 @@ theorem cut_atom
     ∀ y z, Step E R y z → y = x → Step E (RComp R) x z := by
   intro y z h
   induction h with
-  | top => intro _; exact .top
+  | top ht => intro hy; subst hy; exact .top ht
   | abs => intro _; exact .abs
   | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
   | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
@@ -259,7 +277,7 @@ theorem cut_unionR₁ (ih : ∀ z, Step E R y₁ z → Step E (RComp R) x z) :
     ∀ y z, Step E R y z → y = .union y₁ y₂ → Step E (RComp R) x z := by
   intro y z h
   induction h with
-  | top => intro _; exact .top
+  | top ht => intro hy; subst hy; exact ht.elim
   | abs => intro _; exact .abs
   | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
   | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
@@ -274,7 +292,7 @@ theorem cut_unionR₂ (ih : ∀ z, Step E R y₂ z → Step E (RComp R) x z) :
     ∀ y z, Step E R y z → y = .union y₁ y₂ → Step E (RComp R) x z := by
   intro y z h
   induction h with
-  | top => intro _; exact .top
+  | top ht => intro hy; subst hy; exact ht.elim
   | abs => intro _; exact .abs
   | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
   | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
@@ -290,7 +308,7 @@ theorem cut_interR (ih₁ : ∀ z, Step E R y₁ z → Step E (RComp R) x z)
     ∀ y z, Step E R y z → y = .inter y₁ y₂ → Step E (RComp R) x z := by
   intro y z h
   induction h with
-  | top => intro _; exact .top
+  | top ht => intro hy; subst hy; exact ht.elim
   | abs => intro _; exact .abs
   | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
   | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
@@ -311,7 +329,7 @@ theorem cut_defR (hl : ∀ u, E n u → Step E R x u)
     ∀ y z, Step E R y z → y = .gvar n → Step E (RComp R) x z := by
   intro y z h
   induction h with
-  | top => intro _; exact .top
+  | top ht => intro hy; subst hy; exact ht.elim
   | abs => intro _; exact .abs
   | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
   | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
@@ -328,7 +346,7 @@ theorem cut_projDefR (hl : ∀ u, E n u → Step E R x (u.field l))
     ∀ y z, Step E R y z → y = .proj l (.gvar n) → Step E (RComp R) x z := by
   intro y z h
   induction h with
-  | top => intro _; exact .top
+  | top ht => intro hy; subst hy; exact ht.elim
   | abs => intro _; exact .abs
   | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
   | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
@@ -344,7 +362,7 @@ theorem cut_arrow (h₁ : R b₁ a₁) (h₂ : R a₂ b₂) :
     ∀ y z, Step E R y z → y = .arrow b₁ b₂ → Step E (RComp R) (.arrow a₁ a₂) z := by
   intro y z h
   induction h with
-  | top => intro _; exact .top
+  | top _ => intro _; exact .top trivial
   | abs => intro _; exact .abs
   | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
   | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
@@ -360,7 +378,7 @@ theorem cut_record
     ∀ y z, Step E R y z → y = .record gs u → Step E (RComp R) (.record fs t) z := by
   intro y z h
   induction h with
-  | top => intro _; exact .top
+  | top _ => intro _; exact .top trivial
   | abs => intro _; exact .abs
   | unionR₁ _ ih' => intro hy; exact .unionR₁ (ih' hy)
   | unionR₂ _ ih' => intro hy; exact .unionR₂ (ih' hy)
@@ -378,7 +396,7 @@ with guarded premises that are subtyping facts or compositions. -/
 theorem cut : Step E R x y → ∀ z, Step E R y z → Step E (RComp R) x z := by
   intro hl
   induction hl with
-  | top => intro z hr; exact cut_top _ z hr rfl
+  | top hx => intro z hr; exact cut_top hx _ z hr rfl
   | abs => intro z hr; exact cut_abs _ z hr rfl
   | bot => intro _ _; exact .bot
   | prim => intro z hr; exact cut_atom (Or.inl ⟨_, rfl⟩) _ z hr rfl
@@ -404,6 +422,19 @@ theorem Sub.trans (hab : Sub E a b) (hbc : Sub E b c) : Sub E a c := by
   rintro x z (h | ⟨_, hxy, hyz⟩)
   · exact h.step.toComp
   · exact cut hxy.step z hyz.step
+
+/-! ## `Abs` is strictly above `⊤`
+
+`Abs` says nothing about a field, not even that it is there; `⊤` says it
+holds some value. So a type that is below `⊤` is a *present* field, and
+nothing above `Abs` is one. This is what makes selecting a field safe. -/
+
+theorem not_abs_le_top : ¬ Sub E .abs .top := fun h => by
+  cases h.step with | top ht => exact ht
+
+/-- Nothing above `Abs` is a type. -/
+theorem not_abs_le_of_le_top (h : Sub E τ .top) : ¬ Sub E .abs τ :=
+  fun h' => not_abs_le_top (h'.trans h)
 
 /-! ## Coinduction up to transitivity -/
 

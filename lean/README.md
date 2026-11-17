@@ -13,7 +13,7 @@ lake build
 | `SimpleSub/Syntax.lean` | term syntax (mirrors `lib/syntax.ml`) |
 | `SimpleSub/Types.lean` | types with rows; no structural recursive types |
 | `SimpleSub/Lattice.lean` | the MLsub lattice equations: what the minimal rules cannot derive, and the sequent-style plan |
-| `SimpleSub/Typing.lean` | declarative typing (constrained schemes `∀ᾱ. D ⇒ σ` for built-ins and let-polymorphism, record extension) with examples |
+| `SimpleSub/Typing.lean` | declarative typing (constrained schemes `∀ᾱ. D ⇒ σ` for built-ins and let-polymorphism, record extension, selection of present fields only) with examples; selecting a missing field is untypable (`not_typ_sel_missing`) |
 | `SimpleSub/Algorithm.lean` | model of `lib/typer.ml` (no levels): state, `Constrain`/`TypeTerm` as big-step relations; ranked bounds (`StructRanked`) rule out structural recursive types |
 | `SimpleSub/Soundness.lean` | soundness of constraining on the bound graph: justification and consistency invariants, preserved by `constrain` and `typeTerm` |
 | `SimpleSub/Solution.lean` | the solution of the inferred constraints (unifying coalescing via graph variables) and its invariants |
@@ -25,7 +25,7 @@ lake build
 | `SimpleSub/SolutionGen.lean` | the solution under a generalization: accepted constraints hold when generalized variables are read as an instance of their bounds (`solution_gen`) |
 | `SimpleSub/PolyLet.lean` | certificates with let-polymorphism: schemes from generalized variables and their bounds (`mkScheme`), checked generalization (`GenOK`) and instantiation (`InstOK`), soundness (`PTyp.sound_top`; uses classical logic) |
 | `SimpleSub/Examples.lean` | example certificates with let-polymorphism, unconstrained and constrained, checked by hand |
-| `SimpleSub/Sub.lean` | guarded coinductive subtyping, rows compared as label maps; reflexivity, transitivity (cut elimination, for any relation), coinduction up to transitivity, ranked (non-recursive) definitions, the paper's §5.1.3 example with graph variables, row examples |
+| `SimpleSub/Sub.lean` | guarded coinductive subtyping, rows compared as label maps, `Abs` strictly above `⊤`; reflexivity, transitivity (cut elimination, for any relation), coinduction up to transitivity, ranked (non-recursive) definitions, the paper's §5.1.3 example with graph variables, row examples |
 | `SimpleSub/Rows.lean` | row algebra; exactness of the row rewrites in `lib/simplify.ml` and `lib/subsume.ml` |
 
 Lean binds unknown lowercase names in signatures as implicit variables,

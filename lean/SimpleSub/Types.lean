@@ -15,8 +15,9 @@ infinite type.
 
 Records and rows share one constructor, as in the OCaml code:
 `record fields tail` is a record type, or a row when it is itself a tail.
-A field is either `abs` (the top field: no guarantee) or a type (Rémy's
-`Pre τ`). The tail is `abs` (the top row), `bot` (the bottom row), a row
+A field is either `abs` (the top field: no guarantee, not even that the
+field is there) or a type (Rémy's `Pre τ`, a present field). So `abs` is
+strictly above `top`, the type of any value (`Sub.lean`). The tail is `abs` (the top row), `bot` (the bottom row), a row
 variable, or a union/intersection of tails. Fields are a separate mutual
 type so that all recursion over types is structural.
 

@@ -14,7 +14,9 @@ along the way is still logged there (the log only grows), so
 `solution_rows` relates all of them at once. Each `constrain` the
 algorithm performed becomes a subsumption step; the side condition that
 its left side is not `Abs` holds because it is always the inferred type of
-a subterm (`TypeTerm.nac`).
+a subterm (`TypeTerm.nac`). The result of a selection is an ordinary type
+variable (its kind is empty), so its solution is below `⊤`: the selected
+field is present, as the declarative rule requires.
 -/
 
 namespace SimpleSub.Alg
@@ -73,6 +75,29 @@ theorem TypeTerm.log_grows : TypeTerm Γ s t st s' → ∀ p, p ∈ s.log → p 
 theorem TypeFields.log_grows : TypeFields Γ s fs F s' → ∀ p, p ∈ s.log → p ∈ s'.log
   | .nil => fun _ h => h
   | .cons h₁ h₂ => fun p hp => h₂.log_grows p (h₁.log_grows p hp)
+end
+
+theorem ConstrainTop.kind_eq {s s' : State} (h : ConstrainTop s a b s') : s'.kind = s.kind := by
+  obtain ⟨s₁, hc, rfl⟩ := h
+  exact hc.grows.kind
+
+mutual
+/-- Typing never changes the kinds. -/
+theorem TypeTerm.kind_eq : TypeTerm Γ s t st s' → s'.kind = s.kind
+  | .lit => rfl
+  | .var _ => rfl
+  | .lam _ h => h.kind_eq
+  | .app _ h₁ h₂ hc => (hc.kind_eq.trans h₂.kind_eq).trans h₁.kind_eq
+  | .rcd h => h.kind_eq
+  | .sel _ h hc => hc.kind_eq.trans h.kind_eq
+  | .ext _ h₁ h₂ _ hc => (hc.kind_eq.trans h₂.kind_eq).trans h₁.kind_eq
+  | .extNil h => h.kind_eq
+  | .letIn h₁ h₂ => h₂.kind_eq.trans h₁.kind_eq
+  | .letRec _ _ h₁ hc h₂ => (h₂.kind_eq.trans hc.kind_eq).trans h₁.kind_eq
+
+theorem TypeFields.kind_eq : TypeFields Γ s fs F s' → s'.kind = s.kind
+  | .nil => rfl
+  | .cons h₁ h₂ => h₂.kind_eq.trans h₁.kind_eq
 end
 
 /-! ## The theorem -/
@@ -157,83 +182,92 @@ theorem SCtx.lookup_toCtxR {f : Nat → Nat} {Γ : SCtx} {x : String} {st : STyp
   simpa [SCtx.toCtx, SCtx.toCtxR, Function.comp_def] using this
 
 /-- What the renamed soundness proof needs: every accepted constraint whose
-left side is not `Abs` holds, renamed, in `E`. -/
-def RenSound (E : Defs) (f : Nat → Nat) (sf : State) : Prop :=
-  ∀ {s : State} {a b : SType}, Logged s a b → (∀ p, p ∈ s.log → p ∈ sf.log) → a ≠ .abs →
+left side is not `Abs` holds, renamed, in `E`, and every ordinary type
+variable is, renamed, below `⊤` (so the field a selection reads is
+present). -/
+structure RenSound (E : Defs) (f : Nat → Nat) (sf : State) : Prop where
+  sub : ∀ {s : State} {a b : SType}, Logged s a b → (∀ p, p ∈ s.log → p ∈ sf.log) → a ≠ .abs →
     Sub E (a.rename f).toTy (b.rename f).toTy
+  top : ∀ v, sf.kind v = [] → Sub E (.gvar (f v)) .top
 
 /-- The final state's solution satisfies the unrenamed requirement. -/
 theorem Final.renSound {sf : State} {rank : Nat → Nat} (hf : Final sf rank) :
-    RenSound (defsOf sf) id sf := fun hl hlog ha => by
-  simp only [SType.rename_id]; exact hf.sub hl hlog ha
+    RenSound (defsOf sf) id sf where
+  sub := fun hl hlog ha => by simp only [SType.rename_id]; exact hf.sub hl hlog ha
+  top := fun _ hv => Sub.of_step (TyVar.here hv).le_top
 
 mutual
 /-- **Theorem 1, renamed**: if the algorithm types `t` with `st`, and the
 accepted constraints hold (renamed by `f`) in `E`, then `t` has the renamed
-type `f(st)` in the renamed context. -/
+type `f(st)` in the renamed context. The kinds are those of `sf`. -/
 theorem TypeTerm.soundR {E : Defs} {f : Nat → Nat} {sf : State} (H : RenSound E f sf) :
     TypeTerm Γ s t st s' → CtxNAC Γ → Inv₂ s → LogNAC s →
-    (∀ p, p ∈ s'.log → p ∈ sf.log) → Typ E (Γ.toCtxR f) t (st.rename f).toTy
-  | .lit, _, _, _, _ => .lit
-  | .var hx, _, _, _, _ => Typ.var_mono (SCtx.lookup_toCtxR hx)
-  | .lam _ h, hΓ, i, n, hlog =>
-    .lam (h.soundR H (hΓ.cons trivial (fun h => nomatch h)) i.fresh n hlog)
-  | .app _ h₁ h₂ hc, hΓ, i, n, hlog => by
+    (∀ p, p ∈ s'.log → p ∈ sf.log) → s.kind = sf.kind →
+    Typ E (Γ.toCtxR f) t (st.rename f).toTy
+  | .lit, _, _, _, _, _ => .lit
+  | .var hx, _, _, _, _, _ => Typ.var_mono (SCtx.lookup_toCtxR hx)
+  | .lam _ h, hΓ, i, n, hlog, hk =>
+    .lam (h.soundR H (hΓ.cons trivial (fun h => nomatch h)) i.fresh n hlog hk)
+  | .app _ h₁ h₂ hc, hΓ, i, n, hlog, hk => by
     have i₁ := h₁.inv₂ i.fresh
     have r₁ := h₁.nac hΓ i.fresh n
     have r₂ := h₂.nac hΓ i₁ r₁.1
     have hlog₂ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog p (hc.log_grows p hp)
     have hlog₁ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog₂ p (h₂.log_grows p hp)
-    exact .app (.sub (h₁.soundR H hΓ i.fresh n hlog₁) (H hc.logged hlog r₁.2.2))
-      (h₂.soundR H hΓ i₁ r₁.1 hlog₂)
-  | .rcd h, hΓ, i, n, hlog => .rcd (h.soundR H hΓ i n hlog)
-  | .sel _ h hc, hΓ, i, n, hlog => by
+    exact .app (.sub (h₁.soundR H hΓ i.fresh n hlog₁ hk) (H.sub hc.logged hlog r₁.2.2))
+      (h₂.soundR H hΓ i₁ r₁.1 hlog₂ (h₁.kind_eq.trans hk))
+  | .rcd h, hΓ, i, n, hlog, hk => .rcd (h.soundR H hΓ i n hlog hk)
+  | .sel hn h hc, hΓ, i, n, hlog, hk => by
     have r := h.nac hΓ i.fresh n
-    exact .sel (.sub (h.soundR H hΓ i.fresh n fun p hp => hlog p (hc.log_grows p hp))
-      (H hc.logged hlog r.2.2))
-  | .extNil h, hΓ, i, n, hlog => .extNil (h.soundR H hΓ i n hlog)
-  | .ext _ h₁ h₂ _ hc, hΓ, i, n, hlog => by
+    -- the result is an ordinary type variable, so the field is present
+    exact .sel (.sub (h.soundR H hΓ i.fresh n (fun p hp => hlog p (hc.log_grows p hp)) hk)
+      (H.sub hc.logged hlog r.2.2)) (H.top _ (hk ▸ hn))
+  | .extNil h, hΓ, i, n, hlog, hk => .extNil (h.soundR H hΓ i n hlog hk)
+  | .ext _ h₁ h₂ _ hc, hΓ, i, n, hlog, hk => by
     have i₁ := h₁.inv₂ i
     have r₁ := h₁.nac hΓ i n
     have r₂ := h₂.nac hΓ i₁ r₁.1
     have hlog₂ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog p (hc.log_grows p hp)
     have hlog₁ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog₂ p (h₂.log_grows p hp)
-    have hs := H hc.logged hlog r₁.2.2
+    have hs := H.sub hc.logged hlog r₁.2.2
     simp only [SType.rename, SFields.rename_absOf, SType.toTy, SFields.toFields_absOf] at hs
-    exact .ext (.sub (h₁.soundR H hΓ i n hlog₁) hs) (h₂.soundR H hΓ i₁ r₁.1 hlog₂)
-  | .letIn h₁ h₂, hΓ, i, n, hlog => by
+    exact .ext (.sub (h₁.soundR H hΓ i n hlog₁ hk) hs)
+      (h₂.soundR H hΓ i₁ r₁.1 hlog₂ (h₁.kind_eq.trans hk))
+  | .letIn h₁ h₂, hΓ, i, n, hlog, hk => by
     have r₁ := h₁.nac hΓ i n
-    exact Typ.letIn_mono (h₁.soundR H hΓ i n fun p hp => hlog p (h₂.log_grows p hp))
-      (h₂.soundR H (hΓ.cons r₁.2.1 r₁.2.2) (h₁.inv₂ i) r₁.1 hlog)
-  | .letRec hf _ h₁ hc h₂, hΓ, i, n, hlog => by
+    exact Typ.letIn_mono (h₁.soundR H hΓ i n (fun p hp => hlog p (h₂.log_grows p hp)) hk)
+      (h₂.soundR H (hΓ.cons r₁.2.1 r₁.2.2) (h₁.inv₂ i) r₁.1 hlog (h₁.kind_eq.trans hk))
+  | .letRec hf _ h₁ hc h₂, hΓ, i, n, hlog, hk => by
     have r₁ := h₁.nac (hΓ.cons trivial (fun h => nomatch h)) i.fresh n
     have i₁ := h₁.inv₂ i.fresh
     have hlog₂ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog p (h₂.log_grows p hp)
     have hlog₁ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog₂ p (hc.log_grows p hp)
     exact Typ.letRec_mono hf
-      (.sub (h₁.soundR H (hΓ.cons trivial (fun h => nomatch h)) i.fresh n hlog₁)
-        (H hc.logged hlog₂ r₁.2.2))
+      (.sub (h₁.soundR H (hΓ.cons trivial (fun h => nomatch h)) i.fresh n hlog₁ hk)
+        (H.sub hc.logged hlog₂ r₁.2.2))
       (h₂.soundR H (hΓ.cons trivial (fun h => nomatch h)) (hc.inv₂ i₁)
-        (hc.nac i₁ r₁.2.1 trivial r₁.1) hlog)
+        (hc.nac i₁ r₁.2.1 trivial r₁.1) hlog ((hc.kind_eq.trans h₁.kind_eq).trans hk))
 
 theorem TypeFields.soundR {E : Defs} {f : Nat → Nat} {sf : State} (H : RenSound E f sf) :
     TypeFields Γ s fs F s' → CtxNAC Γ → Inv₂ s → LogNAC s →
-    (∀ p, p ∈ s'.log → p ∈ sf.log) → TypFields E (Γ.toCtxR f) fs (F.rename f).toFields
-  | .nil, _, _, _, _ => .nil
-  | .cons h₁ h₂, hΓ, i, n, hlog =>
+    (∀ p, p ∈ s'.log → p ∈ sf.log) → s.kind = sf.kind →
+    TypFields E (Γ.toCtxR f) fs (F.rename f).toFields
+  | .nil, _, _, _, _, _ => .nil
+  | .cons h₁ h₂, hΓ, i, n, hlog, hk =>
     have r₁ := h₁.nac hΓ i n
-    .cons (h₁.soundR H hΓ i n fun p hp => hlog p (h₂.log_grows p hp))
-      (h₂.soundR H hΓ (h₁.inv₂ i) r₁.1 hlog)
+    .cons (h₁.soundR H hΓ i n (fun p hp => hlog p (h₂.log_grows p hp)) hk)
+      (h₂.soundR H hΓ (h₁.inv₂ i) r₁.1 hlog (h₁.kind_eq.trans hk))
 end
 
 /-- **Theorem 1** (soundness of inference): if the algorithm types `t` with
 `st`, starting from a state and context satisfying the invariants, then `t`
 has type `θ(st)` in the declarative system, for the solution `θ` of any
-later state `sf` (in particular the final one). -/
+later state `sf` with the same kinds (in particular the final one). -/
 theorem TypeTerm.sound {rank : Nat → Nat} {sf : State} (hf : Final sf rank)
     (h : TypeTerm Γ s t st s') (hΓ : CtxNAC Γ) (i : Inv₂ s) (n : LogNAC s)
-    (hlog : ∀ p, p ∈ s'.log → p ∈ sf.log) : Typ (defsOf sf) Γ.toCtx t st.toTy := by
-  have := h.soundR hf.renSound hΓ i n hlog
+    (hlog : ∀ p, p ∈ s'.log → p ∈ sf.log) (hk : s.kind = sf.kind) :
+    Typ (defsOf sf) Γ.toCtx t st.toTy := by
+  have := h.soundR hf.renSound hΓ i n hlog hk
   rwa [SCtx.toCtxR_id, SType.rename_id] at this
 
 /-- **Theorem 1, from scratch**: if the algorithm types `t` with `st` in the
@@ -246,6 +280,6 @@ theorem soundness {K : Nat → List String} {rank : Nat → Nat}
     (hr : TailRanked s' rank) : Typ (defsOf s') builtins.toCtx t st.toTy := by
   have hn := h.nac builtins_NAC Inv₂.init LogNAC.init
   exact TypeTerm.sound ⟨h.inv_init, (h.inv₂ Inv₂.init).inLog, hn.1, hr⟩ h builtins_NAC Inv₂.init
-    LogNAC.init fun _ hp => hp
+    LogNAC.init (fun _ hp => hp) h.kind_eq.symm
 
 end SimpleSub.Alg

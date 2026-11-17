@@ -304,6 +304,12 @@ theorem stepNonvar (hi : Inv s) (hn : LogNAC s) (hl : Logged s a b) (ha : a ≠ 
     | viaL => exact absurd rfl (hav _)
     | viaR => exact absurd rfl (hbv _)
 
+/-- A type other than `Abs` and a variable is below `⊤`. -/
+theorem stepTop : ∀ {a : SType}, a ≠ .abs → (∀ w, a ≠ .var w) → St s a.toTy .top
+  | .prim _, _, _ | .arrow _ _, _, _ | .record _ _, _, _ => .top trivial
+  | .abs, h, _ => absurd rfl h
+  | .var w, _, h => absurd rfl (h w)
+
 /-- A chain of accepted constraints between non-variable types, whose right
 sides satisfy `P` (a bound on their tail ranks, for fields). -/
 inductive Chain (s : State) (P : SType → Prop) : SType → SType → Prop where
@@ -358,8 +364,8 @@ theorem stepVarNonvar (hi : Inv s) (hn : LogNAC s) (hl : Logged s (.var w) u)
   · exact absurd h.symm (hnv w)
   · cases hi.just.step h with
     | absR => exact .abs
-    | varL hu => exact .defL ⟨u, .here hu hnv, rfl⟩ (stepRefl u)
-    | viaL hb hbv hba _ hR => exact .defL ⟨_, .here hb hbv, rfl⟩ (stepNonvar hi hn hR hba hbv hnv)
+    | varL hu => exact .defL (defsOf.clo (.here hu hnv)) (stepRefl u)
+    | viaL hb hbv hba _ hR => exact .defL (defsOf.clo (.here hb hbv)) (stepNonvar hi hn hR hba hbv hnv)
     | varR => exact absurd rfl (hnv _)
     | viaR => exact absurd rfl (hnv _)
 
@@ -377,9 +383,9 @@ theorem stepVarLower (hi : Inv s) (hn : LogNAC s) (hc : Clo s.bounds m u) :
     intro w hw
     rcases hi.cons n (.var w) (.var m') hw hm with h | h
     · rcases h with h | h
-      · cases h; exact .defL ⟨u, hc, rfl⟩ (stepRefl u)
+      · cases h; exact .defL (defsOf.clo (hc)) (stepRefl u)
       · cases hi.just.step h with
-        | varL hu' => exact .defL ⟨u, .step hu' hc, rfl⟩ (stepRefl u)
+        | varL hu' => exact .defL (defsOf.clo (.step hu' hc)) (stepRefl u)
         | varR hl => exact ih w hl
         | viaL _ _ _ hbv => exact absurd rfl (hbv _)
         | viaR _ _ _ hav => exact absurd rfl (hav _)
@@ -402,28 +408,36 @@ theorem stepTy (hi : Inv s) (hn : LogNAC s) {rank : Nat → Nat} (hr : TailRanke
     | varL hub =>
       match b with
       | .var w =>
-        exact .defR fun τ ⟨u, hc, hτ⟩ => by
-          subst hτ; exact .defL ⟨u, .step hub hc, rfl⟩ (stepRefl u)
-      | .prim _ => exact .defL ⟨_, .here hub (fun _ h => nomatch h), rfl⟩ (stepRefl _)
-      | .arrow _ _ => exact .defL ⟨_, .here hub (fun _ h => nomatch h), rfl⟩ (stepRefl _)
-      | .record _ _ => exact .defL ⟨_, .here hub (fun _ h => nomatch h), rfl⟩ (stepRefl _)
-      | .abs => exact .defL ⟨_, .here hub (fun _ h => nomatch h), rfl⟩ (stepRefl _)
+        exact .defR fun τ hτ => by
+          rcases hτ with ⟨u, hc, rfl⟩ | ⟨ht, rfl⟩
+          · exact .defL (defsOf.clo (.step hub hc)) (stepRefl u)
+          · exact (TyVar.under hl ht).le_top
+      | .prim _ => exact .defL (defsOf.clo (.here hub (fun _ h => nomatch h))) (stepRefl _)
+      | .arrow _ _ => exact .defL (defsOf.clo (.here hub (fun _ h => nomatch h))) (stepRefl _)
+      | .record _ _ => exact .defL (defsOf.clo (.here hub (fun _ h => nomatch h))) (stepRefl _)
+      | .abs => exact .defL (defsOf.clo (.here hub (fun _ h => nomatch h))) (stepRefl _)
     | @varR v _ hlb =>
-      refine .defR fun τ ⟨u, hc, hτ⟩ => ?_
-      subst hτ
-      cases a with
-      | var w => exact stepVarLower hi hn hc w hlb
-      | prim _ | arrow _ _ | record _ _ =>
-        exact (lower_chain hi hr hc _ hlb (fun _ h => nomatch h) _ (Nat.le_refl _)).step hi hn
-          (fun h => nomatch h)
-      | abs => rcases ha with ha | ha; exact absurd rfl ha; exact nomatch ha
+      refine .defR fun τ hτ => ?_
+      rcases hτ with ⟨u, hc, rfl⟩ | ⟨ht, rfl⟩
+      · cases a with
+        | var w => exact stepVarLower hi hn hc w hlb
+        | prim _ | arrow _ _ | record _ _ =>
+          exact (lower_chain hi hr hc _ hlb (fun _ h => nomatch h) _ (Nat.le_refl _)).step hi hn
+            (fun h => nomatch h)
+        | abs => rcases ha with ha | ha; exact absurd rfl ha; exact nomatch ha
+      · -- `v` stands for a type, so what flows into it is below `⊤`
+        cases a with
+        | var w => exact (TyVar.under hl ht).le_top
+        | prim _ | arrow _ _ | record _ _ => exact .top trivial
+        | abs => rcases ha with ha | ha; exact absurd rfl ha; exact nomatch ha
     | viaL hb hbv hba hnv hR =>
-      exact .defL ⟨_, .here hb hbv, rfl⟩ (stepNonvar hi hn hR hba hbv hnv)
+      exact .defL (defsOf.clo (.here hb hbv)) (stepNonvar hi hn hR hba hbv hnv)
     | viaR hl' h₁ h₂ hav haa hR =>
-      refine .defR fun τ ⟨u, hc, hτ⟩ => ?_
-      subst hτ
-      exact (stepNonvar hi hn hR haa hav h₁).comp
-        ((lower_chain hi hr hc _ hl' h₁ _ (Nat.le_refl _)).step hi hn h₂)
+      refine .defR fun τ hτ => ?_
+      rcases hτ with ⟨u, hc, rfl⟩ | ⟨_, rfl⟩
+      · exact (stepNonvar hi hn hR haa hav h₁).comp
+          ((lower_chain hi hr hc _ hl' h₁ _ (Nat.le_refl _)).step hi hn h₂)
+      · exact stepTop haa hav
 
 /-- The field version of `stepVarLower`, given field steps for accepted
 constraints into right sides of smaller tail rank. -/
@@ -440,9 +454,9 @@ theorem fieldVarLower (hi : Inv s) {rank : Nat → Nat} (hr : TailRanked s rank)
       · exact absurd h.symm (hnv w)
       · cases hi.just.step h with
         | absR => exact .abs
-        | varL hu' => exact .projDefL ⟨u, .here hu' hnv, rfl⟩ (stepReflField l u)
+        | varL hu' => exact .projDefL (defsOf.clo (.here hu' hnv)) (stepReflField l u)
         | viaL hb hbv _ _ hR =>
-          exact .projDefL ⟨_, .here hb hbv, rfl⟩
+          exact .projDefL (defsOf.clo (.here hb hbv))
             (ih _ _ hR (Nat.lt_of_lt_of_le (tailRank_var_lt hr (.here hu hnv)) hB))
         | varR => exact absurd rfl (hnv _)
         | viaR => exact absurd rfl (hnv _)
@@ -451,9 +465,9 @@ theorem fieldVarLower (hi : Inv s) {rank : Nat → Nat} (hr : TailRanked s rank)
     intro w hw hB
     rcases hi.cons n (.var w) (.var m') hw hm with h | h
     · rcases h with h | h
-      · cases h; exact .projDefL ⟨u, hc, rfl⟩ (stepReflField l u)
+      · cases h; exact .projDefL (defsOf.clo (hc)) (stepReflField l u)
       · cases hi.just.step h with
-        | varL hu' => exact .projDefL ⟨u, .step hu' hc, rfl⟩ (stepReflField l u)
+        | varL hu' => exact .projDefL (defsOf.clo (.step hu' hc)) (stepReflField l u)
         | varR hl => exact ih' w hl (Nat.le_trans (tailRank_upVar_le hr hm) hB)
         | viaL _ _ _ hbv => exact absurd rfl (hbv _)
         | viaR _ _ _ hav => exact absurd rfl (hav _)
@@ -540,7 +554,7 @@ theorem stepFieldNV (hi : Inv s) (hn : LogNAC s) {rank : Nat → Nat}
               have hp : (ms.presentIn K).lookup l = some f₁ := by
                 rw [SFields.presentIn_lookup]; simp [hk, hmiss]
               obtain ⟨f', hf', hq⟩ := hrel.lookup hp
-              refine .projDefL ⟨_, .here hu (fun _ h => nomatch h), rfl⟩ ?_
+              refine .projDefL (defsOf.clo (.here hu (fun _ h => nomatch h))) ?_
               rw [field_record, hf']
               cases hq with
               | toAbs => exact .abs
@@ -564,7 +578,7 @@ theorem stepFieldNV (hi : Inv s) (hn : LogNAC s) {rank : Nat → Nat}
           | abs => rw [← hrest_field]; exact hrec
           | varAbsent => rw [← hrest_field]; exact hrec
           | var K _ _ _ hu hrel =>
-            refine .projDefL ⟨_, .here hu (fun _ h => nomatch h), rfl⟩ ?_
+            refine .projDefL (defsOf.clo (.here hu (fun _ h => nomatch h))) ?_
             have hp : (ms.presentIn K).lookup l = none := by
               rw [SFields.presentIn_lookup]; simp [hmiss]
             rw [field_record, hrel.lookup_none hp]
@@ -574,16 +588,18 @@ theorem stepFieldNV (hi : Inv s) (hn : LogNAC s) {rank : Nat → Nat}
     | varL => exact absurd rfl (hav _)
     | viaL => exact absurd rfl (hav _)
     | @varR v _ hlb =>
-      exact .projDefR fun τ ⟨u, hc, hτ⟩ => by
-        subst hτ
-        exact (lower_chain hi hr hc a hlb hav _ (Nat.le_refl _)).fieldStep
-          fun x y hxy hy => ihRank y x l hy hxy
-    | viaR hl' h₁ h₂ _ _ hR =>
-      exact .projDefR fun τ ⟨u, hc, hτ⟩ => by
-        subst hτ
-        exact (Chain.cons hR hav h₁ h₂ (tailRank_lower_lt hr hl' h₁)
-          (lower_chain hi hr hc _ hl' h₁ _ (Nat.le_refl _))).fieldStep
+      exact .projDefR fun τ hτ => by
+        rcases hτ with ⟨u, hc, rfl⟩ | ⟨_, rfl⟩
+        · exact (lower_chain hi hr hc a hlb hav _ (Nat.le_refl _)).fieldStep
             fun x y hxy hy => ihRank y x l hy hxy
+        · exact .abs
+    | viaR hl' h₁ h₂ _ _ hR =>
+      exact .projDefR fun τ hτ => by
+        rcases hτ with ⟨u, hc, rfl⟩ | ⟨_, rfl⟩
+        · exact (Chain.cons hR hav h₁ h₂ (tailRank_lower_lt hr hl' h₁)
+            (lower_chain hi hr hc _ hl' h₁ _ (Nat.le_refl _))).fieldStep
+              fun x y hxy hy => ihRank y x l hy hxy
+        · exact .abs
 
 /-- One layer for a field pair of an accepted constraint (see `stepFieldNV`;
 a variable on the left goes through its bounds). -/
@@ -608,18 +624,21 @@ theorem stepFieldCore (hi : Inv s) (hn : LogNAC s) {rank : Nat → Nat}
       | varL hub =>
         cases b with
         | var w =>
-          exact .projDefR fun τ ⟨u, hc, hτ⟩ => by
-            subst hτ; exact .projDefL ⟨u, .step hub hc, rfl⟩ (stepReflField l u)
-        | prim _ => exact .projDefL ⟨_, .here hub (fun _ h => nomatch h), rfl⟩ (stepReflField l _)
-        | arrow _ _ => exact .projDefL ⟨_, .here hub (fun _ h => nomatch h), rfl⟩ (stepReflField l _)
-        | record _ _ => exact .projDefL ⟨_, .here hub (fun _ h => nomatch h), rfl⟩ (stepReflField l _)
-        | abs => exact .projDefL ⟨_, .here hub (fun _ h => nomatch h), rfl⟩ (stepReflField l _)
+          exact .projDefR fun τ hτ => by
+            rcases hτ with ⟨u, hc, rfl⟩ | ⟨_, rfl⟩
+            · exact .projDefL (defsOf.clo (.step hub hc)) (stepReflField l u)
+            · exact .abs
+        | prim _ => exact .projDefL (defsOf.clo (.here hub (fun _ h => nomatch h))) (stepReflField l _)
+        | arrow _ _ => exact .projDefL (defsOf.clo (.here hub (fun _ h => nomatch h))) (stepReflField l _)
+        | record _ _ => exact .projDefL (defsOf.clo (.here hub (fun _ h => nomatch h))) (stepReflField l _)
+        | abs => exact .projDefL (defsOf.clo (.here hub (fun _ h => nomatch h))) (stepReflField l _)
       | @varR v _ hlb =>
-        exact .projDefR fun τ ⟨u, hc, hτ⟩ => by
-          subst hτ
-          exact fieldVarLower hi hr (fun x y hxy hy => ihRank y x l hy hxy) hc w hlb (Nat.le_refl _)
+        exact .projDefR fun τ hτ => by
+          rcases hτ with ⟨u, hc, rfl⟩ | ⟨_, rfl⟩
+          · exact fieldVarLower hi hr (fun x y hxy hy => ihRank y x l hy hxy) hc w hlb (Nat.le_refl _)
+          · exact .abs
       | viaL hb hbv _ _ hR =>
-        exact .projDefL ⟨_, .here hb hbv, rfl⟩ (stepFieldNV hi hn hr b ihRank ihSize _ hbv l hR)
+        exact .projDefL (defsOf.clo (.here hb hbv)) (stepFieldNV hi hn hr b ihRank ihSize _ hbv l hR)
       | viaR _ _ _ hav => exact absurd rfl (hav _)
 
 /-- One layer for a field pair of an accepted constraint, by nested

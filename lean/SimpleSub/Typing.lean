@@ -30,6 +30,11 @@ same with `x` monomorphic in `s`. A monomorphic `let` is the scheme with no
 variables and no constraints (`Typ.letIn_mono`). There is no value
 restriction: the language has no mutable state (Bolt will need one).
 
+**Selection** `t.l` needs the field to be present: `t : {l : τ}` with
+`τ ≤ ⊤`. `Abs` is strictly above `⊤` (`Sub.lean`), so this excludes a field
+of type `Abs`, which every record has, with or without `l`. Selecting a
+label that a record literal lacks has no type (`not_typ_sel_missing`).
+
 `t with {l₁ = e₁, …}` is typed like the OCaml type checker types it: `t`
 must be a record whose fields `lᵢ` may be anything (`Abs`) and whose other
 fields form some row `ρ`; the result has the new fields over the same `ρ`.
@@ -152,7 +157,9 @@ inductive Typ (E : Defs) : Ctx → Term → Ty → Prop where
   | lam : Typ E ((x, .mono τ₁) :: Γ) t τ₂ → Typ E Γ (.lam x t) (.arrow τ₁ τ₂)
   | app : Typ E Γ f (.arrow τ₁ τ₂) → Typ E Γ a τ₁ → Typ E Γ (.app f a) τ₂
   | rcd : TypFields E Γ fs F → Typ E Γ (.rcd fs) (.record F .abs)
-  | sel : Typ E Γ t (.record (.cons l τ .nil) .abs) → Typ E Γ (.sel t l) τ
+  /-- Selection: the field is present, i.e. its type is below `⊤` (a field
+  of type `Abs` may be missing). -/
+  | sel : Typ E Γ t (.record (.cons l τ .nil) .abs) → Sub E τ .top → Typ E Γ (.sel t l) τ
   /-- `t with {fs}`: `t`'s fields `fs` may be anything, the rest is `ρ`. -/
   | ext : Typ E Γ t (.record F.absOf ρ) → TypFields E Γ fs F → Typ E Γ (.ext t fs) (.record F ρ)
   /-- `t with {}` evaluates to `t`, whatever its type (as in `lib/typer.ml`). -/
@@ -257,7 +264,7 @@ theorem typ_ext :
     · have hx' : ¬ "x" = l := fun e => hx e.symm
       simp only [Ty.field, Fields.lookup, hx', ite_false]
       exact Sub.abs
-  exact .sel (.sub (.app hfun (.sub (.rcd (.cons .lit .nil)) harg)) hres)
+  exact .sel (.sub (.app hfun (.sub (.rcd (.cons .lit .nil)) harg)) hres) (Sub.top trivial)
 
 /-- Let-polymorphism: `let id = fun x -> x in {a = id 1; b = id true}`,
 with `id : ∀α. α → α`, used at `int` and at `bool`. -/
@@ -302,5 +309,73 @@ theorem typ_letConstrained :
   exact .lam (.app (.var_mono rfl) (.sub (.var_mono rfl) hc))
 
 end Examples
+
+/-! ## Selection needs a present field
+
+`Abs` is strictly above `⊤` (`not_abs_le_top`): a field of type `Abs` may be
+missing, a field whose type is below `⊤` is there. So selecting a label that
+a record literal does not have is not typable, at any type; before `Abs`
+and `⊤` were told apart, `{}.x` had type `⊤`. -/
+
+/-- The types of a selection: a present field's type, and its supertypes. -/
+theorem Typ.sel_inv {t : Term} {l : String} : ∀ {Γ : Ctx} {u : Term} {τ : Ty},
+    Typ E Γ u τ → u = .sel t l →
+    ∃ τ', Typ E Γ t (.record (.cons l τ' .nil) .abs) ∧ Sub E τ' .top ∧ Sub E τ' τ
+  | _, _, _, .sel h ht, e => by cases e; exact ⟨_, h, ht, Sub.refl⟩
+  | _, _, _, .sub h hs, e =>
+    let ⟨τ', h₁, h₂, h₃⟩ := Typ.sel_inv h e; ⟨τ', h₁, h₂, h₃.trans hs⟩
+  | _, _, _, .lit, e => nomatch e
+  | _, _, _, .var _ _, e => nomatch e
+  | _, _, _, .lam _, e => nomatch e
+  | _, _, _, .app _ _, e => nomatch e
+  | _, _, _, .rcd _, e => nomatch e
+  | _, _, _, .ext _ _, e => nomatch e
+  | _, _, _, .extNil _, e => nomatch e
+  | _, _, _, .letIn _ _ _, e => nomatch e
+  | _, _, _, .letRec _ _ _ _, e => nomatch e
+
+/-- The types of a record literal: its record type, and its supertypes. -/
+theorem Typ.rcd_inv {fs : List (String × Term)} : ∀ {Γ : Ctx} {u : Term} {τ : Ty},
+    Typ E Γ u τ → u = .rcd fs → ∃ F, TypFields E Γ fs F ∧ Sub E (.record F .abs) τ
+  | _, _, _, .rcd h, e => by cases e; exact ⟨_, h, Sub.refl⟩
+  | _, _, _, .sub h hs, e => let ⟨F, hF, hs'⟩ := Typ.rcd_inv h e; ⟨F, hF, hs'.trans hs⟩
+  | _, _, _, .lit, e => nomatch e
+  | _, _, _, .var _ _, e => nomatch e
+  | _, _, _, .lam _, e => nomatch e
+  | _, _, _, .app _ _, e => nomatch e
+  | _, _, _, .sel _ _, e => nomatch e
+  | _, _, _, .ext _ _, e => nomatch e
+  | _, _, _, .extNil _, e => nomatch e
+  | _, _, _, .letIn _ _ _, e => nomatch e
+  | _, _, _, .letRec _ _ _ _, e => nomatch e
+
+theorem TypFields.lookup_none {Γ : Ctx} {l : String} :
+    ∀ {fs : List (String × Term)} {F : Fields}, TypFields E Γ fs F → (∀ p ∈ fs, p.1 ≠ l) →
+      F.lookup l = none
+  | _, _, .nil, _ => rfl
+  | _, _, .cons (l := l') (t := t) _ h, hl => by
+    have hne : l' ≠ l := hl (l', t) (List.mem_cons_self ..)
+    simp only [Fields.lookup, hne, ite_false]
+    exact h.lookup_none fun p hp => hl p (List.mem_cons_of_mem _ hp)
+
+/-- Selecting a label that a record literal does not have is not typable. -/
+theorem not_typ_sel_missing {Γ : Ctx} {fs : List (String × Term)} {l : String} {τ : Ty}
+    (hl : ∀ p ∈ fs, p.1 ≠ l) : ¬ Typ E Γ (.sel (.rcd fs) l) τ := fun h => by
+  obtain ⟨τ', h₁, h₂, _⟩ := Typ.sel_inv h rfl
+  obtain ⟨F, hF, hs⟩ := Typ.rcd_inv h₁ rfl
+  cases hs.step with
+  | record hf =>
+    have := hf l
+    simp [Ty.field, Fields.lookup, hF.lookup_none hl] at this
+    exact not_abs_le_of_le_top h₂ this
+
+/-- `{}.x` has no type. -/
+theorem not_typ_empty_sel {Γ : Ctx} {τ : Ty} : ¬ Typ E Γ (.sel (.rcd []) "x") τ :=
+  not_typ_sel_missing fun _ h => nomatch h
+
+/-- `{a = 1}.b` has no type (a "missing field" error of `lib/typer.ml`). -/
+theorem not_typ_sel_other {Γ : Ctx} {τ : Ty} :
+    ¬ Typ E Γ (.sel (.rcd [("a", .lit 1)]) "b") τ :=
+  not_typ_sel_missing fun p hp => by simp at hp; subst hp; decide
 
 end SimpleSub
