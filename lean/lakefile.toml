@@ -4,3 +4,7 @@ defaultTargets = ["BoltCore"]
 
 [[lean_lib]]
 name = "BoltCore"
+
+[[lean_exe]]
+name = "boltcore-check"
+root = "Main"

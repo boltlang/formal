@@ -1,4 +1,4 @@
-import BoltCore.PolyLet
+import BoltCore.Check
 
 /-!
 # An example certificate with let-polymorphism
@@ -10,8 +10,9 @@ constraints are the use's `1 → 1 ≤ int → 2` and what it decomposes and
 propagates into: `int ≤ 1`, `1 ≤ 2` and `int ≤ 2`.
 
 This checks that the conditions of `PTyp.sound_top` can be met by a
-certificate with a non-trivial generalization. The proofs are by hand;
-the executable checker (roadmap 6b) will decide such conditions.
+certificate with a non-trivial generalization. The proofs are by hand; at
+the end of each example, the executable checker (`Check.lean`) decides the
+same conditions, by `decide`.
 -/
 
 namespace BoltCore.Alg.Example
@@ -148,6 +149,15 @@ theorem skeleton : PTyp cert [] prog (.var 2) := by
 `∀0. 0 ≤ ⊤ ⇒ 0 → 0` by the generalizing `let`. -/
 theorem typed : Typ (defsOf cert.state) [] prog (.gvar 2) :=
   PTyp.sound_top valid skeleton
+
+/-- The annotated term `lib/typer.ml` would print for `prog`. -/
+def ann : Ann :=
+  .letIn "id" [0] (.lam "x" (.var 0) (.var "x")) (.app (.inst "id" [(0, 1)]) (.lit 1) (.var 2))
+
+/-- The executable checker accepts the certificate and the skeleton. -/
+theorem checked : cert.check = true ∧ infer cert [] ann = some (.var 2) := by decide
+
+example : Typ (defsOf cert.state) [] prog (.gvar 2) := check_sound checked.1 checked.2
 
 /-! ## A constrained example
 
@@ -311,6 +321,15 @@ theorem skeleton : PTyp cert Γ prog (.var 2) := by
 `∀0 3. 0 ≤ int, int ≤ 3, 0 ≤ ⊤, 3 ≤ ⊤ ⇒ 0 → 3` by the generalizing `let`. -/
 theorem typed : Typ (defsOf cert.state) (Γ.toCtx cert.bounds cert.kind .gvar) prog (.gvar 2) :=
   PTyp.sound_top valid skeleton
+
+def ann : Ann :=
+  .letIn "inc" [0, 3] (.lam "x" (.var 0) (.app (.var "succ") (.var "x") (.var 3)))
+    (.app (.inst "inc" [(0, 1), (3, 4)]) (.lit 1) (.var 2))
+
+theorem checked : cert.check = true ∧ infer cert Γ ann = some (.var 2) := by decide
+
+example : Typ (defsOf cert.state) (Γ.toCtx cert.bounds cert.kind .gvar) prog (.gvar 2) :=
+  check_sound checked.1 checked.2
 
 end Constrained
 

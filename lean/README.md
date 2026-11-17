@@ -6,6 +6,7 @@ proved.
 
 ```sh
 lake build
+lake exe boltcore-check CERT.json   # check a certificate from `boltcore --cert`
 ```
 
 | File | Contents |
@@ -24,7 +25,9 @@ lake build
 | `BoltCore/Certificate.lean` | certificates (accepted constraints, bounds, kinds, ranks) and typing skeletons: a valid certificate gives a declarative typing over a solution without recursive types (`CTyp.sound`, `Valid.nonrec`), and every accepted run yields one (`TypeTerm.certificate`) |
 | `BoltCore/SolutionGen.lean` | the solution under a generalization: accepted constraints hold when generalized variables are read as an instance of their bounds (`solution_gen`) |
 | `BoltCore/PolyLet.lean` | certificates with let-polymorphism: schemes from generalized variables and their bounds (`mkScheme`), checked generalization (`GenOK`) and instantiation (`InstOK`), soundness (`PTyp.sound_top`; uses classical logic) |
-| `BoltCore/Examples.lean` | example certificates with let-polymorphism, unconstrained and constrained, checked by hand |
+| `BoltCore/Check.lean` | the executable checker: Boolean checks of validity (`Certificate.check`) and of polymorphic skeletons over annotated terms (`infer`), with `check_sound`: an accepted certificate types the term |
+| `BoltCore/Examples.lean` | example certificates with let-polymorphism, unconstrained and constrained, checked by hand and by the executable checker (`decide`) |
+| `Main.lean` | `boltcore-check`: reads a JSON certificate, computes ranks, runs the checks, explains rejections (parsing and diagnostics are not verified) |
 | `BoltCore/Sub.lean` | guarded coinductive subtyping, rows compared as label maps, `Abs` strictly above `⊤`; reflexivity, transitivity (cut elimination, for any relation), coinduction up to transitivity, ranked (non-recursive) definitions, the paper's §5.1.3 example with graph variables, row examples |
 | `BoltCore/Rows.lean` | row algebra; exactness of the row rewrites in `lib/simplify.ml` and `lib/subsume.ml` |
 

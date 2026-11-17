@@ -15,3 +15,4 @@ import BoltCore.Certificate
 import BoltCore.SolutionGen
 import BoltCore.PolyLet
 import BoltCore.Examples
+import BoltCore.Check
