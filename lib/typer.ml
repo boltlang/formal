@@ -459,11 +459,7 @@ let rec type_term_ann (ctx : ctx) (lvl : int) (trm : term) : simple_type * ann =
       let typed = List.map (fun (n, t) -> (n, type_term_ann ctx lvl t)) fs in
       let anns = List.map (fun (n, (_, a)) -> (n, a)) typed in
       let fs = List.map (fun (n, (ty, _)) -> (n, ty)) typed in
-      let fs =
-        (* a later binding of the same label wins *)
-        List.rev
-          (List.fold_left (fun acc (n, t) -> (n, t) :: List.remove_assoc n acc) [] fs)
-      in
+      (* the labels are distinct (the parser checks) *)
       if fs = [] then (obj_ty, AExt (obj_ann, anns, Abs)) (* [obj with {}] is just [obj] *)
       else begin
         (* [rho] stands for the other fields: it lacks the extended labels *)

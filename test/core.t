@@ -215,6 +215,12 @@ Extensible records (rows, after Marques et al. 2024)
   parse error: 1:19: expected '=' (at '}')
   [2]
 
+A label is set at most once in a `with`:
+
+  $ boltcore -e '{a = 0} with {a = 1; a = true}'
+  parse error: 1:31: label 'a' set twice in 'with' (at 'end of input')
+  [2]
+
 Raw output is contractive: a variable cycle without a constructor in between
 becomes the neutral element (here ⊤ in an intersection) instead of an
 unguarded recursive type like `('g ∧ 'h as 'g)`

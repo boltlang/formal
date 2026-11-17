@@ -434,14 +434,13 @@ proof, where they are needed.
 
      `scripts/check-certs.sh` certifies every example and test program
      (and `test/certs.txt`, which stresses extrusion under nested `let`s):
-     89 programs, 86 accepted (14 of them without their ill-typed items),
-     2 that do not parse, and one known rejection. That is `rows.sub`'s
-     `{a = 0} with {a = 1; a = true}`: OCaml keeps the last binding of a
-     repeated label, so the result is `{a: bool}`, while `Typ.ext` takes
-     the field list as given, and looking `a` up finds `int` first. The
-     Lean model assumes distinct labels (`Algorithm.lean`), so the
-     checker rightly refuses this certificate. `--rectypes` programs are
-     not certified, since the Lean development has no recursive types.
+     every program is accepted, some without their ill-typed items. The
+     checker found one mismatch: in `{a = 0} with {a = 1; a = true}`,
+     OCaml kept the last binding of the repeated label, while `Typ.ext`
+     takes the field list as given and looking `a` up finds the first. A
+     label repeated in a `with` is now a parse error. `--rectypes`
+     programs are not certified, since the Lean development has no
+     recursive types.
 
      Adequacy, tested: extrusion needed nothing beyond the extruded
      pairs. In particular, the rule for `w ≤ n` through a variable that is
@@ -452,8 +451,5 @@ proof, where they are needed.
 
 ## Not yet implemented
 
-- Repeated labels in a `with`: OCaml keeps the last one, the Lean model
-  the first (found by the certificate checker, see 6b). Records agree:
-  both take the first.
 - Boolean-algebra types (negation, MLstruct), and rejecting uninhabited
   types such as `int ∧ bool`.

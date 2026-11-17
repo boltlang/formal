@@ -12,10 +12,9 @@ set -eu
 cd "$(dirname "$0")/.."
 verbose=${1:-}
 
-# Known rejections, with the reason.
+# Known rejections, with the reason (none at the moment).
 known() {
   case "$1" in
-    examples/rows.sub) echo "duplicate labels in a with: OCaml keeps the last, the Lean model the first" ;;
     *) return 1 ;;
   esac
 }

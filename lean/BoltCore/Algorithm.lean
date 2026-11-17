@@ -21,8 +21,9 @@ variable on the left; a variable on the left before one on the right), so
 the relation is as deterministic as the code.
 
 Deviations from the OCaml code, to revisit: the memo table for row
-expansion is keyed by the label list as given rather than as a sorted set,
-and labels in a `with` are assumed distinct.
+expansion is keyed by the label list as given rather than as a sorted set.
+The labels in a `with` are distinct: the parser (`lib/parser.ml`) rejects a
+repeated one.
 -/
 
 namespace BoltCore.Alg

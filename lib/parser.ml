@@ -14,6 +14,8 @@
     field   ::= ident '=' expr
     v}
 
+    The fields of a [with] have distinct labels.
+
     [let f x y = e] is sugar for [let f = fun x -> fun y -> e], and
     [if c then a else b] for [if c a b]. Line comments start with [//]. *)
 
@@ -149,7 +151,18 @@ let parse_program (src : string) : item list =
       | WITH ->
           advance ();
           (match atom () with
-           | Rcd fs -> t := Ext (!t, fs)
+           | Rcd fs ->
+               (* a label may be set once: which binding would win is
+                  ambiguous (the Lean model takes the labels as distinct) *)
+               let rec dup = function
+                 | [] -> ()
+                 | (n, _) :: rest ->
+                     if List.mem_assoc n rest then
+                       fail (Printf.sprintf "label '%s' set twice in 'with'" n);
+                     dup rest
+               in
+               dup fs;
+               t := Ext (!t, fs)
            | _ -> fail "expected '{' after 'with'")
       | _ -> continue := false
     done;

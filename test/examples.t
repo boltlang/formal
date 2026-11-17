@@ -45,7 +45,6 @@ simplified type is equivalent to the raw coalesced one.
   let boolToInt : {x: bool | 'a} -> {x: int | 'a}
   let changed : {keep: int, x: int}
   let setBoth : {a: Abs, b: Abs | 'a} -> {a: int, b: bool | 'a}
-  let lastWins : {a: bool}
   let both : {fromX: int, fromZ: bool}
   let either : bool -> {y: Abs | 'a} -> {z: Abs | 'b} -> {y: int | 'a} ∨ {z: int | 'b}
   let count : 'a ∧ {n: int | 'b ∧ {done: bool}} ∧ {done: bool} -> 'a ∨ {n: int | 'b}
