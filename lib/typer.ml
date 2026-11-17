@@ -29,6 +29,67 @@ module PolarTbl = Hashtbl.Make (struct
   let hash = Hashtbl.hash
 end)
 
+(** {1 Certificates}
+
+    Ghost state for certificates ({!Cert}), which the Lean checker
+    ([lean/Main.lean]) verifies: every constraint [constrain] accepts, the
+    relation between each extruded type and its original, and each
+    instantiation. Recorded only while [recording] is set; nothing here
+    affects inference. *)
+
+let recording = ref false
+
+(** Accepted constraints, newest first. *)
+let accepted : (simple_type * simple_type) list ref = ref []
+
+let note a b = if !recording then accepted := (a, b) :: !accepted
+
+(** A use of a let-bound name: the scheme's generalized variables, and a
+    copy of each, by original id. [freshen_above] copies the variables
+    reachable from the scheme's type; while recording, the others get a
+    copy too, with the renamed bounds, so that a certificate can instantiate
+    every constraint of the scheme. *)
+type inst = { gen : var_state list; copies : (int * var_state) list }
+
+let rec rename (m : (int, var_state) Hashtbl.t) = function
+  | Variable vs -> (
+      match Hashtbl.find_opt m vs.id with Some w -> Variable w | None -> Variable vs)
+  | Function (a, b) -> Function (rename m a, rename m b)
+  | Record (fs, t) -> Record (List.map (fun (n, f) -> (n, rename m f)) fs, rename m t)
+  | (Primitive _ | Abs) as t -> t
+
+(** Copy the generalized variables [freshen_above] did not copy. *)
+let complete_copies (gen : var_state list) copies lvl : (int * var_state) list =
+  let m = Hashtbl.create 16 in
+  List.iter (fun (id, c) -> Hashtbl.replace m id c) copies;
+  let fresh =
+    List.filter_map
+      (fun (a : var_state) ->
+        if Hashtbl.mem m a.id then None
+        else begin
+          let v = fresh_state ~kind:a.kind lvl in
+          Hashtbl.replace m a.id v;
+          Some (a, v)
+        end)
+      gen
+  in
+  List.iter
+    (fun ((a : var_state), v) ->
+      v.lower_bounds <- List.map (rename m) a.lower_bounds;
+      v.upper_bounds <- List.map (rename m) a.upper_bounds)
+    fresh;
+  List.map (fun (a : var_state) -> (a.id, Hashtbl.find m a.id)) gen
+
+(** Instantiations, newest first. *)
+let insts : inst list ref = ref []
+
+(** The generalized variables of each [Poly] scheme, by physical identity:
+    the variables above its level created while typing the right-hand
+    side, reachable from the type or not. *)
+let gens : (type_scheme * var_state list) list ref = ref []
+
+let gen_of sch = try List.assq sch !gens with Not_found -> []
+
 (** {1 Extrusion (Fig. 7)}
 
     Copy [ty] so that the result has level at most [lvl], creating
@@ -36,7 +97,14 @@ end)
 let rec extrude (ty : simple_type) (pol : bool) (lvl : int)
     (c : var_state PolarTbl.t) : simple_type =
   if level ty <= lvl then ty
-  else
+  else begin
+    let ty' = extrude1 ty pol lvl c in
+    (* a positive copy is above the original, a negative one below *)
+    if pol then note ty ty' else note ty' ty;
+    ty'
+  end
+
+and extrude1 ty pol lvl c =
     match ty with
     | Primitive _ -> ty
     | Function (l, r) ->
@@ -195,6 +263,7 @@ let constrain (lhs : simple_type) (rhs : simple_type) : unit =
     if Types.equal lhs rhs || Cache.mem cache (lhs, rhs) then ()
     else begin
       Cache.add cache (lhs, rhs) ();
+      note lhs rhs;
       match (lhs, rhs) with
       | Primitive n0, Primitive n1 when String.equal n0 n1 -> ()
       | Function (l0, r0), Function (l1, r1) ->
@@ -279,7 +348,8 @@ let constrain (lhs : simple_type) (rhs : simple_type) : unit =
 
 (** Copy [ty], replacing every variable of level > [lim] with a fresh
     variable at level [lvl], copying bounds along (they may be cyclic). *)
-let freshen_above (lim : int) (ty : simple_type) (lvl : int) : simple_type =
+let freshen_above_copies (lim : int) (ty : simple_type) (lvl : int) :
+    simple_type * (int * var_state) list =
   let freshened : (int, var_state) Hashtbl.t = Hashtbl.create 16 in
   let rec freshen ty =
     if level ty <= lim then ty
@@ -302,56 +372,112 @@ let freshen_above (lim : int) (ty : simple_type) (lvl : int) : simple_type =
           Record (fs, freshen t)
       | Primitive _ | Abs -> ty
   in
-  freshen ty
+  let ty = freshen ty in
+  (ty, List.of_seq (Hashtbl.to_seq freshened))
+
+let freshen_above lim ty lvl = fst (freshen_above_copies lim ty lvl)
 
 let instantiate (sch : type_scheme) (lvl : int) : simple_type =
   match sch with
   | Simple t -> t
   | Poly (lim, body) -> freshen_above lim body lvl
 
-(** {1 Typing (Fig. 8)} *)
+(** {1 Typing (Fig. 8)}
 
-let rec type_term (ctx : ctx) (lvl : int) (trm : term) : simple_type =
+    [type_term_ann] also returns the term annotated with what a certificate's
+    typing skeleton needs (the Lean [Ann]): the type of each [fun] parameter,
+    of each application and selection result, the row of each extension, the
+    generalized variables of each [let], and each instantiation. *)
+
+type ann =
+  | ALit of int
+  | AVar of string
+  | AInst of string * inst
+  | ALam of string * simple_type * ann
+  | AApp of ann * ann * simple_type
+  | ARcd of (string * ann) list
+  | ASel of ann * string * simple_type
+  | AExt of ann * (string * ann) list * simple_type
+  | ALet of string * var_state list * ann * ann
+  | ALetRec of string * var_state list * simple_type * ann * ann
+
+(** A [let]'s right-hand side: its generalized variables, the type of the
+    name in its own body (for [let rec]), and the annotated term. *)
+type let_ann = { gen : var_state list; rec_ty : simple_type option; rhs : ann }
+
+(** The variables above [lvl] created since the counter was [before]. *)
+let created_above before lvl =
+  List.filter_map
+    (fun id ->
+      match Hashtbl.find_opt all_vars id with
+      | Some vs when vs.level > lvl -> Some vs
+      | _ -> None)
+    (List.init (!counter - before) (fun i -> before + 1 + i))
+
+let rec type_term_ann (ctx : ctx) (lvl : int) (trm : term) : simple_type * ann =
   match trm with
-  | Lit _ -> Primitive "int"
+  | Lit n -> (Primitive "int", ALit n)
   | Var name -> (
       match StringMap.find_opt name ctx with
-      | Some sch -> instantiate sch lvl
+      | Some (Simple t) -> (t, AVar name)
+      | Some (Poly (lim, body) as sch) ->
+          let ty, copies = freshen_above_copies lim body lvl in
+          let gen = gen_of sch in
+          let inst =
+            if !recording then begin
+              let inst = { gen; copies = complete_copies gen copies lvl } in
+              insts := inst :: !insts;
+              inst
+            end
+            else { gen; copies }
+          in
+          (ty, AInst (name, inst))
       | None -> err ("identifier not found: " ^ name))
-  | Rcd fs -> Record (List.map (fun (n, t) -> (n, type_term ctx lvl t)) fs, Abs)
+  | Rcd fs ->
+      let fs = List.map (fun (n, t) -> (n, type_term_ann ctx lvl t)) fs in
+      ( Record (List.map (fun (n, (ty, _)) -> (n, ty)) fs, Abs),
+        ARcd (List.map (fun (n, (_, a)) -> (n, a)) fs) )
   | Lam (name, body) ->
       let param = fresh_var lvl in
-      Function (param, type_term (StringMap.add name (Simple param) ctx) lvl body)
+      let ty, a = type_term_ann (StringMap.add name (Simple param) ctx) lvl body in
+      (Function (param, ty), ALam (name, param, a))
   | App (f, a) ->
       let res = fresh_var lvl in
-      let f_ty = type_term ctx lvl f in
-      let a_ty = type_term ctx lvl a in
+      let f_ty, f_ann = type_term_ann ctx lvl f in
+      let a_ty, a_ann = type_term_ann ctx lvl a in
       constrain f_ty (Function (a_ty, res));
-      res
+      (res, AApp (f_ann, a_ann, res))
   | Sel (obj, name) ->
       let res = fresh_var lvl in
-      constrain (type_term ctx lvl obj) (Record ([ (name, res) ], Abs));
-      res
+      let obj_ty, obj_ann = type_term_ann ctx lvl obj in
+      constrain obj_ty (Record ([ (name, res) ], Abs));
+      (res, ASel (obj_ann, name, res))
   | Ext (obj, fs) ->
       (* [obj with {l = e, ...}] overwrites or adds the fields: [obj] may have
          anything at the labels, and its other fields are carried by [rho] *)
-      let obj_ty = type_term ctx lvl obj in
-      let fs = List.map (fun (n, t) -> (n, type_term ctx lvl t)) fs in
+      let obj_ty, obj_ann = type_term_ann ctx lvl obj in
+      let typed = List.map (fun (n, t) -> (n, type_term_ann ctx lvl t)) fs in
+      let anns = List.map (fun (n, (_, a)) -> (n, a)) typed in
+      let fs = List.map (fun (n, (ty, _)) -> (n, ty)) typed in
       let fs =
         (* a later binding of the same label wins *)
         List.rev
           (List.fold_left (fun acc (n, t) -> (n, t) :: List.remove_assoc n acc) [] fs)
       in
-      if fs = [] then obj_ty (* [obj with {}] is just [obj] *)
+      if fs = [] then (obj_ty, AExt (obj_ann, anns, Abs)) (* [obj with {}] is just [obj] *)
       else begin
         (* [rho] stands for the other fields: it lacks the extended labels *)
         let rho = fresh_var ~kind:(SSet.of_list (List.map fst fs)) lvl in
         constrain obj_ty (Record (List.map (fun (n, _) -> (n, Abs)) fs, rho));
-        Record (fs, rho)
+        (Record (fs, rho), AExt (obj_ann, anns, rho))
       end
   | Let (isrec, name, rhs, body) ->
-      let sch = type_let_rhs ctx lvl isrec name rhs in
-      type_term (StringMap.add name sch ctx) lvl body
+      let sch, la = type_let_rhs_ann ctx lvl isrec name rhs in
+      let ty, body_ann = type_term_ann (StringMap.add name sch ctx) lvl body in
+      ( ty,
+        match la.rec_ty with
+        | None -> ALet (name, la.gen, la.rhs, body_ann)
+        | Some t -> ALetRec (name, la.gen, t, la.rhs, body_ann) )
 
 (** Type the right-hand side of a (possibly recursive) let binding at level
     [lvl + 1] and generalize it. Shared by local and top-level lets.
@@ -360,35 +486,51 @@ let rec type_term (ctx : ctx) (lvl : int) (trm : term) : simple_type =
     once, before [x] exists: [s] must be a function, whose body only runs
     (and reads [x]) once it is called. Cyclic data such as
     [let rec ones = {head = 1; tail = ones}] is rejected. *)
-and type_let_rhs ctx lvl isrec name rhs : type_scheme =
+and type_let_rhs_ann ctx lvl isrec name rhs : type_scheme * let_ann =
   (match rhs with
   | Lam _ -> ()
   | _ when isrec ->
       err (Printf.sprintf "let rec %s: the right-hand side must be a function" name)
   | _ -> ());
-  let rhs_ty =
+  let before = !counter in
+  let rhs_ty, rec_ty, rhs_ann =
     if isrec then begin
       let exp = fresh_var (lvl + 1) in
-      let inf = type_term (StringMap.add name (Simple exp) ctx) (lvl + 1) rhs in
+      let inf, a = type_term_ann (StringMap.add name (Simple exp) ctx) (lvl + 1) rhs in
       constrain inf exp;
-      exp
+      (exp, Some exp, a)
     end
-    else type_term ctx (lvl + 1) rhs
+    else
+      let ty, a = type_term_ann ctx (lvl + 1) rhs in
+      (ty, None, a)
   in
-  Poly (lvl, rhs_ty)
+  let sch = Poly (lvl, rhs_ty) in
+  let gen = created_above before lvl in
+  gens := (sch, gen) :: !gens;
+  (sch, { gen; rec_ty; rhs = rhs_ann })
+
+let type_term ctx lvl trm = fst (type_term_ann ctx lvl trm)
+let type_let_rhs ctx lvl isrec name rhs = fst (type_let_rhs_ann ctx lvl isrec name rhs)
 
 (** {1 Built-ins} *)
 
 let bool_t = Primitive "bool"
 let int_t = Primitive "int"
 
+(** The variable of [if]'s scheme, in the last [builtins ()]. *)
+let if_var = ref 0
+
 (** Initial context, as in the reference implementation. [if c then a else b]
     is parsed as [if c a b] with [if : ∀α. bool -> α -> α -> α]. *)
 let builtins () : ctx =
   let fn a b = Function (a, b) in
   let if_ty =
-    let v = fresh_var 1 in
-    Poly (0, fn bool_t (fn v (fn v v)))
+    let vs = fresh_state 1 in
+    if_var := vs.id;
+    let v = Variable vs in
+    let sch = Poly (0, fn bool_t (fn v (fn v v))) in
+    gens := (sch, [ vs ]) :: !gens;
+    sch
   in
   StringMap.of_seq
     (List.to_seq

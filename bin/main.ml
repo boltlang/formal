@@ -11,6 +11,8 @@
      --expect TYPE  check that each inferred type is equivalent to TYPE
      --self-check   check that each simplified type is equivalent to the raw
                     coalesced type (i.e. that simplification is sound)
+     --cert FILE    write a certificate of the program's typing to FILE, for
+                    the Lean checker (lean/: lake exe boltcore-check FILE)
 
    Exit status: 0 on success, 1 on type errors or failed checks, 2 on usage
    or parse errors. *)
@@ -19,7 +21,8 @@ open Boltcore
 
 let usage () =
   prerr_endline
-    "usage: boltcore [--raw] [--rectypes] [--expect TYPE] [--self-check] [FILE | -e SOURCE]\n\
+    "usage: boltcore [--raw] [--rectypes] [--expect TYPE] [--self-check] [--cert FILE]\n\
+    \       [FILE | -e SOURCE]\n\
     \       boltcore --compare TYPE1 TYPE2";
   exit 2
 
@@ -37,6 +40,16 @@ let relate_or_exit t1 t2 =
   | Subsume.Unsupported what ->
       prerr_endline ("error: subsumption does not support " ^ what ^ " yet");
       exit 2
+
+let cert_file = ref None
+
+let infer items =
+  match !cert_file with
+  | None -> infer_program items
+  | Some file ->
+      let results, json = certificate items in
+      Out_channel.with_open_text file (fun oc -> output_string oc json);
+      results
 
 let run ~simplify ~expect ~self_check src =
   match Parser.parse_program src with
@@ -75,13 +88,16 @@ let run ~simplify ~expect ~self_check src =
                     Printf.printf "  (self-check skipped: %s)\n" what
                 | exception Subsume.Not_polar msg ->
                     fail "  self-check failed: not a polar type: %s\n" msg)
-        (infer_program items);
+        (infer items);
       if !failed then exit 1
 
 let () =
   let rec parse ((simplify, expect, self_check, src) as acc) = function
     | "--raw" :: rest -> parse (false, expect, self_check, src) rest
     | "--self-check" :: rest -> parse (simplify, expect, true, src) rest
+    | "--cert" :: file :: rest ->
+        cert_file := Some file;
+        parse acc rest
     | "--rectypes" :: rest ->
         Typer.allow_recursive := true;
         parse acc rest

@@ -44,8 +44,14 @@ let fresh_id () =
   incr counter;
   !counter
 
+(** Every variable ever created, by id (certificates need the variables
+    created while typing a [let]'s right-hand side, see [Typer]). *)
+let all_vars : (int, var_state) Hashtbl.t = Hashtbl.create 256
+
 let fresh_state ?(kind = SSet.empty) lvl =
-  { id = fresh_id (); level = lvl; kind; lower_bounds = []; upper_bounds = [] }
+  let vs = { id = fresh_id (); level = lvl; kind; lower_bounds = []; upper_bounds = [] } in
+  Hashtbl.replace all_vars vs.id vs;
+  vs
 
 let fresh_var ?kind lvl = Variable (fresh_state ?kind lvl)
 
