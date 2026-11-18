@@ -35,11 +35,11 @@ As a reference for the field lattice. Its readings line up with ours:
 | `ℓ = t`, mandatory | a present field `t` (`Pre t`); in Lean, `pre t` |
 | `1`, any value | `⊤` |
 | `1 ∨ ⊥`, any value or undefined | `Abs`, the top field, strictly above `pre ⊤` |
-| open record `{…}` (other labels `1 ∨ ⊥`) | a record with tail `Abs`, our only kind of record literal |
+| open record `{…}` (other labels `1 ∨ ⊥`) | a record with tail `Abs`, written `{x: τ, ..}` |
 | `e.ℓ` requires `{ℓ = 1}` | `t.l` requires a present field (`Typ.sel`, `pre τ`) |
 | `e₁ + e₂` | `r with {…}`, with a literal on the right |
-| `ℓ ⇒ t`, optional | proposed `Opt t` (#2) |
-| `⊥`, undefined; closed records | proposed `Absent` field and tail (#2) |
+| `ℓ ⇒ t`, optional | `Opt t`, written `ℓ?: t` (#2) |
+| `⊥`, undefined; closed records | the `Missing` field and the empty row (#2) |
 
 ## Differences
 

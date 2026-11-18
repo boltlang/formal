@@ -18,8 +18,17 @@ type simple_type =
           tail is [Abs], a row variable, or (transiently) another row. *)
   | Abs
       (** The top field type ("no guarantee", [Pre τ ≤ Abs]) and, in tail
-          position, the top row (all remaining fields [Abs]). Plain open
-          records [{x: τ}] are [Record ([x, τ], Abs)]. *)
+          position, the top row (all remaining fields [Abs]). Open records
+          [{x: τ, ..}] are [Record ([x, τ], Abs)]. *)
+  | Missing
+      (** The field that is definitely absent. [Missing ≤ Opt τ ≤ Abs]; it
+          is unrelated to a present field. *)
+  | Opt of simple_type
+      (** A field only: missing, or present at the type ([Pre τ ≤ Opt τ],
+          [Missing ≤ Opt τ]). *)
+  | Nil
+      (** In tail position only: the empty row, whose field at every label
+          is [Missing]. Closed records [{x: τ}] are [Record ([x, τ], Nil)]. *)
 
 and var_state = {
   id : int;  (** unique identity; variables are compared by [id] only *)
@@ -63,7 +72,8 @@ let rec level = function
   | Primitive _ -> 0
   | Function (l, r) -> max (level l) (level r)
   | Record (fs, t) -> List.fold_left (fun acc (_, f) -> max acc (level f)) (level t) fs
-  | Abs -> 0
+  | Opt t -> level t
+  | Abs | Missing | Nil -> 0
 
 (** Structural equality where variables are compared by identity. This is the
     equality the constraint cache relies on (Scala's case-class equality with
@@ -77,7 +87,8 @@ let rec equal a b =
   | Record (fs, t), Record (gs, u) ->
       List.equal (fun (n, t) (m, u) -> String.equal n m && equal t u) fs gs
       && equal t u
-  | Abs, Abs -> true
+  | Abs, Abs | Missing, Missing | Nil, Nil -> true
+  | Opt a, Opt b -> equal a b
   | _ -> false
 
 let rec hash = function
@@ -88,20 +99,33 @@ let rec hash = function
       Hashtbl.hash
         (3, List.map (fun (n, t) -> Hashtbl.hash (n, hash t)) fs, hash t)
   | Abs -> Hashtbl.hash 4
+  | Missing -> Hashtbl.hash 5
+  | Nil -> Hashtbl.hash 6
+  | Opt t -> Hashtbl.hash (7, hash t)
 
-(** Debug rendering of internal types. Bounds are not shown. *)
+(** Debug rendering of internal types. Bounds are not shown. Records are
+    written as in {!show_typ}: [{x: τ}] is closed, [{x: τ, ..}] open. *)
 let rec show_simple = function
   | Variable vs -> Printf.sprintf "α%d" vs.id
   | Primitive n -> n
   | Function (l, r) ->
       Printf.sprintf "(%s -> %s)" (show_simple l) (show_simple r)
   | Record (fs, t) ->
+      let field = function
+        | n, Opt t -> n ^ "?: " ^ show_simple t
+        | n, t -> n ^ ": " ^ show_simple t
+      in
+      let fields = List.map field fs in
       "{"
-      ^ String.concat ", "
-          (List.map (fun (n, t) -> n ^ ": " ^ show_simple t) fs)
-      ^ (match t with Abs -> "" | t -> " | " ^ show_simple t)
+      ^ (match t with
+         | Nil -> String.concat ", " fields
+         | Abs -> String.concat ", " (fields @ [ ".." ])
+         | t -> String.concat ", " fields ^ (if fs = [] then "| " else " | ") ^ show_simple t)
       ^ "}"
   | Abs -> "Abs"
+  | Missing -> "Missing"
+  | Opt t -> show_simple t ^ "?"
+  | Nil -> "{}"
 
 (** Debug rendering of a variable together with its bounds. *)
 let show_var_state vs =
@@ -119,15 +143,24 @@ type typ =
   | Inter of typ * typ
   | FunctionType of typ * typ
   | RecordType of (string * typ) list * typ
-      (** fields (possibly [Absent]) and row tail ([Absent] = no row) *)
-  | Absent  (** absent field / top row *)
+      (** fields ([AbsType], [MissingType], [Optional τ] or a type) and row
+          tail ([NilType] = closed, [AbsType] = open) *)
+  | AbsType  (** [Abs]: the top field / the top row *)
+  | MissingType  (** the field that is definitely absent *)
+  | Optional of typ  (** a field: missing, or present at the type *)
+  | NilType  (** the empty row *)
   | RecursiveType of string * typ
   | TypeVariable of string
   | PrimitiveType of string
 
 (** Pretty-print a user-facing type, renaming variables to ['a], ['b], ... in
     order of first occurrence. Notation follows the reference implementation:
-    [∨] for unions, [∧] for intersections, [(t as 'a)] for recursive types. *)
+    [∨] for unions, [∧] for intersections, [(t as 'a)] for recursive types.
+
+    Records: [{x: τ}] is closed (tail [NilType]), [{x: τ, ..}] open (tail
+    [AbsType]) and [{x: τ | ρ}] has the row [ρ]. An optional field is
+    written [x?: τ]; away from a field, [Optional τ] is [τ?] and the empty
+    row [{}]. *)
 let show_typ (t : typ) : string =
   let names = Hashtbl.create 16 in
   let next = ref 0 in
@@ -164,15 +197,21 @@ let show_typ (t : typ) : string =
         let l = go 25 l in
         let r = go 25 r in
         paren (outer > 25) (l ^ " ∧ " ^ r)
-    | Absent -> "Abs"
+    | AbsType -> "Abs"
+    | MissingType -> "Missing"
+    | NilType -> "{}"
+    | Optional t -> go 30 t ^ "?"
     | RecordType (fs, tail) ->
-        let fields = List.map (fun (n, t) -> n ^ ": " ^ go 0 t) fs in
-        let tail = match tail with Absent -> [] | t -> [ go 0 t ] in
-        "{" ^ String.concat ", " fields
-        ^ (match (fields, tail) with
-           | _, [] -> ""
-           | [], [ t ] -> "| " ^ t
-           | _, t -> " | " ^ String.concat "" t)
+        let field = function
+          | n, Optional t -> n ^ "?: " ^ go 0 t
+          | n, t -> n ^ ": " ^ go 0 t
+        in
+        let fields = List.map field fs in
+        "{"
+        ^ (match tail with
+           | NilType -> String.concat ", " fields
+           | AbsType -> String.concat ", " (fields @ [ ".." ])
+           | t -> String.concat ", " fields ^ (if fs = [] then "| " else " | ") ^ go 0 t)
         ^ "}"
     | RecursiveType (v, body) ->
         (* name the binder first so it gets the earliest letter *)

@@ -58,6 +58,7 @@ mutual
 def WK (K : Nat → List String) : SType → Prop
   | .arrow a b => WK K a ∧ KEmpty K a ∧ WK K b ∧ KEmpty K b
   | .record fs t => FWK K fs ∧ WK K t ∧ RecOK K (.record fs t)
+  | .opt t => WK K t ∧ KEmpty K t
   | _ => True
 
 def FWK (K : Nat → List String) : SFields → Prop
@@ -142,8 +143,8 @@ theorem WK.rowView : ∀ t : SType, WK K t → FWK K (rowView t).1 ∧ WK K (row
   | .record fs t, ⟨hf, ht, _⟩ => by
     have := WK.rowView t ht
     exact ⟨hf.append this.1, this.2⟩
-  | .var _, _ | .prim _, _ | .abs, _ => ⟨trivial, trivial⟩
-  | .arrow _ _, h => ⟨trivial, h⟩
+  | .var _, _ | .prim _, _ | .abs, _ | .missing, _ | .nil, _ => ⟨trivial, trivial⟩
+  | .arrow _ _, h | .opt _, h => ⟨trivial, h⟩
 
 theorem FWK.lookup {l : String} {f : SType} : ∀ {fs : SFields}, FWK K fs → fs.lookup l = some f →
     WK K f ∧ KEmpty K f
@@ -182,19 +183,41 @@ theorem FWK.absOf : ∀ {F : SFields}, FWK K F.absOf
   | .nil => trivial
   | .cons _ _ _ => ⟨trivial, .abs, FWK.absOf⟩
 
-/-- The constraints `Abs ≤ f` for the fields `f` of a well-kinded row are
-well-kinded. -/
+theorem KEmpty.missing : KEmpty K .missing := .of_nonvar fun _ h => nomatch h
+
+/-- The field constraints `Abs ≤ f` for the fields `f` of a well-kinded row
+are between well-kinded fields that lack nothing. -/
 theorem FWK.absPairs : ∀ {fs : SFields}, FWK K fs →
-    ∀ p ∈ fs.absPairs, WK K p.1 ∧ WK K p.2 ∧ KOK K p.1 p.2
+    ∀ p ∈ fs.absPairs, WK K p.1 ∧ WK K p.2 ∧ KEmpty K p.1 ∧ KEmpty K p.2
   | .nil, _, _, h => nomatch h
-  | .cons _ f fs, ⟨hf, _, hr⟩, p, hp => by
+  | .cons _ f fs, ⟨hf, he, hr⟩, p, hp => by
     simp only [SFields.absPairs, List.mem_cons] at hp
     rcases hp with rfl | hp
-    · exact ⟨trivial, hf, .of_nonvarL fun _ h => nomatch h⟩
+    · exact ⟨trivial, hf, .abs, he⟩
     · exact hr.absPairs p hp
 
+/-- The same for `Missing ≤ f`. -/
+theorem FWK.misPairs : ∀ {fs : SFields}, FWK K fs →
+    ∀ p ∈ fs.misPairs, WK K p.1 ∧ WK K p.2 ∧ KEmpty K p.1 ∧ KEmpty K p.2
+  | .nil, _, _, h => nomatch h
+  | .cons _ f fs, ⟨hf, he, hr⟩, p, hp => by
+    simp only [SFields.misPairs, List.mem_cons] at hp
+    rcases hp with rfl | hp
+    · exact ⟨trivial, hf, .missing, he⟩
+    · exact hr.misPairs p hp
+
+/-- The same for `f ≤ Missing`. -/
+theorem FWK.toMisPairs : ∀ {fs : SFields}, FWK K fs →
+    ∀ p ∈ fs.toMisPairs, WK K p.1 ∧ WK K p.2 ∧ KEmpty K p.1 ∧ KEmpty K p.2
+  | .nil, _, _, h => nomatch h
+  | .cons _ f fs, ⟨hf, he, hr⟩, p, hp => by
+    simp only [SFields.toMisPairs, List.mem_cons] at hp
+    rcases hp with rfl | hp
+    · exact ⟨hf, trivial, he, .missing⟩
+    · exact hr.toMisPairs p hp
+
 theorem FWK.common {fs₀ : SFields} (h₀ : FWK K fs₀) : ∀ {fs₁ : SFields}, FWK K fs₁ →
-    ∀ p ∈ fs₀.common fs₁, WK K p.1 ∧ WK K p.2 ∧ KOK K p.1 p.2
+    ∀ p ∈ fs₀.common fs₁, WK K p.1 ∧ WK K p.2 ∧ KEmpty K p.1 ∧ KEmpty K p.2
   | .nil, _, _, hp => nomatch hp
   | .cons n f fs, ⟨hf, he, hr⟩, p, hp => by
     simp only [SFields.common] at hp
@@ -203,7 +226,7 @@ theorem FWK.common {fs₀ : SFields} (h₀ : FWK K fs₀) : ∀ {fs₁ : SFields
       simp only [List.mem_cons] at hp
       rcases hp with rfl | hp
       · have h := h₀.lookup hl
-        exact ⟨h.1, hf, .of_empty h.2 he⟩
+        exact ⟨h.1, hf, h.2, he⟩
       · exact FWK.common h₀ hr p hp
     · exact FWK.common h₀ hr p hp
 
@@ -312,6 +335,18 @@ theorem Constrain.kinds : Constrain s a b s' → Inv₂ s → KInv K s →
     obtain ⟨hfs, ht, _⟩ := hb
     exact h₂.kinds (h₁.inv₂ i.remember) (h₁.kinds i.remember k₀ hfs.absPairs) trivial ht
       (.of_nonvarL fun _ h => nomatch h)
+  | .nilRecord (fs := fs) (t := t) _ h₁ h₂, i, k, _, hb, _ => by
+    have k₀ := k.remember (a := .nil) (b := .record fs t) trivial hb
+      (.of_nonvarL fun _ h => nomatch h)
+    obtain ⟨hfs, ht, _⟩ := hb
+    exact h₂.kinds (h₁.inv₂ i.remember) (h₁.kinds i.remember k₀ hfs.misPairs) trivial ht
+      (.of_nonvarL fun _ h => nomatch h)
+  | .recordNil (fa := fa) (ta := ta) _ e₀ h₁ h₂, i, k, ha, _, hab => by
+    have v₀ := WK.rowView _ ha
+    rw [e₀] at v₀
+    have k₀ := k.remember (a := .record fa ta) (b := .nil) ha trivial hab
+    exact h₂.kinds (h₁.inv₂ i.remember) (h₁.kinds i.remember k₀ v₀.1.toMisPairs) v₀.2 trivial
+      (.of_nonvarR fun _ h => nomatch h)
   | .record (fa := fa) (ta := ta) (fb := fb) (tb := tb) (fs₀ := fs₀) (t₀ := t₀) (fs₁ := fs₁)
       (t₁ := t₁) (t₀' := t₀') _ e₀ e₁ h₁ h₂ h₃, i, k, ha, hb, hab => by
     have v₀ := WK.rowView _ ha
@@ -373,17 +408,20 @@ theorem ConstrainEach.kinds : ConstrainEach s ps s' → Inv₂ s → KInv K s �
     h₂.kinds (h₁.inv₂ i) (h₁.kinds i k hh.1 hh.2.1 hh.2.2)
       fun p hp => hps p (List.mem_cons_of_mem _ hp)
 
+/-- Fields lack nothing, and neither does the type of an optional field. -/
 theorem ConstrainField.kinds : ConstrainField s a b s' → Inv₂ s → KInv K s →
-    WK K a → WK K b → KOK K a b → KInv K s'
-  | .toAbs, _, k, _, _, _ => k
-  | .pre _ _ h, i, k, ha, hb, hab => h.kinds i k ha hb hab
+    WK K a → WK K b → KEmpty K a → KEmpty K b → KInv K s'
+  | .toAbs, _, k, _, _, _, _ | .misMis, _, k, _, _, _, _ | .misOpt, _, k, _, _, _, _ => k
+  | .optOpt _ h, i, k, ha, hb, _, _ => h.kinds i k ha.1 hb.1 (.of_empty ha.2 hb.2)
+  | .preOpt _ h, i, k, ha, hb, ea, _ => h.kinds i k ha hb.1 (.of_empty ea hb.2)
+  | .pre _ _ h, i, k, ha, hb, ea, eb => h.kinds i k ha hb (.of_empty ea eb)
 
 theorem FieldsEach.kinds : FieldsEach s ps s' → Inv₂ s → KInv K s →
-    (∀ p ∈ ps, WK K p.1 ∧ WK K p.2 ∧ KOK K p.1 p.2) → KInv K s'
+    (∀ p ∈ ps, WK K p.1 ∧ WK K p.2 ∧ KEmpty K p.1 ∧ KEmpty K p.2) → KInv K s'
   | .nil, _, k, _ => k
   | .cons h₁ h₂, i, k, hps =>
     have hh := hps _ (List.mem_cons_self ..)
-    h₂.kinds (h₁.inv₂ i) (h₁.kinds i k hh.1 hh.2.1 hh.2.2)
+    h₂.kinds (h₁.inv₂ i) (h₁.kinds i k hh.1 hh.2.1 hh.2.2.1 hh.2.2.2)
       fun p hp => hps p (List.mem_cons_of_mem _ hp)
 
 theorem Expand.kinds : Expand s t ms t' s' → Inv₂ s → KInv K s → FWK K ms → WK K t →
@@ -394,6 +432,7 @@ theorem Expand.kinds : Expand s t ms t' s' → Inv₂ s → KInv K s → FWK K m
     | var ρ => exact .inr ⟨ρ, ρ, rfl, rfl, fun l => by simp [SFields.presentIn, SFields.labels]⟩
     | _ => exact .inl ⟨(fun _ h => nomatch h), rfl⟩
   | .abs _ h, i, k, hms, _ => ⟨h.kinds i k hms.absPairs, .inl ⟨(fun _ h => nomatch h), rfl⟩⟩
+  | .nil _ h, i, k, hms, _ => ⟨h.kinds i k hms.misPairs, .inl ⟨(fun _ h => nomatch h), rfl⟩⟩
   | .allAbsent (s := s₀) (v := v) _ hp h, i, k, hms, _ => by
     refine ⟨h.kinds i k (FWK.absPairs (FWK.absentIn _ hms)), .inr ⟨v, v, rfl, rfl, fun l => ?_⟩⟩
     rw [← k.kind, hp]; simp [SFields.labels]
@@ -480,6 +519,16 @@ theorem TypeTerm.kinds : TypeTerm Γ s t st s' → CtxK K Γ → Inv₂ s → KI
     exact ⟨hc.kinds (h.inv₂ i.fresh) r.1 r.2.1
       ⟨⟨trivial, hv, trivial⟩, trivial, fun _ h => nomatch h⟩
       (.of_nonvarR (fun _ h => nomatch h)), trivial, hv⟩
+  | .selOr hn h hc hd hc', hΓ, i, k => by
+    have hv := KEmpty.var_nil (k.kind ▸ hn)
+    have r := h.kinds hΓ i.fresh ⟨k.kind, k.log, k.exps⟩
+    have i₁ := h.inv₂ i.fresh
+    have k₂ := hc.kinds i₁ r.1 r.2.1
+      ⟨⟨⟨trivial, hv⟩, .of_nonvar (fun _ h => nomatch h), trivial⟩, trivial, fun _ h => nomatch h⟩
+      (.of_nonvarR (fun _ h => nomatch h))
+    have i₂ := hc.inv₂ i₁
+    have rd := hd.kinds hΓ i₂ k₂
+    exact ⟨hc'.kinds (hd.inv₂ i₂) rd.1 rd.2.1 trivial (.of_empty rd.2.2 hv), trivial, hv⟩
   | .ext (F := F) (s₂ := s₂) hfs h₁ h₂ hn hc, hΓ, i, k => by
     have r₁ := h₁.kinds hΓ i k
     have i₁ := h₁.inv₂ i
@@ -572,7 +621,7 @@ theorem clo_kinds {s : State} (k : KInv K s) (i : BoundsInLog s) {v : Nat} {u : 
       and_true] at hk
     cases u with
     | var w => exact absurd rfl (hnv w)
-    | prim _ | arrow _ _ | abs => simp [rowView] at hρ
+    | prim _ | arrow _ _ | abs | missing | opt _ | nil => simp [rowView] at hρ
     | record fs t =>
       have hr := hw.2.2 ρ hρ
       match hfs : (rowView (.record fs t)).1, hr with
@@ -601,7 +650,7 @@ theorem lower_kinds {s : State} (k : KInv K s) (i : BoundsInLog s) {v ρ : Nat} 
     and_true] at hk
   cases x with
   | var w => exact absurd rfl (hnv w)
-  | prim _ | arrow _ _ | abs => simp [rowView] at hρ
+  | prim _ | arrow _ _ | abs | missing | opt _ | nil => simp [rowView] at hρ
   | record fs t =>
     have hr := hw.2.2 ρ hρ
     match hfs : (rowView (.record fs t)).1, hr with

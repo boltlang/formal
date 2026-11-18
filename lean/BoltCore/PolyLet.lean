@@ -47,7 +47,7 @@ theorem lt_natBound : ∀ {l : List Nat} {n : Nat}, n ∈ l → n < natBound l
 /-- The free variables occurring in a type, of any sort. -/
 def Ty.fvars : Ty s → List Nat
   | .fvar n => [n]
-  | .top | .bot | .gvar _ | .prim _ => []
+  | .top | .bot | .gvar _ | .prim _ | .missing | .nil => []
   | .union a b | .inter a b | .arrow a b => a.fvars ++ b.fvars
   | .rcd ρ | .pre ρ | .proj _ ρ => ρ.fvars
   | .cons _ θ ρ => θ.fvars ++ ρ.fvars
@@ -56,7 +56,7 @@ def Ty.fvars : Ty s → List Nat
 theorem Ty.substM_fresh {m : Subst} :
     {s : Srt} → (t : Ty s) → (∀ n ∈ t.fvars, ∀ srt, m srt n = none) → t.substM m = t
   | s, .fvar n, h => by simp [Ty.substM, h n (by simp [Ty.fvars]) s]
-  | _, .top, _ | _, .bot, _ | _, .prim _, _ | _, .gvar _, _ => rfl
+  | _, .top, _ | _, .bot, _ | _, .prim _, _ | _, .gvar _, _ | _, .missing, _ | _, .nil, _ => rfl
   | _, .union a b, h | _, .inter a b, h | _, .arrow a b, h => by
     simp only [Ty.substM]
     rw [Ty.substM_fresh a fun n hn => h n (by simp [Ty.fvars, hn]),
@@ -162,7 +162,8 @@ theorem SType.interp_congr {I J : SInterp} :
     ∀ t : SType, (∀ v ∈ t.vars, ∀ srt, I srt v = J srt v) →
       t.toTyI I = t.toTyI J ∧ t.toRowI I = t.toRowI J
   | .var v, h => ⟨h v (by simp [SType.vars]) _, h v (by simp [SType.vars]) _⟩
-  | .prim _, _ | .abs, _ => ⟨rfl, rfl⟩
+  | .prim _, _ | .abs, _ | .missing, _ | .nil, _ => ⟨rfl, rfl⟩
+  | .opt t, h => ⟨(SType.interp_congr t fun v hv => h v (by simp [SType.vars, hv])).1, rfl⟩
   | .arrow a b, h => by
     have ha := SType.interp_congr a fun v hv => h v (by simp [SType.vars, hv])
     have hb := SType.interp_congr b fun v hv => h v (by simp [SType.vars, hv])
@@ -180,16 +181,21 @@ theorem SFields.interp_congr {I J : SInterp} :
     rw [SFields.toRowOnI_cons, SFields.toRowOnI_cons,
       SFields.interp_congr fs (fun v hv => h v (by simp [SFields.vars, hv])) e]
     have hf := SType.interp_congr f fun v hv => h v (by simp [SFields.vars, hv])
-    cases f with
-    | abs => rfl
-    | _ => simp only [SType.toFieldI, hf.1]
+    have hfld : f.toFieldI I = f.toFieldI J := by
+      cases f with
+      | abs => rfl
+      | missing => rfl
+      | opt _ => exact congrArg Ty.opt hf.1
+      | _ => exact congrArg Ty.pre hf.1
+    rw [hfld]
 end
 
 mutual
 theorem SType.interp_substM (I : SInterp) (m : Subst) : ∀ t : SType,
     (t.toTyI I).substM m = t.toTyI (I.substM m) ∧ (t.toRowI I).substM m = t.toRowI (I.substM m)
   | .var _ => ⟨rfl, rfl⟩
-  | .prim _ | .abs => ⟨rfl, rfl⟩
+  | .prim _ | .abs | .missing | .nil => ⟨rfl, rfl⟩
+  | .opt t => ⟨(SType.interp_substM I m t).1, rfl⟩
   | .arrow a b => by
     have ha := SType.interp_substM I m a
     have hb := SType.interp_substM I m b
@@ -207,16 +213,21 @@ theorem SFields.interp_substM (I : SInterp) (m : Subst) : ∀ (fs : SFields) (ρ
     rw [SFields.toRowOnI_cons, SFields.toRowOnI_cons]
     simp only [Ty.substM, SFields.interp_substM I m fs ρ]
     have hf := SType.interp_substM I m f
-    cases f with
-    | abs => rfl
-    | _ => simp only [SType.toFieldI, Ty.substM, hf.1]
+    have hfld : (f.toFieldI I).substM m = f.toFieldI (I.substM m) := by
+      cases f with
+      | abs => rfl
+      | missing => rfl
+      | opt _ => exact congrArg Ty.opt hf.1
+      | _ => exact congrArg Ty.pre hf.1
+    rw [hfld]
 end
 
 mutual
 theorem SType.rename_interp (ρ : Nat → Nat) (I : SInterp) : ∀ t : SType,
     (t.rename ρ).toTyI I = t.toTyI (fun srt v => I srt (ρ v)) ∧
       (t.rename ρ).toRowI I = t.toRowI (fun srt v => I srt (ρ v))
-  | .var _ | .prim _ | .abs => ⟨rfl, rfl⟩
+  | .var _ | .prim _ | .abs | .missing | .nil => ⟨rfl, rfl⟩
+  | .opt t => ⟨(SType.rename_interp ρ I t).1, rfl⟩
   | .arrow a b => by
     have ha := SType.rename_interp ρ I a
     have hb := SType.rename_interp ρ I b
@@ -236,6 +247,8 @@ theorem SFields.rename_interp (ρ : Nat → Nat) (I : SInterp) : ∀ (fs : SFiel
     have hfld : (f.rename ρ).toFieldI I = f.toFieldI (fun srt v => I srt (ρ v)) := by
       cases f with
       | abs => rfl
+      | missing => rfl
+      | opt _ => exact congrArg Ty.opt hf.1
       | _ => exact congrArg Ty.pre hf.1
     rw [hfld]
 end
@@ -483,10 +496,16 @@ inductive PTyp (c : Certificate) : PCtx → Term → SType → Prop where
   | lam : PTyp c ((x, .mono st₁) :: Γ) t st₂ → PTyp c Γ (.lam x t) (.arrow st₁ st₂)
   | app : PTyp c Γ f stf → PTyp c Γ a sta → stf ≠ .abs →
       c.Accepts stf (.arrow sta st) → PTyp c Γ (.app f a) st
-  | rcd : PFields c Γ fs F → PTyp c Γ (.rcd fs) (.record F .abs)
-  /-- Selection: the selected field's type is not `Abs`. -/
+  /-- A record literal is closed. -/
+  | rcd : PFields c Γ fs F → PTyp c Γ (.rcd fs) (.record F .nil)
+  /-- Selection: the selected field is present (its type is a type). -/
   | sel : PTyp c Γ t st₀ → st₀ ≠ .abs →
-      c.Accepts st₀ (.record (.cons l st .nil) .abs) → st ≠ .abs → PTyp c Γ (.sel t l) st
+      c.Accepts st₀ (.record (.cons l st .nil) .abs) → st.IsPre → PTyp c Γ (.sel t l) st
+  /-- Selection with a default: the field is optional, and the default has
+  its type. -/
+  | selOr : PTyp c Γ t st₀ → st₀ ≠ .abs →
+      c.Accepts st₀ (.record (.cons l (.opt st) .nil) .abs) →
+      PTyp c Γ d std → std ≠ .abs → c.Accepts std st → PTyp c Γ (.selOr t l d) st
   | ext : PTyp c Γ t st₀ → PFields c Γ fs F → st₀ ≠ .abs →
       c.Accepts st₀ (.record F.absOf ρ) → PTyp c Γ (.ext t fs) (.record F ρ)
   | extNil : PTyp c Γ t st → PTyp c Γ (.ext t []) st
@@ -495,10 +514,10 @@ inductive PTyp (c : Certificate) : PCtx → Term → SType → Prop where
   | letRec : r.IsFun → PTyp c ((x, .mono stx) :: Γ) r inf → inf ≠ .abs → c.Accepts inf stx →
       GenOK c Γ gen → PTyp c ((x, .poly gen stx) :: Γ) b st → PTyp c Γ (.letIn true x r b) st
 
-/-- Fields of a record literal; their types are not `Abs`. -/
+/-- Fields of a record literal; they are present (their types are types). -/
 inductive PFields (c : Certificate) : PCtx → List (String × Term) → SFields → Prop where
   | nil : PFields c Γ [] .nil
-  | cons : PTyp c Γ t st → st ≠ .abs → PFields c Γ fs F →
+  | cons : PTyp c Γ t st → st.IsPre → PFields c Γ fs F →
       PFields c Γ ((l, t) :: fs) (.cons l st F)
 end
 
@@ -589,7 +608,7 @@ theorem PTyp.sound (hv : c.Valid) {A : List Nat} {I : SInterp} (hg : GenHyp c.st
   | .lam h => .lam (h.sound hv hg)
   | .app h₁ h₂ ha hc => .app (.sub (h₁.sound hv hg) ((hv.holdsG hg hc).1 ha)) (h₂.sound hv hg)
   | .rcd (F := F) h => by
-    have e : (SType.record F .abs).toTyI I = Ty.record (F.toListI I) := by
+    have e : (SType.record F .nil).toTyI I = Ty.record (F.toListI I) := by
       simp only [SType.toTyI, SType.toRowI, Ty.record]
       exact congrArg Ty.rcd (SFields.toRowOnI_pres h.pres)
     rw [e]
@@ -597,9 +616,15 @@ theorem PTyp.sound (hv : c.Valid) {A : List Nat} {I : SInterp} (hg : GenHyp c.st
   | .sel (l := l) (st := st) h ha hc hst => by
     have hs := (hv.holdsG hg hc).1 ha
     have e : (SType.record (.cons l st .nil) .abs).toTyI I = .rcd (.cons l (.pre (st.toTyI I)) .top) := by
-      simp only [SType.toTyI, SType.toRowI, SFields.toRowOnI_cons, SType.toFieldI_of_ne hst]; rfl
+      simp only [SType.toTyI, SType.toRowI, SFields.toRowOnI_cons, SType.toFieldI_of_pre hst]; rfl
     rw [e] at hs
     exact .sel (.sub (h.sound hv hg) hs)
+  | .selOr (l := l) (st := st) h ha hc hd hda hcd => by
+    have hs := (hv.holdsG hg hc).1 ha
+    have e : (SType.record (.cons l (.opt st) .nil) .abs).toTyI I =
+        .rcd (.cons l (Ty.opt (st.toTyI I)) .top) := rfl
+    rw [e] at hs
+    exact .selOr (.sub (h.sound hv hg) hs) (.sub (hd.sound hv hg) ((hv.holdsG hg hcd).1 hda))
   | .ext (F := F) (ρ := ρ) h₁ h₂ ha hc => by
     have hs := (hv.holdsG hg hc).1 ha
     simp only [SType.toTyI, SFields.toRowOnI_absOf] at hs
@@ -647,7 +672,9 @@ mutual
 theorem SType.toTy_gvars : ∀ a : SType, (∀ m ∈ a.toTy.gvars, m ∈ a.vars) ∧ (∀ m ∈ a.toRow.gvars, m ∈ a.vars)
   | .var _ => ⟨fun m h => by simpa [SType.toTy, SType.toTyI, SInterp.gv, Ty.gvars, SType.vars] using h,
       fun m h => by simpa [SType.toRow, SType.toRowI, SInterp.gv, Ty.gvars, SType.vars] using h⟩
-  | .prim _ | .abs => ⟨fun _ h => by simp [SType.toTy, SType.toTyI, Ty.gvars] at h,
+  | .prim _ | .abs | .missing | .nil => ⟨fun _ h => by simp [SType.toTy, SType.toTyI, Ty.gvars] at h,
+      fun _ h => by simp [SType.toRow, SType.toRowI, Ty.gvars] at h⟩
+  | .opt t => ⟨fun m h => (SType.toTy_gvars t).1 m h,
       fun _ h => by simp [SType.toRow, SType.toRowI, Ty.gvars] at h⟩
   | .arrow a b => ⟨fun m h => by
       simp only [SType.toTy, SType.toTyI, Ty.gvars, List.mem_append] at h
@@ -675,6 +702,11 @@ theorem SFields.toRowOn_gvars : ∀ (fs : SFields) (ρ : Ty .row), ∀ m ∈ (fs
     · refine .inl (.inl ?_)
       cases f with
       | abs => simp [SType.toField, SType.toFieldI, Ty.gvars] at h
+      | missing => simp [SType.toField, SType.toFieldI, Ty.gvars] at h
+      | opt τ =>
+        have h' : m ∈ τ.toTy.gvars := by
+          simpa [SType.toField, SType.toFieldI, Ty.gvars] using h
+        exact (SType.toTy_gvars (.opt τ)).1 m h'
       | _ => exact (SType.toTy_gvars _).1 m (by simpa [SType.toField, SType.toFieldI, Ty.gvars] using h)
     · rcases SFields.toRowOn_gvars fs ρ m h with h | h
       · exact .inl (.inr h)
@@ -687,6 +719,11 @@ theorem SType.toAt_gvars (a : SType) : ∀ srt : Srt, ∀ m ∈ (a.toAt srt).gva
   | .field => fun m h => by
     cases a with
     | abs => simp [SType.toAt, SType.toField, SType.toFieldI, Ty.gvars] at h
+    | missing => simp [SType.toAt, SType.toField, SType.toFieldI, Ty.gvars] at h
+    | opt τ =>
+      have h' : m ∈ τ.toTy.gvars := by
+        simpa [SType.toAt, SType.toField, SType.toFieldI, Ty.gvars] using h
+      exact (SType.toTy_gvars (.opt τ)).1 m h'
     | _ => exact (SType.toTy_gvars _).1 m (by simpa [SType.toAt, SType.toField, SType.toFieldI, Ty.gvars] using h)
 
 /-- **No recursive types**: the solution of a valid certificate defines

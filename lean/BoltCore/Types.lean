@@ -9,10 +9,12 @@ Marques et al.: `Ty .ty` are types, `Ty .row` rows, `Ty .field` fields.
   at every sort. `Abs` is `top` at sort `field` (any value, or no field at
   all) and at sort `row` (the top row). It is never a type.
 * Types: primitives, functions, and records `rcd ρ` of a row `ρ`.
-* Rows: `cons l θ ρ` adds the field `θ` for `l` in front of `ρ`; a record
-  literal's row ends in `top`.
-* Fields: `pre τ`, a present field of type `τ`; `proj l ρ`, field `l` of an
-  opaque row such as a row variable.
+* Rows: `cons l θ ρ` adds the field `θ` for `l` in front of `ρ`; `nil` is
+  the empty row, `missing` at every label. A record literal's row ends in
+  `nil`: its type is closed.
+* Fields: `pre τ`, a present field of type `τ`; `missing`, the field that is
+  definitely absent; `proj l ρ`, field `l` of an opaque row such as a row
+  variable. An optional field is the union `opt τ = pre τ ∪ missing`.
 
 There are no structural recursive types (no `μ`); recursive solutions are
 graph variables (`gvar`), whose meaning is given by definitions
@@ -43,18 +45,27 @@ inductive Ty : Srt → Type where
   | pre : Ty .ty → Ty .field
   /-- Field `l` of an opaque row (a row variable). -/
   | proj : String → Ty .row → Ty .field
+  /-- The field that is definitely absent. -/
+  | missing : Ty .field
+  /-- The empty row: `missing` at every label. -/
+  | nil : Ty .row
 
 /-- `Abs`: the top field. -/
 abbrev Ty.abs : Ty .field := .top
 
+/-- `Opt τ`: a field that is missing, or present at `τ`. -/
+abbrev Ty.opt (τ : Ty .ty) : Ty .field := .union (.pre τ) .missing
+
 /-- The field a row gives a label: an explicit field wins over the rest;
-the top row gives `Abs`, the bottom row the bottom field; unions and
+the top row gives `Abs`, the empty row `missing`, the bottom row the bottom
+field; unions and
 intersections are pointwise; a variable's fields are opaque. At the other
 sorts it is `⊤`, so that facts about rows can be stated for derivations at
 any sort. (Matching on the sort first keeps the recursion structural.) -/
 def Ty.field (l : String) : {s : Srt} → Ty s → Ty .field
   | .row, .cons l' θ ρ => if l' = l then θ else ρ.field l
   | .row, .top => .top
+  | .row, .nil => .missing
   | .row, .bot => .bot
   | .row, .union a b => .union (a.field l) (b.field l)
   | .row, .inter a b => .inter (a.field l) (b.field l)
@@ -73,8 +84,8 @@ def Ty.absFields : List (String × Ty .ty) → Ty .row → Ty .row
   | [], ρ => ρ
   | (l, _) :: F, ρ => .cons l .abs (Ty.absFields F ρ)
 
-/-- The record type of a record literal with fields `F`. -/
-def Ty.record (F : List (String × Ty .ty)) : Ty .ty := .rcd (Ty.ofFields F .top)
+/-- The record type of a record literal with fields `F`: closed. -/
+def Ty.record (F : List (String × Ty .ty)) : Ty .ty := .rcd (Ty.ofFields F .nil)
 
 theorem Ty.field_ofFields_none {l : String} {ρ : Ty .row} :
     ∀ {F : List (String × Ty .ty)}, (∀ p ∈ F, p.1 ≠ l) → (Ty.ofFields F ρ).field l = ρ.field l
@@ -87,7 +98,7 @@ theorem Ty.field_ofFields_none {l : String} {ρ : Ty .row} :
 /-- The graph variables occurring in a type, of any sort. -/
 def Ty.gvars : Ty s → List Nat
   | .gvar n => [n]
-  | .top | .bot | .fvar _ | .prim _ => []
+  | .top | .bot | .fvar _ | .prim _ | .missing | .nil => []
   | .union a b | .inter a b | .arrow a b => a.gvars ++ b.gvars
   | .rcd ρ | .pre ρ | .proj _ ρ => ρ.gvars
   | .cons _ θ ρ => θ.gvars ++ ρ.gvars

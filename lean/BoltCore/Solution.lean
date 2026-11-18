@@ -22,9 +22,10 @@ The algorithm's simple types are unsorted; a simple type is translated by
 the position it is used in (`docs/design/sorts.md`):
 
 * `toTy` as a type: a record is `rcd` of its row;
-* `toRow` as a row: a record's fields go in front of its tail's row, and the
-  top row `Abs` is `⊤`;
-* `toField` as a field: `Abs` is `⊤`, any other type `τ` is `pre τ`.
+* `toRow` as a row: a record's fields go in front of its tail's row, the
+  top row `Abs` is `⊤`, and the empty row is `nil`;
+* `toField` as a field: `Abs` is `⊤`, `Missing` is `missing`, `Opt τ` is
+  `opt τ = pre τ ∪ missing`, and any other type `τ` is `pre τ`.
 
 A variable becomes the graph variable of the same number at the sort of its
 position, and every graph variable is defined at every sort, by its
@@ -96,7 +97,8 @@ theorem Constrain.inv₂ : Constrain s a b s' → Inv₂ s → Inv₂ s'
   | .refl, h => h
   | .arrow _ h₁ h₂, h => h₂.inv₂ (h₁.inv₂ h.remember)
   | .absR _, h => h.remember
-  | .absRecord _ h₁ h₂, h => h₂.inv₂ (h₁.inv₂ h.remember)
+  | .absRecord _ h₁ h₂, h | .nilRecord _ h₁ h₂, h | .recordNil _ _ h₁ h₂, h =>
+    h₂.inv₂ (h₁.inv₂ h.remember)
   | .record _ _ _ h₁ h₂ h₃, h => h₃.inv₂ (h₂.inv₂ (h₁.inv₂ h.remember))
   | .varL _ _ h', h => h'.inv₂ h.remember.addUpper
   | .varR _ hnv h', h => h'.inv₂ (h.remember.addLower hnv)
@@ -106,8 +108,8 @@ theorem ConstrainEach.inv₂ : ConstrainEach s ps s' → Inv₂ s → Inv₂ s'
   | .cons h₁ h₂, h => h₂.inv₂ (h₁.inv₂ h)
 
 theorem ConstrainField.inv₂ : ConstrainField s a b s' → Inv₂ s → Inv₂ s'
-  | .toAbs, h => h
-  | .pre _ _ h', h => h'.inv₂ h
+  | .toAbs, h | .misMis, h | .misOpt, h => h
+  | .optOpt _ h', h | .preOpt _ h', h | .pre _ _ h', h => h'.inv₂ h
 
 theorem FieldsEach.inv₂ : FieldsEach s ps s' → Inv₂ s → Inv₂ s'
   | .nil, h => h
@@ -115,7 +117,7 @@ theorem FieldsEach.inv₂ : FieldsEach s ps s' → Inv₂ s → Inv₂ s'
 
 theorem Expand.inv₂ : Expand s t ms t' s' → Inv₂ s → Inv₂ s'
   | .none, h => h
-  | .abs _ h', h => h'.inv₂ h
+  | .abs _ h', h | .nil _ h', h => h'.inv₂ h
   | .allAbsent _ _ h', h => h'.inv₂ h
   | .memo _ _ h₁ _ h₂, h => h₂.inv₂ (h₁.inv₂ h)
   | .fresh _ _ h₁ _ _ h₂, h => h₂.inv₂ ((h₁.inv₂ h).of_bounds rfl fun _ hp => hp)
@@ -135,6 +137,7 @@ theorem TypeTerm.inv₂ : TypeTerm Γ s t st s' → Inv₂ s → Inv₂ s'
   | .app _ h₁ h₂ hc, h => hc.inv₂ (h₂.inv₂ (h₁.inv₂ h.fresh))
   | .rcd h', h => h'.inv₂ h
   | .sel _ h' hc, h => hc.inv₂ (h'.inv₂ h.fresh)
+  | .selOr _ h' hc hd hc', h => hc'.inv₂ (hd.inv₂ (hc.inv₂ (h'.inv₂ h.fresh)))
   | .ext _ h₁ h₂ _ hc, h => hc.inv₂ (h₂.inv₂ (h₁.inv₂ h)).fresh
   | .extNil h', h => h'.inv₂ h
   | .letIn h₁ h₂, h => h₂.inv₂ (h₁.inv₂ h)
@@ -170,20 +173,26 @@ abbrev SInterp := (srt : Srt) → Nat → Ty srt
 def SInterp.gv : SInterp := fun _ v => .gvar v
 
 mutual
-/-- A simple type as a type. (`Abs` is not a type; it is sent to `⊤`, which
-only matters for ill-sorted input.) -/
+/-- A simple type as a type. (`Abs`, `Missing` and `Opt τ` are not types:
+`Abs` and `Missing` are sent to `⊤` and `Opt τ` to `τ`, which only matters
+for ill-sorted input. The empty row is read as the empty closed record, so
+that a constraint between rows also holds between the records of those
+rows.) -/
 def SType.toTyI (I : SInterp) : SType → Ty .ty
   | .var v => I .ty v
   | .prim n => .prim n
   | .arrow a b => .arrow (a.toTyI I) (b.toTyI I)
   | .record fs t => .rcd (fs.toRowOnI I (t.toRowI I))
-  | .abs => .top
+  | .nil => .rcd .nil
+  | .opt t => t.toTyI I
+  | .abs | .missing => .top
 
 /-- A simple type as a row. Primitive and function types have no fields. -/
 def SType.toRowI (I : SInterp) : SType → Ty .row
   | .var v => I .row v
   | .record fs t => fs.toRowOnI I (t.toRowI I)
-  | .prim _ | .arrow _ _ | .abs => .top
+  | .nil => .nil
+  | .prim _ | .arrow _ _ | .abs | .missing | .opt _ => .top
 
 /-- Fields in front of a row. -/
 def SFields.toRowOnI (I : SInterp) : SFields → Ty .row → Ty .row
@@ -191,20 +200,24 @@ def SFields.toRowOnI (I : SInterp) : SFields → Ty .row → Ty .row
   | .cons n f fs, ρ =>
     .cons n (match f with
       | .abs => .top
+      | .missing => .missing
+      | .opt τ => Ty.opt (τ.toTyI I)
       | f => .pre (f.toTyI I)) (fs.toRowOnI I ρ)
 end
 
 /-- A simple type as a field. -/
 def SType.toFieldI (I : SInterp) : SType → Ty .field
   | .abs => .top
+  | .missing => .missing
+  | .opt τ => Ty.opt (τ.toTyI I)
   | f => .pre (f.toTyI I)
 
 theorem SFields.toRowOnI_cons (I : SInterp) (n : String) (f : SType) (fs : SFields)
     (ρ : Ty .row) : (SFields.cons n f fs).toRowOnI I ρ = .cons n (f.toFieldI I) (fs.toRowOnI I ρ) := by
   cases f <;> rfl
 
-theorem SType.toFieldI_of_ne {I : SInterp} {f : SType} (h : f ≠ .abs) : f.toFieldI I = .pre (f.toTyI I) := by
-  cases f <;> first | rfl | exact absurd rfl h
+theorem SType.toFieldI_of_pre {I : SInterp} {f : SType} (h : f.IsPre) : f.toFieldI I = .pre (f.toTyI I) := by
+  cases f <;> first | rfl | exact absurd h id
 
 /-- The solution's translations: every variable is its graph variable. -/
 abbrev SType.toTy (t : SType) : Ty .ty := t.toTyI .gv
@@ -222,8 +235,8 @@ theorem SFields.toRowOn_cons (n : String) (f : SType) (fs : SFields) (ρ : Ty .r
     (SFields.cons n f fs).toRowOn ρ = .cons n f.toField (fs.toRowOn ρ) :=
   SFields.toRowOnI_cons .gv n f fs ρ
 
-theorem SType.toField_of_ne {f : SType} (h : f ≠ .abs) : f.toField = .pre f.toTy :=
-  SType.toFieldI_of_ne h
+theorem SType.toField_of_pre {f : SType} (h : f.IsPre) : f.toField = .pre f.toTy :=
+  SType.toFieldI_of_pre h
 
 theorem SType.toTyI_gv (t : SType) : t.toTyI .gv = t.toTy := rfl
 theorem SType.toRowI_gv (t : SType) : t.toRowI .gv = t.toRow := rfl

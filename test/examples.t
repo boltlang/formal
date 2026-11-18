@@ -18,9 +18,23 @@ simplified type is equivalent to the raw coalesced one.
   let bad_record_arg : type error: missing field: a in {b: int}
   let conflict : bool ∧ int -> int
   let call_conflict : type error: cannot constrain bool <: int
-  let length : ({isNil: bool, tail: 'a} as 'a) -> int
+  let length : ({isNil: bool, tail: 'a, ..} as 'a) -> int
   let finite : type error: missing field: tail in {isNil: bool}
   let fine : int
+  [1]
+  $ boltcore --self-check ../examples/optional.sub
+  let get_y : {y?: 'a, ..} -> 'a ∨ int
+  let none : int
+  let some : int
+  let other : bool ∨ int
+  let maybe : bool -> {y?: int}
+  let read : bool -> int
+  let unsafe : type error: missing field: y in {}
+  let both : {y: 'a, ..} -> {a: 'a ∨ int, b: 'a}
+  let chain : {x?: 'a, y?: 'a, ..} -> 'a ∨ int
+  let nested : {a?: {b?: 'a, ..}, ..} -> 'a ∨ int
+  let pick : bool -> {x?: int, y?: bool}
+  let extend : bool -> {x: Abs | 'a} -> {x: int | 'a} ∨ {}
   [1]
   $ boltcore --self-check ../examples/polymorphism.sub
   let id : 'a -> 'a
@@ -29,12 +43,12 @@ simplified type is equivalent to the raw coalesced one.
   let extruded : (bool ∨ int -> 'a) -> {a: 'a, b: 'a}
   let mono : (bool ∨ int -> 'a) -> {a: 'a, b: 'a}
   $ boltcore --self-check ../examples/records.sub
-  let get_x : {x: 'a} -> 'a
-  let norm1 : {x: int, y: int} -> int
+  let get_x : {x: 'a, ..} -> 'a
+  let norm1 : {x: int, y: int, ..} -> int
   let n : int
-  let origin_x : {origin: {x: 'a}} -> 'a
+  let origin_x : {origin: {x: 'a, ..}, ..} -> 'a
   let ox : int
-  let tag : 'a ∧ {size: int} -> {size: int, value: 'a}
+  let tag : 'a ∧ {size: int, ..} -> {size: int, value: 'a}
   let tagged : {size: int, value: {name: int, size: int}}
   let inner : int
   $ boltcore --self-check ../examples/rows.sub
@@ -47,12 +61,12 @@ simplified type is equivalent to the raw coalesced one.
   let setBoth : {a: Abs, b: Abs | 'a} -> {a: int, b: bool | 'a}
   let both : {fromX: int, fromZ: bool}
   let either : bool -> {y: Abs | 'a} -> {z: Abs | 'b} -> {y: int | 'a} ∨ {z: int | 'b}
-  let count : 'a ∧ {n: int | 'b ∧ {done: bool}} ∧ {done: bool} -> 'a ∨ {n: int | 'b}
+  let count : 'a ∧ {n: int | 'b ∧ {done: bool, ..}} ∧ {done: bool, ..} -> 'a ∨ {n: int | 'b}
   let noZ : type error: missing field: z in {x: int}
   [1]
   $ boltcore --rectypes --self-check ../examples/recursion.sub
   let produce : int -> ({head: int, tail: 'a} as 'a)
-  let sum : ({head: int, tail: 'a} as 'a) -> int
+  let sum : ({head: int, tail: 'a, ..} as 'a) -> int
   let total : int
   let eat : (⊤ -> 'a as 'a)
   let ones : type error: let rec ones: the right-hand side must be a function
@@ -63,8 +77,8 @@ simplified type is equivalent to the raw coalesced one.
   [1]
   $ boltcore --self-check ../examples/unions.sub
   let either : bool -> int ∨ {a: int}
-  let both : {f: 'a} ∧ (int -> 'b) -> {r: 'a, s: 'b}
-  let pick : bool -> {x: int}
+  let both : {f: 'a, ..} ∧ (int -> 'b) -> {r: 'a, s: 'b}
+  let pick : bool -> {x: int, y?: bool, z?: bool}
   let picked_x : bool -> int
   let choose : bool -> 'a -> 'a -> 'a
   let mixed : int ∨ {a: int}

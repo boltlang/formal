@@ -74,21 +74,52 @@ def SType.nonVar : SType → Bool
 
 theorem SType.nonVar_sound : ∀ {b : SType}, b.nonVar = true → ∀ w, b ≠ .var w
   | .var _, h, _ => by simp [SType.nonVar] at h
-  | .prim _, _, _ | .arrow _ _, _, _ | .record _ _, _, _ | .abs, _, _ => fun h => nomatch h
+  | .prim _, _, _ | .arrow _ _, _, _ | .record _ _, _, _ | .abs, _, _
+  | .missing, _, _ | .opt _, _, _ | .nil, _, _ => fun h => nomatch h
+
+/-- `IsPre`, as a Boolean. -/
+def SType.isPre : SType → Bool
+  | .abs | .missing | .opt _ => false
+  | _ => true
+
+theorem SType.isPre_sound : ∀ {t : SType}, t.isPre = true → t.IsPre
+  | .var _, _ | .prim _, _ | .arrow _ _, _ | .record _ _, _ | .nil, _ => trivial
+  | .abs, h | .missing, h | .opt _, h => by simp [SType.isPre] at h
 
 section Just
 variable (σ : Nat → Bounds) (K : Nat → List String) (R : SType → SType → Prop) [DecidableRel R]
 
-/-- `FieldR R f g`: `g` is `Abs`, or both are present and related. -/
-def fieldB (f g : SType) : Bool := g == .abs || (f != .abs && g != .abs && decide (R f g))
+/-- `FieldR R f g`: the fields are equal; or `g` is `Abs`; or `f` is
+`Missing` and `g` is `Missing` or optional; or `g` is optional and the type
+of `f`, optional or present, is related to its type; or both are present
+and related. -/
+def fieldB (f g : SType) : Bool :=
+  f == g ||
+    match f, g with
+    | _, .abs => true
+    | .missing, .missing => true
+    | .missing, .opt _ => true
+    | .opt τ₀, .opt τ₁ => τ₀ != .abs && decide (R τ₀ τ₁)
+    | f, .opt τ₁ => f.isPre && decide (R f τ₁)
+    | f, g => f.isPre && g.isPre && decide (R f g)
 
 variable {σ K R}
 
 theorem fieldB_sound {f g : SType} (h : fieldB R f g = true) : FieldR R f g := by
-  by_cases hg : g = .abs
-  · subst hg; exact .toAbs
-  · simp [fieldB, hg] at h
-    exact .pre h.1 hg h.2
+  unfold fieldB at h
+  simp only [Bool.or_eq_true, beq_iff_eq] at h
+  rcases h with rfl | h
+  · exact .refl
+  · split at h
+    · exact .toAbs
+    · exact .misMis
+    · exact .misOpt
+    · simp only [Bool.and_eq_true, bne_iff_ne, ne_eq, decide_eq_true_eq] at h
+      exact .optOpt h.1 h.2
+    · simp only [Bool.and_eq_true, decide_eq_true_eq] at h
+      exact .preOpt (SType.isPre_sound h.1) h.2
+    · simp only [Bool.and_eq_true, decide_eq_true_eq] at h
+      exact .pre (SType.isPre_sound h.1.1) (SType.isPre_sound h.1.2) h.2
 
 variable (R) in
 def relB : SFields → SFields → Bool
@@ -118,6 +149,7 @@ def expandRes (t : SType) (ms : SFields) : List SType :=
   if ms = .nil then [t]
   else match t with
     | .abs => if pairsB R ms.absPairs then [.abs] else []
+    | .nil => if pairsB R ms.misPairs then [.nil] else []
     | .var v =>
       if pairsB R (ms.absentIn (K v)).absPairs then
         if ms.presentIn (K v) = .nil then [.var v]
@@ -136,6 +168,9 @@ theorem expandRes_sound {t ms t' : _} (h : t' ∈ expandRes σ K R t ms) : Expan
     split at h
     · split at h
       · next hp => simp at h; subst h; exact .abs hm (pairsB_sound hp)
+      · simp at h
+    · split at h
+      · next hp => simp at h; subst h; exact .nil hm (pairsB_sound hp)
       · simp at h
     · next v =>
       split at h
@@ -157,6 +192,9 @@ variable (σ K R) in
 def structB : SType → SType → Bool
   | .arrow l₀ r₀, .arrow l₁ r₁ => decide (R l₁ l₀) && decide (R r₀ r₁)
   | .abs, .record fs t => pairsB R fs.absPairs && decide (R .abs t)
+  | .nil, .record fs t => pairsB R fs.misPairs && decide (R .nil t)
+  | .record fa ta, .nil =>
+    pairsB R (rowView (.record fa ta)).1.toMisPairs && decide (R (rowView (.record fa ta)).2 .nil)
   | .record fa ta, .record fb tb =>
     pairsB R ((rowView (.record fa ta)).1.common (rowView (.record fb tb)).1) &&
       (expandRes σ K R (rowView (.record fa ta)).2
@@ -165,24 +203,21 @@ def structB : SType → SType → Bool
           (rowView (.record fb tb)).2)
   | _, _ => false
 
-theorem structB_sound : ∀ {a b : SType}, structB σ K R a b = true → GStep σ R a b
-  | .arrow l₀ r₀, .arrow l₁ r₁, h => by
-    simp only [structB, Bool.and_eq_true, decide_eq_true_eq] at h
+theorem structB_sound {a b : SType} (h : structB σ K R a b = true) : GStep σ R a b := by
+  unfold structB at h
+  split at h
+  · simp only [Bool.and_eq_true, decide_eq_true_eq] at h
     exact .arrow h.1 h.2
-  | .abs, .record fs t, h => by
-    simp only [structB, Bool.and_eq_true, decide_eq_true_eq] at h
+  · simp only [Bool.and_eq_true, decide_eq_true_eq] at h
     exact .absRecord (pairsB_sound h.1) h.2
-  | .record fa ta, .record fb tb, h => by
-    simp only [structB, Bool.and_eq_true, List.any_eq_true, decide_eq_true_eq] at h
+  · simp only [Bool.and_eq_true, decide_eq_true_eq] at h
+    exact .nilRecord (pairsB_sound h.1) h.2
+  · simp only [Bool.and_eq_true, decide_eq_true_eq] at h
+    exact .recordNil rfl (pairsB_sound h.1) h.2
+  · simp only [Bool.and_eq_true, List.any_eq_true, decide_eq_true_eq] at h
     obtain ⟨hf, t₀', he, ht⟩ := h
     exact .record rfl rfl (pairsB_sound hf) (expandRes_sound he) ht
-  | .var _, _, h | .prim _, _, h => by simp [structB] at h
-  | .arrow _ _, .var _, h | .arrow _ _, .prim _, h | .arrow _ _, .record _ _, h
-  | .arrow _ _, .abs, h => by simp [structB] at h
-  | .record _ _, .var _, h | .record _ _, .prim _, h | .record _ _, .arrow _ _, h
-  | .record _ _, .abs, h => by simp [structB] at h
-  | .abs, .var _, h | .abs, .prim _, h | .abs, .arrow _ _, h | .abs, .abs, h => by
-    simp [structB] at h
+  · simp at h
 
 variable (σ R) in
 /-- A variable on the left: its upper bound, or through one (`viaL`). -/
@@ -198,7 +233,8 @@ theorem varLB_sound : ∀ {a b : SType}, varLB σ R a b = true → GStep σ R a 
     rcases h with h | ⟨hb, b', hb', ⟨hn, ha⟩, hR⟩
     · exact .varL h
     · exact .viaL hb' (SType.nonVar_sound hn) ha (SType.nonVar_sound hb) hR
-  | .prim _, _, h | .arrow _ _, _, h | .record _ _, _, h | .abs, _, h => by simp [varLB] at h
+  | .prim _, _, h | .arrow _ _, _, h | .record _ _, _, h | .abs, _, h
+  | .missing, _, h | .opt _, _, h | .nil, _, h => by simp [varLB] at h
 
 variable (σ R) in
 /-- A variable on the right: its lower bound, or through one (`viaR`). -/
@@ -214,7 +250,8 @@ theorem varRB_sound : ∀ {a b : SType}, varRB σ R a b = true → GStep σ R a 
     rcases h with h | ⟨⟨ha, ha'⟩, a', hl, ⟨hn, hab⟩, hR⟩
     · exact .varR h
     · exact .viaR hl (SType.nonVar_sound hn) hab (SType.nonVar_sound ha) ha' hR
-  | _, .prim _, h | _, .arrow _ _, h | _, .record _ _, h | _, .abs, h => by simp [varRB] at h
+  | _, .prim _, h | _, .arrow _ _, h | _, .record _ _, h | _, .abs, h
+  | _, .missing, h | _, .opt _, h | _, .nil, h => by simp [varRB] at h
 
 variable (σ K R) in
 /-- One justification step (`GStep`). -/
@@ -237,7 +274,8 @@ mutual
 def SType.nacB : SType → Bool
   | .arrow a b => a != .abs && b != .abs && a.nacB && b.nacB
   | .record fs t => fs.nacB && t.nacB
-  | .var _ | .prim _ | .abs => true
+  | .opt t => t.nacB
+  | .var _ | .prim _ | .abs | .missing | .nil => true
 
 def SFields.nacB : SFields → Bool
   | .nil => true
@@ -252,7 +290,10 @@ theorem SType.nacB_sound : ∀ {t : SType}, t.nacB = true → t.NAC
   | .record fs t, h => by
     simp only [SType.nacB, Bool.and_eq_true] at h
     exact ⟨SFields.nacB_sound h.1, SType.nacB_sound h.2⟩
-  | .var _, _ | .prim _, _ | .abs, _ => trivial
+  | .opt t, h => by
+    simp only [SType.nacB] at h
+    exact SType.nacB_sound (t := t) h
+  | .var _, _ | .prim _, _ | .abs, _ | .missing, _ | .nil, _ => trivial
 
 theorem SFields.nacB_sound : ∀ {fs : SFields}, fs.nacB = true → fs.NAC
   | .nil, _ => trivial
@@ -290,7 +331,8 @@ mutual
 def SType.wkB : SType → Bool
   | .arrow a b => a.wkB && kemptyB K a && b.wkB && kemptyB K b
   | .record fs t => fs.wkB && t.wkB && recOKB K (.record fs t)
-  | .var _ | .prim _ | .abs => true
+  | .opt t => t.wkB && kemptyB K t
+  | .var _ | .prim _ | .abs | .missing | .nil => true
 
 def SFields.wkB : SFields → Bool
   | .nil => true
@@ -327,7 +369,10 @@ theorem SType.wkB_sound : ∀ {t : SType}, t.wkB K = true → WK K t
   | .record fs t, h => by
     simp only [SType.wkB, Bool.and_eq_true] at h
     exact ⟨SFields.wkB_sound h.1.1, SType.wkB_sound h.1.2, recOKB_sound h.2⟩
-  | .var _, _ | .prim _, _ | .abs, _ => trivial
+  | .opt t, h => by
+    simp only [SType.wkB, Bool.and_eq_true] at h
+    exact ⟨SType.wkB_sound h.1, kemptyB_sound h.2⟩
+  | .var _, _ | .prim _, _ | .abs, _ | .missing, _ | .nil, _ => trivial
 
 theorem SFields.wkB_sound : ∀ {fs : SFields}, fs.wkB K = true → FWK K fs
   | .nil, _ => trivial
@@ -422,7 +467,7 @@ theorem rankedB_sound (h : c.rankedB = true) : StructRanked c.bounds c.rank := b
   | var w =>
     simp only [decide_eq_true_eq] at this
     exact ⟨fun w' e => by cases e; exact this, fun h => absurd rfl (h w)⟩
-  | prim _ | arrow _ _ | record _ _ | abs =>
+  | prim _ | arrow _ _ | record _ _ | abs | missing | opt _ | nil =>
     simp only [List.all_eq_true, decide_eq_true_eq] at this
     exact ⟨fun _ e => (nomatch e), fun _ => this⟩
 
@@ -509,6 +554,8 @@ inductive Ann where
   | rcd : AFields → Ann
   /-- `t.l`, with the type of the field. -/
   | sel : Ann → String → SType → Ann
+  /-- `t.l ?? d`, with the type of the field. -/
+  | selOr : Ann → String → Ann → SType → Ann
   /-- `t with {fs}`, with the row of the other fields. -/
   | ext : Ann → AFields → SType → Ann
   /-- `let x = r in b`, generalizing `gen`. -/
@@ -529,6 +576,7 @@ def Ann.erase : Ann → Term
   | .app f a _ => .app f.erase a.erase
   | .rcd fs => .rcd fs.erase
   | .sel t l _ => .sel t.erase l
+  | .selOr t l d _ => .selOr t.erase l d.erase
   | .ext t fs _ => .ext t.erase fs.erase
   | .letIn x _ r b => .letIn false x r.erase b.erase
   | .letRec x _ _ r b => .letIn true x r.erase b.erase
@@ -566,14 +614,21 @@ def infer (Γ : PCtx) : Ann → Option SType
     | _, _ => none
   | .rcd fs =>
     match inferFields Γ fs with
-    | some F => some (.record F .abs)
+    | some F => some (.record F .nil)
     | none => none
   | .sel t l st =>
     match infer Γ t with
     | some st₀ =>
-      if st₀ ≠ .abs ∧ c.Accepts st₀ (.record (.cons l st .nil) .abs) ∧ st ≠ .abs
+      if st₀ ≠ .abs ∧ c.Accepts st₀ (.record (.cons l st .nil) .abs) ∧ st.isPre = true
       then some st else none
     | none => none
+  | .selOr t l d st =>
+    match infer Γ t, infer Γ d with
+    | some st₀, some std =>
+      if st₀ ≠ .abs ∧ c.Accepts st₀ (.record (.cons l (.opt st) .nil) .abs) ∧
+          std ≠ .abs ∧ c.Accepts std st
+      then some st else none
+    | _, _ => none
   | .ext t .nil _ => infer Γ t
   | .ext t (.cons l a fs) ρ =>
     match infer Γ t, inferFields Γ (.cons l a fs) with
@@ -598,7 +653,7 @@ def inferFields (Γ : PCtx) : AFields → Option SFields
   | .nil => some .nil
   | .cons l t fs =>
     match infer Γ t, inferFields Γ fs with
-    | some st, some F => if st ≠ .abs then some (.cons l st F) else none
+    | some st, some F => if st.isPre = true then some (.cons l st F) else none
     | _, _ => none
 end
 
@@ -646,7 +701,18 @@ theorem infer_sound : ∀ {Γ : PCtx} {a : Ann} {st : SType}, infer c Γ a = som
     split at h
     · next ht =>
       split at h
-      · next hc => cases h; exact .sel (infer_sound ht) hc.1 hc.2.1 hc.2.2
+      · next hc =>
+        cases h; exact .sel (infer_sound ht) hc.1 hc.2.1 (SType.isPre_sound hc.2.2)
+      · cases h
+    · cases h
+  | Γ, .selOr t l d st', st, h => by
+    simp only [infer] at h
+    split at h
+    · next ht hd =>
+      split at h
+      · next hc =>
+        cases h
+        exact .selOr (infer_sound ht) hc.1 hc.2.1 (infer_sound hd) hc.2.2.1 hc.2.2.2
       · cases h
     · cases h
   | Γ, .ext t .nil _, st, h => by
@@ -692,7 +758,8 @@ theorem inferFields_sound : ∀ {Γ : PCtx} {fs : AFields} {F : SFields}, inferF
     split at h
     · next ht hF =>
       split at h
-      · next hne => cases h; exact .cons (infer_sound ht) hne (inferFields_sound hF)
+      · next hne =>
+        cases h; exact .cons (infer_sound ht) (SType.isPre_sound hne) (inferFields_sound hF)
       · cases h
     · cases h
 end

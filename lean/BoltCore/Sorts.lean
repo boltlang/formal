@@ -3,7 +3,7 @@ import BoltCore.Solution
 /-!
 # `Abs` never occurs as a component of a function type
 
-`Abs` (the absent field, and the top row) only ever occurs in field and row
+`Abs` (the top field, and the top row) only ever occurs in field and row
 tail positions: never as a parameter or result type. This matters for the
 solution (`SolutionRows.lean`): `Abs` is the top of `Sub` (`x ≤ Abs` for
 every `x`), so `Abs ≤ {…}` must stay false at the level of types, and the
@@ -12,7 +12,7 @@ type-level part of the solution proof must never meet `Abs` on the left.
 `NAC` ("no `Abs` component") says that every function type inside a simple
 type has non-`Abs` parameter and result. We prove that every constraint the
 algorithm accepts is `NAC`, and that the types it infers for terms are
-`NAC` and not `Abs`.
+`NAC` and are types (`IsPre`: not `Abs`, `Missing` or `Opt τ`).
 -/
 
 namespace BoltCore.Alg
@@ -23,6 +23,7 @@ mutual
 def SType.NAC : SType → Prop
   | .arrow a b => a ≠ .abs ∧ b ≠ .abs ∧ a.NAC ∧ b.NAC
   | .record fs t => fs.NAC ∧ t.NAC
+  | .opt t => t.NAC
   | _ => True
 
 def SFields.NAC : SFields → Prop
@@ -42,8 +43,8 @@ theorem rowView_NAC : ∀ x : SType, x.NAC → (rowView x).1.NAC ∧ (rowView x)
     have := rowView_NAC t ht
     simp only [rowView]
     exact ⟨hfs.append this.1, this.2⟩
-  | .var _, _ | .prim _, _ | .abs, _ => ⟨trivial, trivial⟩
-  | .arrow _ _, h => ⟨trivial, h⟩
+  | .var _, _ | .prim _, _ | .abs, _ | .missing, _ | .nil, _ => ⟨trivial, trivial⟩
+  | .arrow _ _, h | .opt _, h => ⟨trivial, h⟩
 
 theorem SFields.NAC.lookup : ∀ {fs : SFields}, fs.NAC → fs.lookup l = some f → f.NAC
   | .nil, _, h => by simp [SFields.lookup] at h
@@ -82,6 +83,24 @@ theorem SFields.NAC.absPairs : ∀ {fs : SFields}, fs.NAC →
     rcases hp with rfl | hp
     · exact ⟨trivial, hf⟩
     · exact hr.absPairs p hp
+
+theorem SFields.NAC.misPairs : ∀ {fs : SFields}, fs.NAC →
+    ∀ p, p ∈ fs.misPairs → p.1.NAC ∧ p.2.NAC
+  | .nil, _, _, h => nomatch h
+  | .cons _ f rest, ⟨hf, hr⟩, p, hp => by
+    simp only [SFields.misPairs, List.mem_cons] at hp
+    rcases hp with rfl | hp
+    · exact ⟨trivial, hf⟩
+    · exact hr.misPairs p hp
+
+theorem SFields.NAC.toMisPairs : ∀ {fs : SFields}, fs.NAC →
+    ∀ p, p ∈ fs.toMisPairs → p.1.NAC ∧ p.2.NAC
+  | .nil, _, _, h => nomatch h
+  | .cons _ f rest, ⟨hf, hr⟩, p, hp => by
+    simp only [SFields.toMisPairs, List.mem_cons] at hp
+    rcases hp with rfl | hp
+    · exact ⟨hf, trivial⟩
+    · exact hr.toMisPairs p hp
 
 theorem SFields.NAC.absOf : ∀ {fs : SFields}, (fs.absOf).NAC
   | .nil => trivial
@@ -132,6 +151,14 @@ theorem Constrain.nac : Constrain s a b s' → Inv₂ s → a.NAC → b.NAC → 
   | .absRecord _ h₁ h₂, i, _, ⟨hfs, ht⟩, h =>
     have i₁ := h₁.inv₂ i.remember
     h₂.nac i₁ trivial ht (h₁.nac i.remember (hfs.absPairs) (h.remember trivial ⟨hfs, ht⟩))
+  | .nilRecord _ h₁ h₂, i, _, ⟨hfs, ht⟩, h =>
+    have i₁ := h₁.inv₂ i.remember
+    h₂.nac i₁ trivial ht (h₁.nac i.remember (hfs.misPairs) (h.remember trivial ⟨hfs, ht⟩))
+  | .recordNil _ e₀ h₁ h₂, i, ha, _, h => by
+    have v₀ := rowView_NAC _ ha
+    rw [e₀] at v₀
+    have i₁ := h₁.inv₂ i.remember
+    exact h₂.nac i₁ v₀.2 trivial (h₁.nac i.remember v₀.1.toMisPairs (h.remember ha trivial))
   | .record _ e₀ e₁ h₁ h₂ h₃, i, ha, hb, h => by
     have v₀ := rowView_NAC _ ha
     have v₁ := rowView_NAC _ hb
@@ -165,8 +192,9 @@ theorem ConstrainEach.nac : ConstrainEach s ps s' → Inv₂ s →
     h₂.nac (h₁.inv₂ i) (fun p hp => hps p (List.mem_cons_of_mem _ hp)) (h₁.nac i hh.1 hh.2 h)
 
 theorem ConstrainField.nac : ConstrainField s a b s' → Inv₂ s → a.NAC → b.NAC → LogNAC s → LogNAC s'
-  | .toAbs, _, _, _, h => h
-  | .pre _ _ h', i, ha, hb, h => h'.nac i ha hb h
+  | .toAbs, _, _, _, h | .misMis, _, _, _, h | .misOpt, _, _, _, h => h
+  | .optOpt _ h', i, ha, hb, h | .preOpt _ h', i, ha, hb, h | .pre _ _ h', i, ha, hb, h =>
+    h'.nac i ha hb h
 
 theorem FieldsEach.nac : FieldsEach s ps s' → Inv₂ s →
     (∀ p, p ∈ ps → p.1.NAC ∧ p.2.NAC) → LogNAC s → LogNAC s'
@@ -180,6 +208,7 @@ theorem Expand.nac : Expand s t ms t' s' → Inv₂ s → t.NAC → ms.NAC → L
     LogNAC s' ∧ t'.NAC
   | .none, _, ht, _, h => ⟨h, ht⟩
   | .abs _ h', i, _, hms, h => ⟨h'.nac i hms.absPairs h, trivial⟩
+  | .nil _ h', i, _, hms, h => ⟨h'.nac i hms.misPairs h, trivial⟩
   | .allAbsent _ _ h', i, ht, hms, h => ⟨h'.nac i hms.absentIn.absPairs h, ht⟩
   | .memo _ _ h₁ _ h₂, i, _, hms, h =>
     ⟨h₂.nac (h₁.inv₂ i) trivial ⟨hms.presentIn, trivial⟩ (h₁.nac i hms.absentIn.absPairs h), trivial⟩
@@ -193,10 +222,10 @@ theorem ConstrainTop.nac {s s' : State} (h : ConstrainTop s a b s') (i : Inv₂ 
   obtain ⟨s₁, hc, rfl⟩ := h
   exact hc.nac (i.of_bounds rfl fun _ hp => hp) ha hb hl
 
-/-- The context's types are `NAC` and not `Abs`. -/
-def CtxNAC (Γ : SCtx) : Prop := ∀ x st, Γ.lookup x = some st → st.NAC ∧ st ≠ .abs
+/-- The context's types are `NAC` and are types. -/
+def CtxNAC (Γ : SCtx) : Prop := ∀ x st, Γ.lookup x = some st → st.NAC ∧ st.IsPre
 
-theorem CtxNAC.cons (h : CtxNAC Γ) (hs : st.NAC) (hn : st ≠ .abs) : CtxNAC ((x, st) :: Γ) := by
+theorem CtxNAC.cons (h : CtxNAC Γ) (hs : st.NAC) (hn : st.IsPre) : CtxNAC ((x, st) :: Γ) := by
   intro y t hy
   simp only [SCtx.lookup, List.find?_cons] at hy
   split at hy
@@ -204,38 +233,45 @@ theorem CtxNAC.cons (h : CtxNAC Γ) (hs : st.NAC) (hn : st ≠ .abs) : CtxNAC ((
   · exact h y t hy
 
 mutual
-/-- Inferred types are `NAC` and not `Abs`, and accepted constraints stay `NAC`. -/
+/-- Inferred types are `NAC` and are types, and accepted constraints stay `NAC`. -/
 theorem TypeTerm.nac : TypeTerm Γ s t st s' → CtxNAC Γ → Inv₂ s → LogNAC s →
-    LogNAC s' ∧ st.NAC ∧ st ≠ .abs
-  | .lit, _, _, h => ⟨h, trivial, (fun h => nomatch h)⟩
+    LogNAC s' ∧ st.NAC ∧ st.IsPre
+  | .lit, _, _, h => ⟨h, trivial, trivial⟩
   | .var hx, hΓ, _, h => ⟨h, (hΓ _ _ hx).1, (hΓ _ _ hx).2⟩
   | .lam _ h', hΓ, i, h =>
-    have r := h'.nac (hΓ.cons trivial (fun h => nomatch h)) i.fresh h
-    ⟨r.1, ⟨(fun h => nomatch h), r.2.2, trivial, r.2.1⟩, (fun h => nomatch h)⟩
+    have r := h'.nac (hΓ.cons trivial trivial) i.fresh h
+    ⟨r.1, ⟨(fun h => nomatch h), r.2.2.ne_abs, trivial, r.2.1⟩, trivial⟩
   | .app _ h₁ h₂ hc, hΓ, i, h =>
     have r₁ := h₁.nac hΓ i.fresh h
     have i₁ := h₁.inv₂ i.fresh
     have r₂ := h₂.nac hΓ i₁ r₁.1
-    ⟨hc.nac (h₂.inv₂ i₁) r₁.2.1 ⟨r₂.2.2, (fun h => nomatch h), r₂.2.1, trivial⟩ r₂.1,
-      trivial, (fun h => nomatch h)⟩
+    ⟨hc.nac (h₂.inv₂ i₁) r₁.2.1 ⟨r₂.2.2.ne_abs, (fun h => nomatch h), r₂.2.1, trivial⟩ r₂.1,
+      trivial, trivial⟩
   | .rcd h', hΓ, i, h =>
     have r := h'.nac hΓ i h
-    ⟨r.1, ⟨r.2, trivial⟩, (fun h => nomatch h)⟩
+    ⟨r.1, ⟨r.2, trivial⟩, trivial⟩
   | .sel _ h' hc, hΓ, i, h =>
     have r := h'.nac hΓ i.fresh h
-    ⟨hc.nac (h'.inv₂ i.fresh) r.2.1 ⟨⟨trivial, trivial⟩, trivial⟩ r.1, trivial, (fun h => nomatch h)⟩
+    ⟨hc.nac (h'.inv₂ i.fresh) r.2.1 ⟨⟨trivial, trivial⟩, trivial⟩ r.1, trivial, trivial⟩
+  | .selOr _ h' hc hd hc', hΓ, i, h =>
+    have r := h'.nac hΓ i.fresh h
+    have i₁ := h'.inv₂ i.fresh
+    have n₂ := hc.nac i₁ r.2.1 ⟨⟨trivial, trivial⟩, trivial⟩ r.1
+    have i₂ := hc.inv₂ i₁
+    have rd := hd.nac hΓ i₂ n₂
+    ⟨hc'.nac (hd.inv₂ i₂) rd.2.1 trivial rd.1, trivial, trivial⟩
   | .extNil h', hΓ, i, h => h'.nac hΓ i h
   | .ext _ h₁ h₂ _ hc, hΓ, i, h =>
     have r₁ := h₁.nac hΓ i h
     have i₁ := h₁.inv₂ i
     have r₂ := h₂.nac hΓ i₁ r₁.1
     ⟨hc.nac (h₂.inv₂ i₁).fresh r₁.2.1 ⟨SFields.NAC.absOf, trivial⟩ r₂.1, ⟨r₂.2, trivial⟩,
-      (fun h => nomatch h)⟩
+      trivial⟩
   | .letIn h₁ h₂, hΓ, i, h =>
     have r₁ := h₁.nac hΓ i h
     h₂.nac (hΓ.cons r₁.2.1 r₁.2.2) (h₁.inv₂ i) r₁.1
   | .letRec _ _ h₁ hc h₂, hΓ, i, h =>
-    have hΓ' := hΓ.cons (st := .var _) trivial (fun h => nomatch h)
+    have hΓ' := hΓ.cons (st := .var _) trivial trivial
     have r₁ := h₁.nac hΓ' i.fresh h
     have i₁ := h₁.inv₂ i.fresh
     h₂.nac hΓ' (hc.inv₂ i₁) (hc.nac i₁ r₁.2.1 trivial r₁.1)
@@ -265,6 +301,6 @@ theorem builtins_NAC : CtxNAC builtins := by
   have hm := SCtx.lookup_mem h
   simp only [builtins, List.mem_cons, Prod.mk.injEq, List.not_mem_nil, or_false] at hm
   rcases hm with ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, rfl⟩ <;>
-    exact ⟨by simp [SType.NAC], by simp⟩
+    exact ⟨by simp [SType.NAC], trivial⟩
 
 end BoltCore.Alg

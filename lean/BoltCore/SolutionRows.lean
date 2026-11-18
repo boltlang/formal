@@ -92,6 +92,43 @@ theorem SFields.absPairs_mem {l : String} {f : SType} : ∀ fs : SFields,
     · cases h; exact List.mem_cons_self ..
     · exact List.mem_cons_of_mem _ (SFields.absPairs_mem rest h)
 
+theorem SFields.misPairs_mem {l : String} {f : SType} : ∀ fs : SFields,
+    fs.lookup l = some f → (SType.missing, f) ∈ fs.misPairs
+  | .nil, h => by simp [SFields.lookup] at h
+  | .cons n g rest, h => by
+    simp only [SFields.lookup] at h
+    simp only [SFields.misPairs]
+    split at h
+    · cases h; exact List.mem_cons_self ..
+    · exact List.mem_cons_of_mem _ (SFields.misPairs_mem rest h)
+
+theorem SFields.toMisPairs_mem {l : String} {f : SType} : ∀ fs : SFields,
+    fs.lookup l = some f → (f, SType.missing) ∈ fs.toMisPairs
+  | .nil, h => by simp [SFields.lookup] at h
+  | .cons n g rest, h => by
+    simp only [SFields.lookup] at h
+    simp only [SFields.toMisPairs]
+    split at h
+    · cases h; exact List.mem_cons_self ..
+    · exact List.mem_cons_of_mem _ (SFields.toMisPairs_mem rest h)
+
+/-- Only `Abs` is above `Abs`. -/
+theorem FieldR.abs_left {R : SType → SType → Prop} {f : SType} (h : FieldR R .abs f) :
+    f = .abs := by
+  cases h with
+  | refl => rfl
+  | toAbs => rfl
+  | preOpt h₀ => exact False.elim h₀
+  | pre h₀ => exact False.elim h₀
+
+/-- Only `Missing` is below `Missing`. -/
+theorem FieldR.missing_right {R : SType → SType → Prop} {f : SType} (h : FieldR R f .missing) :
+    f = .missing := by
+  cases h with
+  | refl => rfl
+  | misMis => rfl
+  | pre _ h₁ => exact False.elim h₁
+
 theorem SFields.absentIn_lookup (K : List String) (l : String) : ∀ fs : SFields,
     (fs.absentIn K).lookup l = if l ∈ K then fs.lookup l else none
   | .nil => by simp [SFields.absentIn, SFields.lookup]
@@ -114,11 +151,12 @@ theorem SFields.presentIn_lookup (K : List String) (l : String) : ∀ fs : SFiel
 
 theorem rowView_tail_ne_record : ∀ x : SType, ∀ fs t, (rowView x).2 ≠ .record fs t
   | .record _ t, fs, t' => by simp only [rowView]; exact rowView_tail_ne_record t fs t'
-  | .var _, _, _ | .prim _, _, _ | .arrow _ _, _, _ | .abs, _, _ => by simp [rowView]
+  | .var _, _, _ | .prim _, _, _ | .arrow _ _, _, _ | .abs, _, _
+  | .missing, _, _ | .opt _, _, _ | .nil, _, _ => by simp [rowView]
 
 theorem rowView_of_ne_record : ∀ y : SType, (∀ fs t, y ≠ .record fs t) → rowView y = (.nil, y)
   | .record fs t, h => absurd rfl (h fs t)
-  | .var _, _ | .prim _, _ | .arrow _ _, _ | .abs, _ => rfl
+  | .var _, _ | .prim _, _ | .arrow _ _, _ | .abs, _ | .missing, _ | .opt _, _ | .nil, _ => rfl
 
 theorem rowView_tail_le : ∀ x : SType, sizeOf (rowView x).2 ≤ sizeOf x
   | .record fs t => by
@@ -126,7 +164,7 @@ theorem rowView_tail_le : ∀ x : SType, sizeOf (rowView x).2 ≤ sizeOf x
     have := rowView_tail_le t
     simp only [SType.record.sizeOf_spec]
     omega
-  | .var _ | .prim _ | .arrow _ _ | .abs => by simp [rowView]
+  | .var _ | .prim _ | .arrow _ _ | .abs | .missing | .opt _ | .nil => by simp [rowView]
 
 theorem rowView_tail_lt (fs : SFields) (t : SType) :
     sizeOf (rowView (.record fs t)).2 < sizeOf (SType.record fs t) := by
@@ -279,17 +317,27 @@ variable {s : State} {A : List Nat} {I : SInterp}
 
 mutual
 theorem SType.interp_avoid (hg : GenHyp s A I) :
-    ∀ t : SType, Av A t → t.toTyI I = t.toTy ∧ t.toRowI I = t.toRow
-  | .var v, h => ⟨hg.out .ty v (Av.var.1 h), hg.out .row v (Av.var.1 h)⟩
-  | .prim _, _ | .abs, _ => ⟨rfl, rfl⟩
+    ∀ t : SType, Av A t →
+      t.toTyI I = t.toTy ∧ t.toRowI I = t.toRow ∧ t.toFieldI I = t.toField
+  | .var v, h =>
+    ⟨hg.out .ty v (Av.var.1 h), hg.out .row v (Av.var.1 h),
+      congrArg Ty.pre (hg.out .ty v (Av.var.1 h))⟩
+  | .prim _, _ | .abs, _ | .missing, _ | .nil, _ => ⟨rfl, rfl, rfl⟩
+  | .opt τ, h => by
+    have hτ := SType.interp_avoid hg τ fun w hw => h w (by simp [SType.vars, hw])
+    exact ⟨hτ.1, rfl, congrArg Ty.opt hτ.1⟩
   | .arrow a b, h => by
     have ha := SType.interp_avoid hg a fun w hw => h w (by simp [SType.vars, hw])
     have hb := SType.interp_avoid hg b fun w hw => h w (by simp [SType.vars, hw])
-    exact ⟨by simp only [SType.toTyI, SType.toTy, ha.1, hb.1], rfl⟩
+    have e : (SType.arrow a b).toTyI I = (SType.arrow a b).toTy := by
+      simp only [SType.toTyI, SType.toTy, ha.1, hb.1]
+    exact ⟨e, rfl, congrArg Ty.pre e⟩
   | .record fs t, h => by
     have ht := SType.interp_avoid hg t fun w hw => h w (by simp [SType.vars, hw])
-    have hf := SFields.interp_avoid hg fs (fun w hw => h w (by simp [SType.vars, hw])) ht.2
-    exact ⟨by simp only [SType.toTyI, SType.toTy, hf], by simp only [SType.toRowI, SType.toRow, hf]⟩
+    have hf := SFields.interp_avoid hg fs (fun w hw => h w (by simp [SType.vars, hw])) ht.2.1
+    have e : (SType.record fs t).toTyI I = (SType.record fs t).toTy := by
+      simp only [SType.toTyI, SType.toTy, hf]
+    exact ⟨e, by simp only [SType.toRowI, SType.toRow, hf], congrArg Ty.pre e⟩
 
 theorem SFields.interp_avoid (hg : GenHyp s A I) :
     ∀ fs : SFields, (∀ w ∈ fs.vars, w ∉ A) → ∀ {ρ ρ' : Ty .row}, ρ = ρ' →
@@ -299,9 +347,7 @@ theorem SFields.interp_avoid (hg : GenHyp s A I) :
     rw [SFields.toRowOnI_cons, SFields.toRowOn_cons,
       SFields.interp_avoid hg fs (fun w hw => h w (by simp [SFields.vars, hw])) hρ]
     have hf := SType.interp_avoid hg f fun w hw => h w (by simp [SFields.vars, hw])
-    cases f with
-    | abs => rfl
-    | _ => simp only [SType.toFieldI, SType.toField, hf.1]
+    rw [hf.2.2]
 end
 
 /-! ## Fields under an interpretation -/
@@ -336,7 +382,7 @@ theorem toRowI_rowView (I : SInterp) : ∀ x : SType,
   | .record fs t => by
     simp only [rowView, SType.toRowI]
     rw [SFields.toRowOnI_append, toRowI_rowView I t]; rfl
-  | .var _ | .prim _ | .arrow _ _ | .abs => rfl
+  | .var _ | .prim _ | .arrow _ _ | .abs | .missing | .opt _ | .nil => rfl
 
 theorem field_restRowI (I : SInterp) (l : String) (ex : SFields) (t : SType) :
     ((restRow ex t).toRowI I).field l = match ex.lookup l with
@@ -390,7 +436,7 @@ theorem SType.interp_avoid_ty (hg : GenHyp s A I) {u : SType} (h : Av A u) :
     u.toTyI I = u.toTy := (SType.interp_avoid hg u h).1
 
 theorem SType.interp_avoid_row (hg : GenHyp s A I) {u : SType} (h : Av A u) :
-    u.toRowI I = u.toRow := (SType.interp_avoid hg u h).2
+    u.toRowI I = u.toRow := (SType.interp_avoid hg u h).2.1
 
 /-- A variable bound of a variable outside `A` is outside `A`. -/
 theorem GenHyp.var_out (hg : GenHyp s A I) {v w : Nat} (hv : v ∉ A)
@@ -407,6 +453,8 @@ theorem stepNonvarG (hi : Inv s) (hn : LogNAC s) (hl : Logged s a b) (ha : a ≠
       exact .arrow (.base (.ty h₁ (.inl (arrow_comps hn hl).1)))
         (.base (.ty h₂ (.inl (arrow_comps hn hl).2)))
     | absRecord => exact absurd rfl ha
+    | nilRecord => exact .rcd (.base (SolG.row (a := .nil) (b := .record _ _) (.inr hl)))
+    | recordNil => exact .rcd (.base (SolG.row (a := .record _ _) (b := .nil) (.inr hl)))
     | @record fa ta _ _ fb tb =>
       exact .rcd (.base (SolG.row (a := .record fa ta) (b := .record fb tb) (.inr hl)))
     | varL => exact absurd rfl (hav _)
@@ -480,6 +528,8 @@ theorem stepTyG (hi : Inv s) (hn : LogNAC s) (hr : TailRanked s rank) (hg : GenH
       exact .arrow (.base (.ty h₁ (.inl (arrow_comps hn hl).1)))
         (.base (.ty h₂ (.inl (arrow_comps hn hl).2)))
     | absRecord => rcases ha with ha | ha; exact absurd rfl ha; exact nomatch ha
+    | nilRecord => exact .rcd (.base (SolG.row (a := .nil) (b := .record _ _) (.inr hl)))
+    | recordNil => exact .rcd (.base (SolG.row (a := .record _ _) (b := .nil) (.inr hl)))
     | @record fa ta _ _ fb tb =>
       exact .rcd (.base (SolG.row (a := .record fa ta) (b := .record fb tb) (.inr hl)))
     | @varL v _ hub =>
@@ -493,7 +543,8 @@ theorem stepTyG (hi : Inv s) (hn : LogNAC s) (hr : TailRanked s rank) (hg : GenH
         rw [hg.out .ty w (hg.var_out hv (.inl hub))]
         exact .defR fun τ ⟨u, hc, e⟩ => by
           subst e; exact .defL (defsOf.clo .ty (.step hub hc)) (StG.of_sub Sub.refl)
-      | .prim _, hub | .arrow _ _, hub | .record _ _, hub | .abs, hub =>
+      | .prim _, hub | .arrow _ _, hub | .record _ _, hub | .abs, hub
+      | .missing, hub | .opt _, hub | .nil, hub =>
         rw [SType.interp_avoid_ty hg (hg.avoid v hv _ (.inl hub))]
         exact .defL (defsOf.clo .ty (.here hub (fun _ h => nomatch h))) (StG.of_sub Sub.refl)
     | @varR v _ hlb =>
@@ -514,7 +565,7 @@ theorem stepTyG (hi : Inv s) (hn : LogNAC s) (hr : TailRanked s rank) (hg : GenH
         show StG s I (I .ty w) _
         rw [hg.out .ty w (hg.var_out hv (.inr hlb))]
         exact stepVarLowerG hi hn hg hc hv w hlb
-      | prim _ | arrow _ _ | record _ _ =>
+      | prim _ | arrow _ _ | record _ _ | missing | opt _ | nil =>
         exact (lower_chain hi hr hc _ hlb (fun _ h => nomatch h) _ (Nat.le_refl _)).stepG hi hn ha'
       | abs => exact absurd rfl ha'
     | @viaL v b' _ hb hbv hba hnv hR =>
@@ -539,10 +590,29 @@ theorem stepTyG (hi : Inv s) (hn : LogNAC s) (hr : TailRanked s rank) (hg : GenH
 
 theorem stepFieldRG (hi : Inv s) (hn : LogNAC s) (hr : TailRanked s rank) (hg : GenHyp s A I)
     {f₀ f₁ : SType} : FieldR (Logged s) f₀ f₁ → StG s I (f₀.toFieldI I) (f₁.toFieldI I)
+  | .refl => .of_sub Sub.refl
   | .toAbs => .top
+  | .misMis => .missing
+  | .misOpt => .unionR₂ .missing
+  | .optOpt h₀ h =>
+    .unionL (.unionR₁ (.pre (stepTyG hi hn hr hg h (.inl h₀)))) (.unionR₂ .missing)
+  | .preOpt h₀ h => by
+    rw [SType.toFieldI_of_pre h₀]
+    exact .unionR₁ (.pre (stepTyG hi hn hr hg h (.inl h₀.ne_abs)))
   | .pre h₀ h₁ h => by
-    rw [SType.toFieldI_of_ne h₀, SType.toFieldI_of_ne h₁]
-    exact .pre (stepTyG hi hn hr hg h (.inl h₀))
+    rw [SType.toFieldI_of_pre h₀, SType.toFieldI_of_pre h₁]
+    exact .pre (stepTyG hi hn hr hg h (.inl h₀.ne_abs))
+
+/-- The missing field below a field, one layer. -/
+theorem stepMisField {f : SType} (h : FieldR (Logged s) .missing f) :
+    StG s I .missing (f.toFieldI I) := by
+  cases h with
+  | refl => exact .missing
+  | toAbs => exact .top
+  | misMis => exact .missing
+  | misOpt => exact .unionR₂ .missing
+  | preOpt h₀ => exact False.elim h₀
+  | pre h₀ => exact False.elim h₀
 
 /-- From a row variable to one of its non-variable upper bounds, at a field:
 through the graph definition outside `A`, through the bound inside. -/
@@ -552,9 +622,50 @@ theorem boundField (hg : GenHyp s A I) {ρ : Nat} {x : SType} {l : String}
   by_cases hρ : ρ ∈ A
   · exact (StG.of_sub ((hg.up ρ hρ x hu).2.fields l)).comp h
   · show StG s I ((I .row ρ).field l) τ
-    rw [(SType.interp_avoid hg x (hg.avoid ρ hρ _ (.inl hu))).2] at h
+    rw [(SType.interp_avoid hg x (hg.avoid ρ hρ _ (.inl hu))).2.1] at h
     rw [hg.out .row ρ hρ]
     exact .projDefL (defsOf.clo .row (.here hu hx)) h
+
+/-- **Rows below the empty row**: every field is missing. The right side
+does not shrink here, so the induction is on the left side: on the rank of
+its tail variable (an upper bound of a row variable has a tail of lower
+rank), then on its size (the tail of a row is smaller). -/
+theorem fieldToNil (hi : Inv s) (hr : TailRanked s rank) (hg : GenHyp s A I) (l : String) :
+    ∀ n a, tailRank rank a < n → ∀ m, sizeOf a < m → Logged s a .nil →
+      StG s I ((a.toRowI I).field l) .missing := by
+  intro n
+  induction n with
+  | zero => intro _ h; exact absurd h (Nat.not_lt_zero _)
+  | succ n ihn =>
+    intro a ha m
+    induction m generalizing a with
+    | zero => intro h; exact absurd h (Nat.not_lt_zero _)
+    | succ m ihm =>
+      intro hm hl
+      rcases hl with rfl | hl
+      · exact .missing
+      · cases hi.just.step hl with
+        | @recordNil fa ta fs₀ t₀ e₀ hf ht =>
+          rw [toRowI_rowView I (.record fa ta), e₀, field_recordI]
+          cases hfl : fs₀.lookup l with
+          | some f =>
+            have := (hf _ (SFields.toMisPairs_mem fs₀ hfl)).missing_right
+            subst this
+            exact .missing
+          | none =>
+            have ht' : t₀ = (rowView (.record fa ta)).2 := by rw [e₀]
+            refine ihm t₀ ?_ ?_ ht
+            · rw [ht', tailRank_tail]; exact ha
+            · rw [ht']; have := rowView_tail_lt fa ta; omega
+        | @varL w _ hub =>
+          by_cases hw : w ∈ A
+          · exact .of_sub ((hg.up w hw _ hub).2.fields l)
+          · show StG s I ((I .row w).field l) _
+            rw [hg.out .row w hw]
+            exact .projDefL (defsOf.clo .row (.here hub (fun _ h => nomatch h))) .missing
+        | @viaL w b' _ hb hbv _ _ hR =>
+          have hlt := tailRank_var_lt hr (.here hb hbv)
+          exact boundField hg hb hbv (ihn b' (by omega) _ (Nat.lt_succ_self _) hR)
 
 /-- The field version of `stepVarLowerG`, given field steps for accepted
 constraints into right sides of smaller tail rank. -/
@@ -617,12 +728,21 @@ theorem stepFieldNVG (hi : Inv s) (hn : LogNAC s) (hr : TailRanked s rank) (hg :
       rw [field_recordI]
       cases hfl : fs.lookup l with
       | some f =>
-        cases hf _ (SFields.absPairs_mem fs hfl) with
-        | toAbs => exact .top
-        | pre h₀ => exact absurd rfl h₀
+        have := (hf _ (SFields.absPairs_mem fs hfl)).abs_left
+        subst this
+        exact .top
       | none =>
         exact ihSize t .abs l (by simp [tailRank, rowView])
           (by simp only [SType.record.sizeOf_spec]; omega) ht
+    | @nilRecord t fs hf ht =>
+      rw [field_recordI]
+      cases hfl : fs.lookup l with
+      | some f => exact stepMisField (hf _ (SFields.misPairs_mem fs hfl))
+      | none =>
+        exact ihSize t .nil l (by simp [tailRank, rowView])
+          (by simp only [SType.record.sizeOf_spec]; omega) ht
+    | recordNil =>
+      exact fieldToNil hi hr hg l _ _ (Nat.lt_succ_self _) _ (Nat.lt_succ_self _) (.inr hl)
     | @record fa ta fs₀ t₀ fb tb fs₁ t₁ t₀' e₀ e₁ hcom hexp hrest =>
       rw [toRowI_rowView I (.record fa ta), toRowI_rowView I (.record fb tb), e₀, e₁,
         field_recordI, field_recordI]
@@ -649,9 +769,10 @@ theorem stepFieldNVG (hi : Inv s) (hn : LogNAC s) (hr : TailRanked s rank) (hg :
           cases hexp with
           | none => simp [SFields.lookup] at hmiss
           | abs _ hab =>
-            cases hab _ (SFields.absPairs_mem _ hmiss) with
-            | toAbs => exact .top
-            | pre h₀' => exact absurd rfl h₀'
+            have := (hab _ (SFields.absPairs_mem _ hmiss)).abs_left
+            subst this
+            exact .top
+          | nil _ hmis => exact stepMisField (hmis _ (SFields.misPairs_mem _ hmiss))
           | varAbsent K hab hp =>
             have hk : l ∈ K := by
               by_cases hk : l ∈ K
@@ -660,16 +781,16 @@ theorem stepFieldNVG (hi : Inv s) (hn : LogNAC s) (hr : TailRanked s rank) (hg :
                 rw [hp, hmiss] at this; simp [hk, SFields.lookup] at this
             have hal : (ms.absentIn K).lookup l = some f₁ := by
               rw [SFields.absentIn_lookup]; simp [hk, hmiss]
-            cases hab _ (SFields.absPairs_mem _ hal) with
-            | toAbs => exact .top
-            | pre h₀' => exact absurd rfl h₀'
+            have := (hab _ (SFields.absPairs_mem _ hal)).abs_left
+            subst this
+            exact .top
           | var K _ hab _ hu hrel =>
             by_cases hk : l ∈ K
             · have hal : (ms.absentIn K).lookup l = some f₁ := by
                 rw [SFields.absentIn_lookup]; simp [hk, hmiss]
-              cases hab _ (SFields.absPairs_mem _ hal) with
-              | toAbs => exact .top
-              | pre h₀' => exact absurd rfl h₀'
+              have := (hab _ (SFields.absPairs_mem _ hal)).abs_left
+              subst this
+              exact .top
             · have hp : (ms.presentIn K).lookup l = some f₁ := by
                 rw [SFields.presentIn_lookup]; simp [hk, hmiss]
               obtain ⟨f', hf', hq⟩ := hrel.lookup hp
@@ -693,6 +814,7 @@ theorem stepFieldNVG (hi : Inv s) (hn : LogNAC s) (hr : TailRanked s rank) (hg :
           cases hexp with
           | none => rw [← hrest_field]; exact hrec
           | abs => rw [← hrest_field]; exact hrec
+          | nil => rw [← hrest_field]; exact hrec
           | varAbsent => rw [← hrest_field]; exact hrec
           | var K _ _ _ hu hrel =>
             refine boundField hg hu (fun _ h => nomatch h) ?_
@@ -744,6 +866,9 @@ theorem stepFieldCoreG (hi : Inv s) (hn : LogNAC s) (hr : TailRanked s rank) (hg
   | record _ _ =>
     exact stepFieldNVG hi hn hr hg b ihRank ihSize (.record _ _) (fun _ h => nomatch h) l hl
   | abs => exact stepFieldNVG hi hn hr hg b ihRank ihSize .abs (fun _ h => nomatch h) l hl
+  | missing => exact stepFieldNVG hi hn hr hg b ihRank ihSize .missing (fun _ h => nomatch h) l hl
+  | opt _ => exact stepFieldNVG hi hn hr hg b ihRank ihSize (.opt _) (fun _ h => nomatch h) l hl
+  | nil => exact stepFieldNVG hi hn hr hg b ihRank ihSize .nil (fun _ h => nomatch h) l hl
   | var w =>
     rcases hl with rfl | hl
     · exact .of_sub Sub.refl
@@ -760,7 +885,8 @@ theorem stepFieldCoreG (hi : Inv s) (hn : LogNAC s) (hr : TailRanked s rank) (hg
           rw [hg.out .row w' (hg.var_out hw (.inl hub))]
           exact .projDefR fun τ ⟨u, hc, e⟩ => by
             subst e; exact .projDefL (defsOf.clo .row (.step hub hc)) (StG.of_sub Sub.refl)
-        | .prim _, hub | .arrow _ _, hub | .record _ _, hub | .abs, hub =>
+        | .prim _, hub | .arrow _ _, hub | .record _ _, hub | .abs, hub
+        | .missing, hub | .opt _, hub | .nil, hub =>
           rw [SType.interp_avoid_row hg (hg.avoid w hw _ (.inl hub))]
           exact .projDefL (defsOf.clo .row (.here hub (fun _ h => nomatch h))) (StG.of_sub Sub.refl)
       | @varR v _ hlb =>

@@ -66,39 +66,50 @@ theorem TypeTerm.skeleton {c : Certificate} {Δ : PCtx} (r : PRel Γ Δ) :
   | .lit, _, _, _, _ => .lit
   | .var hx, _, _, _, _ => PTyp.of_lookup r hx
   | .lam _ h, hΓ, i, n, hlog =>
-    .lam (h.skeleton r.mono (hΓ.cons trivial (fun h => nomatch h)) i.fresh n hlog)
+    .lam (h.skeleton r.mono (hΓ.cons trivial trivial) i.fresh n hlog)
   | .app _ h₁ h₂ hc, hΓ, i, n, hlog => by
     have i₁ := h₁.inv₂ i.fresh
     have r₁ := h₁.nac hΓ i.fresh n
     have hlog₂ : ∀ p, p ∈ _ → p ∈ c.log := fun p hp => hlog p (hc.log_grows p hp)
     have hlog₁ : ∀ p, p ∈ _ → p ∈ c.log := fun p hp => hlog₂ p (h₂.log_grows p hp)
-    exact .app (h₁.skeleton r hΓ i.fresh n hlog₁) (h₂.skeleton r hΓ i₁ r₁.1 hlog₂) r₁.2.2
+    exact .app (h₁.skeleton r hΓ i.fresh n hlog₁) (h₂.skeleton r hΓ i₁ r₁.1 hlog₂) r₁.2.2.ne_abs
       (hc.logged.accepts hlog)
   | .rcd h, hΓ, i, n, hlog => .rcd (h.skeleton r hΓ i n hlog)
   | .sel _ h hc, hΓ, i, n, hlog => by
     have r' := h.nac hΓ i.fresh n
-    exact .sel (h.skeleton r hΓ i.fresh n (fun p hp => hlog p (hc.log_grows p hp))) r'.2.2
-      (hc.logged.accepts hlog) (fun h => nomatch h)
+    exact .sel (h.skeleton r hΓ i.fresh n (fun p hp => hlog p (hc.log_grows p hp))) r'.2.2.ne_abs
+      (hc.logged.accepts hlog) trivial
+  | .selOr _ h hc hd hc', hΓ, i, n, hlog => by
+    have r' := h.nac hΓ i.fresh n
+    have i₁ := h.inv₂ i.fresh
+    have n₂ := hc.nac i₁ r'.2.1 ⟨⟨trivial, trivial⟩, trivial⟩ r'.1
+    have i₂ := hc.inv₂ i₁
+    have rd := hd.nac hΓ i₂ n₂
+    have hlog₃ : ∀ p, p ∈ _ → p ∈ c.log := fun p hp => hlog p (hc'.log_grows p hp)
+    have hlog₂ : ∀ p, p ∈ _ → p ∈ c.log := fun p hp => hlog₃ p (hd.log_grows p hp)
+    have hlog₁ : ∀ p, p ∈ _ → p ∈ c.log := fun p hp => hlog₂ p (hc.log_grows p hp)
+    exact .selOr (h.skeleton r hΓ i.fresh n hlog₁) r'.2.2.ne_abs (hc.logged.accepts hlog₂)
+      (hd.skeleton r hΓ i₂ n₂ hlog₃) rd.2.2.ne_abs (hc'.logged.accepts hlog)
   | .extNil h, hΓ, i, n, hlog => .extNil (h.skeleton r hΓ i n hlog)
   | .ext _ h₁ h₂ _ hc, hΓ, i, n, hlog => by
     have i₁ := h₁.inv₂ i
     have r₁ := h₁.nac hΓ i n
     have hlog₂ : ∀ p, p ∈ _ → p ∈ c.log := fun p hp => hlog p (hc.log_grows p hp)
     have hlog₁ : ∀ p, p ∈ _ → p ∈ c.log := fun p hp => hlog₂ p (h₂.log_grows p hp)
-    exact .ext (h₁.skeleton r hΓ i n hlog₁) (h₂.skeleton r hΓ i₁ r₁.1 hlog₂) r₁.2.2
+    exact .ext (h₁.skeleton r hΓ i n hlog₁) (h₂.skeleton r hΓ i₁ r₁.1 hlog₂) r₁.2.2.ne_abs
       (hc.logged.accepts hlog)
   | .letIn h₁ h₂, hΓ, i, n, hlog => by
     have r₁ := h₁.nac hΓ i n
     exact .letIn (h₁.skeleton r hΓ i n (fun p hp => hlog p (h₂.log_grows p hp))) (GenOK.nil c Δ)
       (h₂.skeleton r.poly (hΓ.cons r₁.2.1 r₁.2.2) (h₁.inv₂ i) r₁.1 hlog)
   | .letRec hf _ h₁ hc h₂, hΓ, i, n, hlog => by
-    have r₁ := h₁.nac (hΓ.cons trivial (fun h => nomatch h)) i.fresh n
+    have r₁ := h₁.nac (hΓ.cons trivial trivial) i.fresh n
     have i₁ := h₁.inv₂ i.fresh
     have hlog₂ : ∀ p, p ∈ _ → p ∈ c.log := fun p hp => hlog p (h₂.log_grows p hp)
     have hlog₁ : ∀ p, p ∈ _ → p ∈ c.log := fun p hp => hlog₂ p (hc.log_grows p hp)
-    exact .letRec hf (h₁.skeleton r.mono (hΓ.cons trivial (fun h => nomatch h)) i.fresh n hlog₁)
-      r₁.2.2 (hc.logged.accepts hlog₂) (GenOK.nil c Δ)
-      (h₂.skeleton r.poly (hΓ.cons trivial (fun h => nomatch h)) (hc.inv₂ i₁)
+    exact .letRec hf (h₁.skeleton r.mono (hΓ.cons trivial trivial) i.fresh n hlog₁)
+      r₁.2.2.ne_abs (hc.logged.accepts hlog₂) (GenOK.nil c Δ)
+      (h₂.skeleton r.poly (hΓ.cons trivial trivial) (hc.inv₂ i₁)
         (hc.nac i₁ r₁.2.1 trivial r₁.1) hlog)
 
 theorem TypeFields.skeleton {c : Certificate} {Δ : PCtx} (r : PRel Γ Δ) :

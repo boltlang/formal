@@ -132,9 +132,9 @@ means, not for how the algorithm runs.
 ## What it removes and what it costs
 
 Removed: everything in the first table, and the junk typings. Issue #2
-becomes a field lattice: `Absent ≤ Opt τ ≤ Abs`, `Pre τ ≤ Opt τ`, with
-`Absent` as a field constructor and a closed-row tail, instead of more
-special cases in `Ty`.
+becomes a field lattice: `Missing ≤ Opt τ ≤ Abs`, `Pre τ ≤ Opt τ`, with
+`missing` as a field constructor and `nil` as a closed-row tail, instead of
+more special cases in `Ty` (done: `Types.lean`, `Sub.lean`).
 
 Costs:
 
@@ -205,7 +205,7 @@ those of the time:
 ## Open questions
 
 - Should the bottom field be the generic `bot`, or `pre bot`? The generic
-  `bot` is the only choice below a future `Absent`.
+  `bot` is the only choice below `missing`.
 - Should the row rule compare fields with `Step` (one layer, as proposed) or
   with `R`? `Step` keeps the guard at the record, as now.
 - Can certificates stay free of sorts by inferring them from kinds and from

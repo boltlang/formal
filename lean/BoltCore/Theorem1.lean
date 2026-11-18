@@ -41,6 +41,8 @@ theorem TypeTerm.log_grows : TypeTerm Γ s t st s' → ∀ p, p ∈ s.log → p 
   | .app _ h₁ h₂ hc => fun p hp => hc.log_grows p (h₂.log_grows p (h₁.log_grows p hp))
   | .rcd h => h.log_grows
   | .sel _ h hc => fun p hp => hc.log_grows p (h.log_grows p hp)
+  | .selOr _ h hc hd hc' => fun p hp =>
+    hc'.log_grows p (hd.log_grows p (hc.log_grows p (h.log_grows p hp)))
   | .ext _ h₁ h₂ _ hc => fun p hp => hc.log_grows p (h₂.log_grows p (h₁.log_grows p hp))
   | .extNil h => h.log_grows
   | .letIn h₁ h₂ => fun p hp => h₂.log_grows p (h₁.log_grows p hp)
@@ -64,6 +66,7 @@ theorem TypeTerm.kind_eq : TypeTerm Γ s t st s' → s'.kind = s.kind
   | .app _ h₁ h₂ hc => (hc.kind_eq.trans h₂.kind_eq).trans h₁.kind_eq
   | .rcd h => h.kind_eq
   | .sel _ h hc => hc.kind_eq.trans h.kind_eq
+  | .selOr _ h hc hd hc' => ((hc'.kind_eq.trans hd.kind_eq).trans hc.kind_eq).trans h.kind_eq
   | .ext _ h₁ h₂ _ hc => (hc.kind_eq.trans h₂.kind_eq).trans h₁.kind_eq
   | .extNil h => h.kind_eq
   | .letIn h₁ h₂ => h₂.kind_eq.trans h₁.kind_eq
@@ -103,6 +106,9 @@ def SType.rename (f : Nat → Nat) : SType → SType
   | .arrow a b => .arrow (a.rename f) (b.rename f)
   | .record fs t => .record (fs.rename f) (t.rename f)
   | .abs => .abs
+  | .missing => .missing
+  | .opt t => .opt (t.rename f)
+  | .nil => .nil
 
 def SFields.rename (f : Nat → Nat) : SFields → SFields
   | .nil => .nil
@@ -111,7 +117,8 @@ end
 
 mutual
 theorem SType.rename_id : ∀ a : SType, a.rename id = a
-  | .var _ | .prim _ | .abs => rfl
+  | .var _ | .prim _ | .abs | .missing | .nil => rfl
+  | .opt t => by simp only [SType.rename, SType.rename_id t]
   | .arrow a b => by simp only [SType.rename, SType.rename_id a, SType.rename_id b]
   | .record fs t => by simp only [SType.rename, SFields.rename_id fs, SType.rename_id t]
 
@@ -125,8 +132,13 @@ theorem SFields.rename_absOf (f : Nat → Nat) : ∀ F : SFields, F.absOf.rename
   | .cons _ _ F => by simp only [SFields.absOf, SFields.rename, SType.rename, SFields.rename_absOf f F]
 
 theorem SType.rename_ne_abs {f : Nat → Nat} : ∀ {a : SType}, a ≠ .abs → a.rename f ≠ .abs
-  | .var _, _ | .prim _, _ | .arrow _ _, _ | .record _ _, _ => fun h => nomatch h
+  | .var _, _ | .prim _, _ | .arrow _ _, _ | .record _ _, _
+  | .missing, _ | .opt _, _ | .nil, _ => fun h => nomatch h
   | .abs, h => absurd rfl h
+
+theorem SType.IsPre.rename {f : Nat → Nat} : ∀ {a : SType}, a.IsPre → (a.rename f).IsPre
+  | .var _, _ | .prim _, _ | .arrow _ _, _ | .record _ _, _ | .nil, _ => trivial
+  | .abs, h | .missing, h | .opt _, h => absurd h id
 
 /-! ## Fields of inferred records -/
 
@@ -135,16 +147,16 @@ def SFields.toListI (I : SInterp) : SFields → List (String × Ty .ty)
   | .nil => []
   | .cons n f fs => (n, f.toTyI I) :: fs.toListI I
 
-/-- Every field is present: none is `Abs`. -/
+/-- Every field is present: none is `Abs`, `Missing` or optional. -/
 def SFields.Pres : SFields → Prop
   | .nil => True
-  | .cons _ f fs => f ≠ .abs ∧ fs.Pres
+  | .cons _ f fs => f.IsPre ∧ fs.Pres
 
 theorem SFields.toRowOnI_pres {I : SInterp} {ρ : Ty .row} :
     ∀ {F : SFields}, F.Pres → F.toRowOnI I ρ = Ty.ofFields (F.toListI I) ρ
   | .nil, _ => rfl
   | .cons n f F, ⟨hf, hF⟩ => by
-    rw [SFields.toRowOnI_cons, SType.toFieldI_of_ne hf, SFields.toRowOnI_pres hF]; rfl
+    rw [SFields.toRowOnI_cons, SType.toFieldI_of_pre hf, SFields.toRowOnI_pres hF]; rfl
 
 theorem SFields.toRowOnI_absOf {I : SInterp} {ρ : Ty .row} :
     ∀ F : SFields, F.absOf.toRowOnI I ρ = Ty.absFields (F.toListI I) ρ
@@ -157,7 +169,7 @@ abbrev SFields.toList (F : SFields) : List (String × Ty .ty) := F.toListI .gv
 
 theorem SFields.Pres.rename {f : Nat → Nat} : ∀ {F : SFields}, F.Pres → (F.rename f).Pres
   | .nil, _ => trivial
-  | .cons _ _ _, ⟨hg, hF⟩ => ⟨SType.rename_ne_abs hg, hF.rename⟩
+  | .cons _ _ _, ⟨hg, hF⟩ => ⟨hg.rename, hF.rename⟩
 
 /-! ## Contexts -/
 
@@ -200,17 +212,17 @@ theorem TypeTerm.soundR {E : Defs} {f : Nat → Nat} {sf : State} (H : RenSound 
   | .lit, _, _, _, _ => .lit
   | .var hx, _, _, _, _ => Typ.var_mono (SCtx.lookup_toCtxR hx)
   | .lam _ h, hΓ, i, n, hlog =>
-    .lam (h.soundR H (hΓ.cons trivial (fun h => nomatch h)) i.fresh n hlog)
+    .lam (h.soundR H (hΓ.cons trivial trivial) i.fresh n hlog)
   | .app _ h₁ h₂ hc, hΓ, i, n, hlog => by
     have i₁ := h₁.inv₂ i.fresh
     have r₁ := h₁.nac hΓ i.fresh n
     have hlog₂ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog p (hc.log_grows p hp)
     have hlog₁ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog₂ p (h₂.log_grows p hp)
-    exact .app (.sub (h₁.soundR H hΓ i.fresh n hlog₁) (H.sub hc.logged hlog r₁.2.2))
+    exact .app (.sub (h₁.soundR H hΓ i.fresh n hlog₁) (H.sub hc.logged hlog r₁.2.2.ne_abs))
       (h₂.soundR H hΓ i₁ r₁.1 hlog₂)
   | .rcd (F := F) h, hΓ, i, n, hlog => by
     obtain ⟨hF, hp⟩ := h.soundR H hΓ i n hlog
-    have e : ((SType.record F .abs).rename f).toTy = Ty.record (F.rename f).toList := by
+    have e : ((SType.record F .nil).rename f).toTy = Ty.record (F.rename f).toList := by
       simp only [SType.rename, SType.toTy, Ty.record]
       exact congrArg Ty.rcd (SFields.toRowOnI_pres hp.rename)
     rw [e]
@@ -218,14 +230,25 @@ theorem TypeTerm.soundR {E : Defs} {f : Nat → Nat} {sf : State} (H : RenSound 
   | .sel _ h hc, hΓ, i, n, hlog => by
     have r := h.nac hΓ i.fresh n
     exact .sel (.sub (h.soundR H hΓ i.fresh n (fun p hp => hlog p (hc.log_grows p hp)))
-      (H.sub hc.logged hlog r.2.2))
+      (H.sub hc.logged hlog r.2.2.ne_abs))
+  | .selOr _ h hc hd hc', hΓ, i, n, hlog => by
+    have r := h.nac hΓ i.fresh n
+    have i₁ := h.inv₂ i.fresh
+    have n₂ := hc.nac i₁ r.2.1 ⟨⟨trivial, trivial⟩, trivial⟩ r.1
+    have i₂ := hc.inv₂ i₁
+    have rd := hd.nac hΓ i₂ n₂
+    have hlog₃ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog p (hc'.log_grows p hp)
+    have hlog₂ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog₃ p (hd.log_grows p hp)
+    have hlog₁ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog₂ p (hc.log_grows p hp)
+    exact .selOr (.sub (h.soundR H hΓ i.fresh n hlog₁) (H.sub hc.logged hlog₂ r.2.2.ne_abs))
+      (.sub (hd.soundR H hΓ i₂ n₂ hlog₃) (H.sub hc'.logged hlog rd.2.2.ne_abs))
   | .extNil h, hΓ, i, n, hlog => .extNil (h.soundR H hΓ i n hlog)
   | .ext (F := F) (s₂ := s₂) _ h₁ h₂ _ hc, hΓ, i, n, hlog => by
     have i₁ := h₁.inv₂ i
     have r₁ := h₁.nac hΓ i n
     have hlog₂ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog p (hc.log_grows p hp)
     have hlog₁ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog₂ p (h₂.log_grows p hp)
-    have hs := H.sub hc.logged hlog r₁.2.2
+    have hs := H.sub hc.logged hlog r₁.2.2.ne_abs
     have e' : ((SType.record F.absOf (.var s₂.next)).rename f).toTy =
         .rcd (Ty.absFields (F.rename f).toList (.gvar (f s₂.next))) := by
       simp only [SType.rename, SFields.rename_absOf]
@@ -243,14 +266,14 @@ theorem TypeTerm.soundR {E : Defs} {f : Nat → Nat} {sf : State} (H : RenSound 
     exact Typ.letIn_mono (h₁.soundR H hΓ i n (fun p hp => hlog p (h₂.log_grows p hp)))
       (h₂.soundR H (hΓ.cons r₁.2.1 r₁.2.2) (h₁.inv₂ i) r₁.1 hlog)
   | .letRec hf _ h₁ hc h₂, hΓ, i, n, hlog => by
-    have r₁ := h₁.nac (hΓ.cons trivial (fun h => nomatch h)) i.fresh n
+    have r₁ := h₁.nac (hΓ.cons trivial trivial) i.fresh n
     have i₁ := h₁.inv₂ i.fresh
     have hlog₂ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog p (h₂.log_grows p hp)
     have hlog₁ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog₂ p (hc.log_grows p hp)
     exact Typ.letRec_mono hf
-      (.sub (h₁.soundR H (hΓ.cons trivial (fun h => nomatch h)) i.fresh n hlog₁)
-        (H.sub hc.logged hlog₂ r₁.2.2))
-      (h₂.soundR H (hΓ.cons trivial (fun h => nomatch h)) (hc.inv₂ i₁)
+      (.sub (h₁.soundR H (hΓ.cons trivial trivial) i.fresh n hlog₁)
+        (H.sub hc.logged hlog₂ r₁.2.2.ne_abs))
+      (h₂.soundR H (hΓ.cons trivial trivial) (hc.inv₂ i₁)
         (hc.nac i₁ r₁.2.1 trivial r₁.1) hlog)
 
 /-- Fields: their typing, and that every field is present. -/

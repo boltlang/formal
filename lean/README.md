@@ -38,11 +38,11 @@ one unsorted syntax of simple types, translated into the sorts by position.
 | File | Contents |
 |---|---|
 | `BoltCore/Syntax.lean` | term syntax (mirrors `lib/syntax.ml`) |
-| `BoltCore/Types.lean` | types, rows and fields as one family indexed by a sort; `Abs` is `⊤` at the field and row sorts; no structural recursive types |
+| `BoltCore/Types.lean` | types, rows and fields as one family indexed by a sort; `Abs` is `⊤` at the field and row sorts; the field `missing` and the empty row `nil`, with `opt τ = pre τ ∪ missing`; no structural recursive types |
 | `BoltCore/Sub.lean` | guarded coinductive subtyping, rows compared field by field (`Step.fields`), `Abs ≰ pre τ` (`not_abs_le_pre`); reflexivity, transitivity (cut elimination by sort, for any relation), coinduction up to transitivity, ranked (non-recursive) definitions, the paper's §5.1.3 example with graph variables, row examples |
 | `BoltCore/Rows.lean` | row algebra; exactness of the row rewrites in `lib/simplify.ml` and `lib/subsume.ml` |
 | `BoltCore/Lattice.lean` | the MLsub lattice equations: what the minimal rules cannot derive (`not_fun_merge`, `not_pre_union`), and the sequent-style plan |
-| `BoltCore/Typing.lean` | declarative typing (constrained schemes `∀ᾱ. D ⇒ σ`, with constraints at any sort, for built-ins and let-polymorphism; record extension; selection of present fields `pre τ` only) with examples; selecting a missing field is untypable (`not_typ_sel_missing`) |
+| `BoltCore/Typing.lean` | declarative typing (constrained schemes `∀ᾱ. D ⇒ σ`, with constraints at any sort, for built-ins and let-polymorphism; record extension; selection of present fields `pre τ` only; selection with a default of optional fields; closed record literals) with examples; selecting a missing field is untypable (`not_typ_sel_missing`) |
 | `BoltCore/Algorithm.lean` | model of `lib/typer.ml` (no levels): state, `Constrain`/`TypeTerm` as big-step relations; ranked bounds (`StructRanked`) rule out structural recursive types |
 | `BoltCore/Soundness.lean` | soundness of constraining on the bound graph: justification and consistency invariants, preserved by `constrain` and `typeTerm` |
 | `BoltCore/Solution.lean` | the solution of the inferred constraints (unifying coalescing via graph variables), simple types translated by position (`toTy`, `toRow`, `toField`), and its invariants |
@@ -87,8 +87,19 @@ induction on the two derivations, through a *pending cut* (`Pend`).
 
 `Abs` is `⊤` at the field sort: it promises nothing about a field, not even
 that it is there. A present field `pre τ` is below it, and nothing derives
-`Abs ≤ pre τ` (`not_abs_le_pre`), so `{} ≤ {x : ⊤}` fails. This matches
-`lib/typer.ml`, where an absent field never satisfies a present one.
+`Abs ≤ pre τ` (`not_abs_le_pre`), so `{..} ≤ {x : ⊤, ..}` fails. This
+matches `lib/typer.ml`, where an absent field never satisfies a present one.
+
+Optional fields and closed records add one field, `missing` (definitely
+absent, an atom related only to itself), and one row, `nil` (`missing` at
+every label). An optional field is the union `opt τ = pre τ ∪ missing`, so
+its rules are theorems: `pre_le_opt`, `missing_le_opt`, `opt_le_opt`,
+`opt_le_abs`. What must not hold does not: `not_missing_le_pre`,
+`not_opt_le_pre`, `not_pre_le_missing`, `not_abs_le_missing` and
+`not_abs_le_opt` (a forgotten field is not an optional one). For rows:
+`nil_le_top` keeps width subtyping, `closed_le_optional` lets an optional
+field be left out, and `not_extra_le_closed` and `not_top_le_nil` say that a
+closed record has no other fields.
 
 `Rows.lean` models rows by what they denote, a total map from labels to
 fields with explicit fields overriding the tail, and shows each row
@@ -127,7 +138,8 @@ in general ("bad bounds"). A monomorphic `let` is the scheme with no
 variables. There is no value restriction (no mutable state).
 
 Selection `t.l : τ` requires a present field, `t : {l : pre τ}`, by the
-shape of the rule.
+shape of the rule. Selection with a default, `t.l ?? d : τ`, requires
+`t : {l : opt τ}` and `d : τ`. A record literal's row ends in `nil`.
 Selecting a label that a record literal lacks has no type
 (`not_typ_sel_missing`: `{}.x`, `{a = 1}.b`), a first step towards type
 safety. There is no operational semantics yet, so progress and
@@ -161,7 +173,8 @@ preservation are not proved. Examples: `typ_twice`, `typ_if`, `typ_ext`
   holds after typing any term.
 - `Solution.lean`, the paper's unifying coalescing. A simple type is
   translated by the position it occurs in: as a type (`toTy`), a row
-  (`toRow`) or a field (`toField`, with `Abs` as `⊤` and any other type as
+  (`toRow`, with the empty row as `nil`) or a field (`toField`, with `Abs`
+  as `⊤`, `Missing` as `missing`, `Opt τ` as `opt τ` and any other type as
   `pre τ`). Each variable `v` becomes a graph variable defined, at every
   sort, as the intersection of the non-variable upper bounds reachable from
   `v` through variable bounds (`Clo`, an inductive predicate, so cycles need
@@ -170,7 +183,9 @@ preservation are not proved. Examples: `typ_twice`, `typ_if`, `typ_ext`
   solution at the row sort, and at the type sort when `a` is not `Abs`
   (`solution_ty`, `solution_row`). Proving a row pair follows the
   algorithm's record case: common fields, labels supplied by row expansion,
-  extra fields flowing into the right tail. The coinduction is up to
+  extra fields flowing into the right tail. A row below the empty row is
+  proved separately (`fieldToNil`), by induction on the left row, since the
+  right side does not shrink. The coinduction is up to
   transitivity, because a constraint justified through an extruded bound
   only holds through a chain of accepted constraints.
 - `Theorem1.lean`: soundness of inference, assuming chains of row-variable

@@ -39,7 +39,10 @@ let coalesce_type (ty : simple_type) : typ =
         let fs = List.map (fun (n, f) -> (n, go f polar in_process [])) fs in
         (* the tail continues the same row: not a constructor *)
         RecordType (fs, go t polar in_process parents)
-    | Abs -> Absent
+    | Abs -> AbsType
+    | Missing -> MissingType
+    | Nil -> NilType
+    | Opt t -> Optional (go t polar in_process [])
     | Variable vs -> (
         let vs_pol = (vs.id, polar) in
         if PolarSet.mem vs_pol in_process && List.mem vs.id parents then

@@ -34,10 +34,14 @@ type node =
   | Prim of string
   | Fun of node * node
   | Row of (string * node) list * node
-      (** record type, or row in tail position: fields ([Absn] or a type)
-          and a tail ([Absn] = top row, [Union []] = bottom row, or a row
-          variable; unions and intersections are distributed away) *)
-  | Absn  (** the absent field (top field) and the top row *)
+      (** record type, or row in tail position: fields ([Absn], [Missn],
+          [Optn] or a type) and a tail ([Absn] = top row, [Niln] = empty
+          row, [Union []] = bottom row, or a row variable; unions and
+          intersections are distributed away) *)
+  | Absn  (** the top field and the top row *)
+  | Missn  (** the field that is definitely absent *)
+  | Optn of node  (** a field: missing, or present at the type *)
+  | Niln  (** the empty row: every field is [Missn] *)
   | Union of node list  (** [Union []] is ⊥ *)
   | Inter of node list  (** [Inter []] is ⊤ *)
   | Ref of node ref  (** recursive knot *)
@@ -107,7 +111,7 @@ let infer_kinds (t : typ) : (string, SSet.t) Hashtbl.t =
         List.iter (fun (_, f) -> go f) fs;
         tails (SSet.of_list (List.map fst fs)) t;
         go t
-    | RecursiveType (_, b) -> go b
+    | RecursiveType (_, b) | Optional b -> go b
     | _ -> ()
   in
   go t;
@@ -148,7 +152,10 @@ let to_node ~flexible (t : typ) : node =
     match t with
     | Top -> Inter []
     | Bot -> Union []
-    | Absent -> Absn
+    | AbsType -> Absn
+    | MissingType -> Missn
+    | NilType -> Niln
+    | Optional t -> Optn (go env pol t)
     | Union (a, b) ->
         if not pol then raise (Not_polar "union in negative position");
         let a = go env pol a in
@@ -189,7 +196,8 @@ let rec node_eq a b =
   | Row (fs, t), Row (gs, u) ->
       List.equal (fun (n, t) (m, u) -> String.equal n m && node_eq t u) fs gs
       && node_eq t u
-  | Absn, Absn -> true
+  | Absn, Absn | Missn, Missn | Niln, Niln -> true
+  | Optn a, Optn b -> node_eq a b
   | Union xs, Union ys | Inter xs, Inter ys -> List.equal node_eq xs ys
   | Ref c1, Ref c2 -> c1 == c2
   | _ -> false
@@ -199,8 +207,63 @@ let mem_pair a b = List.exists (fun (x, y) -> node_eq x a && node_eq y b)
 (** {1 Rows} *)
 
 let atomic_tail = function
-  | Absn | Union [] | Rigid _ | Flex _ -> true
+  | Absn | Niln | Union [] | Rigid _ | Flex _ -> true
   | _ -> false
+
+(** {1 Fields}
+
+    A field is [Abs], [Missing], [Opt τ], a type [τ] (present), or a meet or
+    join of fields, which the simplifier and [merge_rows] produce. A view
+    normalizes it with the equations of the field lattice:
+    {v
+    τ ∨ Missing     = Opt τ          Opt τ ∧ σ       = τ ∧ σ
+    Opt τ ∨ σ       = Opt (τ ∨ σ)    Opt τ ∧ Opt σ   = Opt (τ ∧ σ)
+    θ ∨ Abs         = Abs            Opt τ ∧ Missing = Missing
+    θ ∧ Abs         = θ              τ ∧ Missing     = ⊥
+    v} *)
+type fview = FAbs | FMis | FOpt of node | FPre of node | FBot
+
+let view_meet a b =
+  match (a, b) with
+  | FAbs, v | v, FAbs -> v
+  | FBot, _ | _, FBot -> FBot
+  | FMis, (FMis | FOpt _) | FOpt _, FMis -> FMis
+  | FMis, FPre _ | FPre _, FMis -> FBot
+  | FOpt a, FOpt b -> FOpt (Inter [ a; b ])
+  | FOpt a, FPre b | FPre a, FOpt b | FPre a, FPre b -> FPre (Inter [ a; b ])
+
+let view_join a b =
+  match (a, b) with
+  | FAbs, _ | _, FAbs -> FAbs
+  | FBot, v | v, FBot -> v
+  | FMis, FMis -> FMis
+  | FMis, (FOpt a | FPre a) | (FOpt a | FPre a), FMis -> FOpt a
+  | FOpt a, FOpt b | FOpt a, FPre b | FPre a, FOpt b -> FOpt (Union [ a; b ])
+  | FPre a, FPre b -> FPre (Union [ a; b ])
+
+let rec field_view n =
+  let combine f xs =
+    let vs = List.map field_view xs in
+    (* a meet or join of types is left as it is *)
+    if List.for_all (function FPre _ -> true | _ -> false) vs then FPre n
+    else List.fold_left f (List.hd vs) (List.tl vs)
+  in
+  match n with
+  | Absn -> FAbs
+  | Missn -> FMis
+  | Optn t -> FOpt t
+  | Inter (_ :: _ as xs) -> combine view_meet xs
+  | Union (_ :: _ as xs) -> combine view_join xs
+  | n -> FPre n
+
+let of_view = function
+  | FAbs -> Absn
+  | FMis -> Missn
+  | FOpt t -> Optn t
+  | FPre t -> t
+  | FBot -> Union []
+
+let field_meet fs = of_view (List.fold_left view_meet FAbs (List.map field_view fs))
 
 (** Normalize a row so its tail is atomic: nested rows are flattened, and
     rows distribute over non-empty unions and intersections of tails
@@ -232,10 +295,12 @@ let expansion x labels =
       n
 
 (** Merge the rows of a meet ([inter]) or join, when this is exact: every
-    label missing from one row must be known there (its tail is [Absn]), and
-    the tails must combine into an atomic tail. *)
+    label missing from one row must be known there (its tail is [Absn] or
+    [Niln]), and the tails must combine into an atomic tail. *)
 let merge_rows ~inter rows =
-  let covers (fs, t) (gs, _) = t = Absn || List.for_all (fun (n, _) -> List.mem_assoc n fs) gs in
+  let covers (fs, t) (gs, _) =
+    t = Absn || t = Niln || List.for_all (fun (n, _) -> List.mem_assoc n fs) gs
+  in
   let tail t0 t1 =
     if node_eq t0 t1 then Some t0
     else
@@ -247,20 +312,21 @@ let merge_rows ~inter rows =
       | _ -> None
   in
   let field f0 f1 =
-    match (inter, f0, f1) with
-    | true, Absn, f | true, f, Absn -> f
-    | false, Absn, _ | false, _, Absn -> Absn
-    | true, f0, f1 -> Inter [ f0; f1 ]
-    | false, f0, f1 -> Union [ f0; f1 ]
+    of_view ((if inter then view_meet else view_join) (field_view f0) (field_view f1))
   in
   let merge ((fs0, t0) as r0) ((fs1, t1) as r1) =
     if not (covers r0 r1 && covers r1 r0) then None
     else
       Option.map
         (fun t ->
-          let get fs n = Option.value ~default:Absn (List.assoc_opt n fs) in
+          (* a label a row does not list: its tail tells *)
+          let get (fs, t) n =
+            match List.assoc_opt n fs with
+            | Some f -> f
+            | None -> if t = Niln then Missn else Absn
+          in
           let names = List.sort_uniq String.compare (List.map fst fs0 @ List.map fst fs1) in
-          (List.map (fun n -> (n, field (get fs0 n) (get fs1 n))) names, t))
+          (List.map (fun n -> (n, field (get r0 n) (get r1 n))) names, t))
         (tail t0 t1)
   in
   List.fold_left
@@ -303,6 +369,7 @@ let atoms ~inter n =
       | Prim p -> { acc with prims = p :: acc.prims }
       | Fun (l, r) -> { acc with funs = (l, r) :: acc.funs }
       | Row (fs, t) -> { acc with rows = (fs, t) :: acc.rows }
+      | Niln -> { acc with rows = ([], Niln) :: acc.rows }
       | Absn -> { acc with abs = true }
       | Union [] when inter -> { acc with absorbing = true }
       | Inter [] when not inter -> { acc with absorbing = true }
@@ -335,6 +402,8 @@ let rec sub hyps pending a b =
     | Union xs, _ -> List.for_all (fun x -> sub hyps pending x b) xs
     | _, Inter ys -> List.for_all (fun y -> sub hyps pending a y) ys
     | _, Absn -> true (* top field / top row *)
+    (* a field where a type is expected: only as a field *)
+    | (Optn _ | Missn), _ | _, (Optn _ | Missn) -> field_sub (pending @ hyps) a b
     | Flex x, _ ->
         if List.exists (node_eq b) x.ubs then true
         else begin
@@ -349,6 +418,15 @@ let rec sub hyps pending a b =
           y.lbs <- a :: y.lbs;
           List.for_all (fun ub -> sub hyps pending a ub) y.ubs
         end
+    (* the empty row *)
+    | Niln, Niln -> true
+    | Absn, Niln -> false
+    | Row (fs, t), Niln ->
+        let unlocked = pending @ hyps in
+        List.for_all (fun (_, f) -> field_sub unlocked f Missn) fs && sub unlocked [] t Niln
+    | Niln, Row (fs, t) ->
+        let unlocked = pending @ hyps in
+        List.for_all (fun (_, f) -> field_sub unlocked Missn f) fs && sub unlocked [] Niln t
     | _ ->
         let l = atoms ~inter:true a and r = atoms ~inter:false b in
         let unlocked = pending @ hyps in
@@ -373,14 +451,29 @@ let rec sub hyps pending a b =
                || List.exists (fun r0 -> attempt (fun () -> row_sub unlocked r0 r1)) lrows)
              rrows
 
+(** [f0 ≤ f1] for fields: [Pre τ ≤ Opt τ], [Missing ≤ Opt τ], [θ ≤ Abs],
+    and [Pre ⊥] is the bottom field. *)
+and field_sub hyps f0 f1 =
+  match (field_view f0, field_view f1) with
+  | _, FAbs | FBot, _ -> true
+  | FAbs, _ -> false
+  | FMis, (FMis | FOpt _) -> true
+  | FMis, (FPre _ | FBot) -> false
+  | (FOpt a | FPre a), FOpt b | FPre a, FPre b -> sub hyps [] a b
+  | FOpt _, (FPre _ | FBot) -> false
+  | FOpt a, FMis | FPre a, (FMis | FBot) -> sub hyps [] a (Union [])
+
 (** A meet of rows that could not be merged, against a row: compare field
     by field, intersecting the explicit types each left row gives a label.
     Rows that would only provide the label through their tail are left out of
     the intersection, which is sound (dropping conjuncts on the left only
     makes the check harder). A label no left row mentions is provided by
     expanding a flexible tail if there is one, by a bottom tail, or else must
-    be [Abs] on the right. The right tail then receives the *meet* of what is
-    left of every left row.
+    be [Abs] on the right (if a left tail is the empty row, [Missing] is
+    also enough). The right tail then receives the *meet* of what is left of
+    every left row. When the right tail is the empty row, that meet is
+    compared directly: every label left over must be missing in the meet,
+    and some left tail must be below the empty row.
 
     Choosing a single left row instead can commit a flexible right tail to
     too much: [{a: Abs | ρ₁} ∧ {a: Abs, b: Abs | ρ₁'} ≤ {a: Abs, b: Abs | φ}]
@@ -392,19 +485,31 @@ and row_meet_sub hyps rows (fs1, t1) =
   List.for_all
     (fun (n, f1) ->
       match List.filter_map (fun (fs, _) -> List.assoc_opt n fs) rows with
-      | [ f0 ] -> sub hyps [] f0 f1
-      | _ :: _ as fs0 -> sub hyps [] (Inter fs0) f1
+      | _ :: _ as fs0 -> field_sub hyps (field_meet fs0) f1
       | [] -> (
           let tails = List.map snd rows in
           if List.mem (Union []) tails then true
+          else if List.mem Niln tails && field_sub hyps Missn f1 then true
           else
             match List.find_opt (function Flex _ -> true | _ -> false) tails with
             | Some (Flex x as t0) -> sub hyps [] t0 (Row ([ (n, f1) ], expansion x [ n ]))
-            | _ -> sub hyps [] Absn f1))
+            | _ -> field_sub hyps Absn f1))
     fs1
   &&
   (t1 = Absn
   ||
+  if t1 = Niln then
+    let left = List.concat_map (fun (fs, _) -> List.map fst fs) rows in
+    let left = List.filter (fun n -> not (List.mem_assoc n fs1)) left in
+    List.for_all
+      (fun n ->
+        List.exists (fun (fs, t) -> t = Niln && not (List.mem_assoc n fs)) rows
+        || field_sub hyps
+             (field_meet (List.filter_map (fun (fs, _) -> List.assoc_opt n fs) rows))
+             Missn)
+      (List.sort_uniq String.compare left)
+    && List.exists (fun (_, t) -> attempt (fun () -> sub hyps [] t Niln)) rows
+  else
   let k1 = tail_kind t1 in
   let rest (fs, t) =
     match List.filter (fun (n, _) -> not (List.mem_assoc n fs1) && not (SSet.mem n k1)) fs with
@@ -416,12 +521,12 @@ and row_meet_sub hyps rows (fs1, t1) =
 (** [{fs₀ | t₀} ≤ {fs₁ | t₁}] for atomic tails. Mirrors the type checker:
     labels on both sides are compared; a label only on the right must be
     provided by [t₀] (a flexible tail is expanded; [Abs] or a rigid tail can
-    only satisfy an [Abs] field; the bottom row satisfies anything); what is
-    left of the left row must fit in [t₁]. *)
+    only satisfy an [Abs] field; the empty row gives [Missing]; the bottom
+    row satisfies anything); what is left of the left row must fit in [t₁]. *)
 and row_sub hyps (fs0, t0) (fs1, t1) =
   List.for_all
     (fun (n, f1) ->
-      match List.assoc_opt n fs0 with Some f0 -> sub hyps [] f0 f1 | None -> true)
+      match List.assoc_opt n fs0 with Some f0 -> field_sub hyps f0 f1 | None -> true)
     fs1
   &&
   let missing = List.filter (fun (n, _) -> not (List.mem_assoc n fs0)) fs1 in
@@ -431,11 +536,13 @@ and row_sub hyps (fs0, t0) (fs1, t1) =
       match t0 with
       | Union [] -> Some t0
       | Absn | Rigid _ ->
-          if List.for_all (fun (_, f1) -> sub hyps [] Absn f1) missing then Some t0 else None
+          if List.for_all (fun (_, f1) -> field_sub hyps Absn f1) missing then Some t0 else None
+      | Niln ->
+          if List.for_all (fun (_, f1) -> field_sub hyps Missn f1) missing then Some t0 else None
       | Flex x ->
           (* labels in the tail's kind are absent from it; expand the rest *)
           let absent, present = List.partition (fun (n, _) -> SSet.mem n x.fkind) missing in
-          if not (List.for_all (fun (_, f1) -> sub hyps [] Absn f1) absent) then None
+          if not (List.for_all (fun (_, f1) -> field_sub hyps Absn f1) absent) then None
           else if present = [] then Some t0
           else
             let x' = expansion x (List.map fst present) in

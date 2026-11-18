@@ -187,7 +187,10 @@ theorem RecOK.congr {t : SType} (ht : Agree K K' t) (h : RecOK K t) : RecOK K' t
 
 mutual
 theorem WK.congr : ∀ {t : SType}, Agree K K' t → WK K t → WK K' t
-  | .var _, _, _ | .prim _, _, _ | .abs, _, _ => trivial
+  | .var _, _, _ | .prim _, _, _ | .abs, _, _ | .missing, _, _ | .nil, _, _ => trivial
+  | .opt t, ht, ⟨wt, et⟩ =>
+    have h : Agree K K' t := fun v hv => ht v (by simp [SType.vars, hv])
+    ⟨wt.congr h, et.congr h⟩
   | .arrow a b, ht, ⟨wa, ea, wb, eb⟩ =>
     have ha : Agree K K' a := fun v hv => ht v (by simp [SType.vars, hv])
     have hb : Agree K K' b := fun v hv => ht v (by simp [SType.vars, hv])

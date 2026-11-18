@@ -107,6 +107,9 @@ let rec ty = function
         (list (fun (n, f) -> Printf.sprintf "[%s, %s]" (json_string n) (ty f)) fs)
         (ty t)
   | Abs -> "\"abs\""
+  | Missing -> "\"missing\""
+  | Nil -> "\"nil\""
+  | Opt t -> Printf.sprintf "{\"opt\": %s}" (ty t)
 
 let gen_ids (gen : var_state list) = list (fun (v : var_state) -> string_of_int v.id) gen
 
@@ -120,6 +123,8 @@ let rec ann = function
   | AApp (f, a, t) -> Printf.sprintf "{\"app\": [%s, %s, %s]}" (ann f) (ann a) (ty t)
   | ARcd fs -> Printf.sprintf "{\"rcd\": %s}" (fields fs)
   | ASel (a, l, t) -> Printf.sprintf "{\"sel\": [%s, %s, %s]}" (ann a) (json_string l) (ty t)
+  | ASelOr (a, l, d, t) ->
+      Printf.sprintf "{\"selor\": [%s, %s, %s, %s]}" (ann a) (json_string l) (ann d) (ty t)
   | AExt (a, fs, t) -> Printf.sprintf "{\"ext\": [%s, %s, %s]}" (ann a) (fields fs) (ty t)
   | ALet (x, gen, r, b) ->
       Printf.sprintf "{\"let\": [%s, %s, %s, %s]}" (json_string x) (gen_ids gen) (ann r) (ann b)

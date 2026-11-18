@@ -56,7 +56,8 @@ let rec rename (m : (int, var_state) Hashtbl.t) = function
       match Hashtbl.find_opt m vs.id with Some w -> Variable w | None -> Variable vs)
   | Function (a, b) -> Function (rename m a, rename m b)
   | Record (fs, t) -> Record (List.map (fun (n, f) -> (n, rename m f)) fs, rename m t)
-  | (Primitive _ | Abs) as t -> t
+  | Opt t -> Opt (rename m t)
+  | (Primitive _ | Abs | Missing | Nil) as t -> t
 
 (** Copy the generalized variables [freshen_above] did not copy. *)
 let complete_copies (gen : var_state list) copies lvl : (int * var_state) list =
@@ -111,9 +112,15 @@ and extrude1 ty pol lvl c =
         let l = extrude l (not pol) lvl c in
         Function (l, extrude r pol lvl c)
     | Record (fs, t) ->
-        let fs = List.map (fun (n, f) -> (n, extrude f pol lvl c)) fs in
+        (* an optional field is not a type: only the type in it is recorded *)
+        let field = function
+          | Opt t -> Opt (extrude t pol lvl c)
+          | f -> extrude f pol lvl c
+        in
+        let fs = List.map (fun (n, f) -> (n, field f)) fs in
         Record (fs, extrude t pol lvl c)
-    | Abs -> Abs
+    | Opt t -> Opt (extrude t pol lvl c)
+    | Abs | Missing | Nil -> ty
     | Variable vs -> (
         match PolarTbl.find_opt c (vs.id, pol) with
         | Some nvs -> Variable nvs
@@ -138,6 +145,12 @@ and extrude1 ty pol lvl c =
     each field is [Abs] (top: no guarantee) or a type [τ] ([Pre τ]), and the
     tail is [Abs] or a row variable. A row variable used as the tail of a row
     never "contains" that row's labels; constraining maintains this.
+
+    Two more fields, for optional fields and closed records: [Missing]
+    (definitely absent) and [Opt τ] (missing, or present at [τ]), with
+    [Pre τ ≤ Opt τ], [Missing ≤ Opt τ] and [Opt τ ≤ Abs]. The tail [Nil] is
+    the empty row, [Missing] at every label: a record literal is closed.
+    Width subtyping is kept, since [Nil ≤ Abs].
 
     The paper expands a row variable by substituting into it. We instead
     expand through constraints: to compare [{fs₀ | ρ} ≤ {fs₁ | t₁}] where
@@ -213,7 +226,8 @@ let rec vars_of acc = function
   | Variable vs -> vs :: acc
   | Function (l, r) -> vars_of (vars_of acc l) r
   | Record (fs, t) -> List.fold_left (fun acc (_, f) -> vars_of acc f) (vars_of acc t) fs
-  | Primitive _ | Abs -> acc
+  | Opt t -> vars_of acc t
+  | Primitive _ | Abs | Missing | Nil -> acc
 
 (** Does [v] reach itself through a type constructor? A search over
     (variable, passed a constructor) pairs. *)
@@ -274,6 +288,17 @@ let constrain (lhs : simple_type) (rhs : simple_type) : unit =
           (* the top row is below a row only if that row guarantees nothing *)
           List.iter (fun (n, f1) -> field lhs n Abs f1) fs1;
           go Abs t1
+      | Nil, Record (fs1, t1) ->
+          (* the empty row is below a row that accepts every label missing *)
+          List.iter (fun (n, f1) -> field lhs n Missing f1) fs1;
+          go Nil t1
+      | Record _, Nil ->
+          (* a row is below the empty row if it has no field at all *)
+          let fs0, t0 = row_view lhs in
+          List.iter (fun (n, f0) -> field lhs n f0 Missing) fs0;
+          go t0 Nil
+      | Abs, Nil ->
+          err "a record that may have other fields cannot be used as a closed record"
       | Record _, Record _ ->
           let fs0, t0 = row_view lhs and fs1, t1 = row_view rhs in
           (* fields mentioned on both sides *)
@@ -292,6 +317,9 @@ let constrain (lhs : simple_type) (rhs : simple_type) : unit =
               | Abs ->
                   List.iter (fun (n, f1) -> field lhs n Abs f1) missing;
                   Abs
+              | Nil ->
+                  List.iter (fun (n, f1) -> field lhs n Missing f1) missing;
+                  Nil
               | Variable vs ->
                   (* labels in the tail's kind are not represented by it:
                      they are absent; only the others are expanded *)
@@ -335,11 +363,22 @@ let constrain (lhs : simple_type) (rhs : simple_type) : unit =
             (Printf.sprintf "cannot constrain %s <: %s" (show_simple lhs)
                (show_simple rhs))
     end
-  (* field types: Abs is the top; an absent field cannot satisfy a present one *)
+  (* fields: [Pre τ ≤ Opt τ], [Missing ≤ Opt τ], [Opt τ ≤ Abs]; a field
+     that is or may be missing cannot satisfy a present one, and a field
+     that is or may be present cannot satisfy [Missing] *)
   and field record n f0 f1 =
+    let fail what = err (Printf.sprintf "%s: %s in %s" what n (show_simple record)) in
     match (f0, f1) with
     | _, Abs -> ()
-    | Abs, _ -> err (Printf.sprintf "missing field: %s in %s" n (show_simple record))
+    | Abs, (Missing | Opt _) -> fail "nothing is known about field"
+    | Abs, _ -> fail "missing field"
+    | Missing, (Missing | Opt _) -> ()
+    | Missing, _ -> fail "missing field"
+    | Opt t0, Opt t1 -> go t0 t1
+    | Opt _, Missing -> fail "unexpected field"
+    | Opt _, _ -> fail "field may be missing"
+    | _, Missing -> fail "unexpected field"
+    | _, Opt t1 -> go f0 t1
     | _ -> go f0 f1
   in
   go lhs rhs
@@ -370,7 +409,8 @@ let freshen_above_copies (lim : int) (ty : simple_type) (lvl : int) :
       | Record (fs, t) ->
           let fs = List.map (fun (n, f) -> (n, freshen f)) fs in
           Record (fs, freshen t)
-      | Primitive _ | Abs -> ty
+      | Opt t -> Opt (freshen t)
+      | Primitive _ | Abs | Missing | Nil -> ty
   in
   let ty = freshen ty in
   (ty, List.of_seq (Hashtbl.to_seq freshened))
@@ -397,6 +437,7 @@ type ann =
   | AApp of ann * ann * simple_type
   | ARcd of (string * ann) list
   | ASel of ann * string * simple_type
+  | ASelOr of ann * string * ann * simple_type
   | AExt of ann * (string * ann) list * simple_type
   | ALet of string * var_state list * ann * ann
   | ALetRec of string * var_state list * simple_type * ann * ann
@@ -435,7 +476,8 @@ let rec type_term_ann (ctx : ctx) (lvl : int) (trm : term) : simple_type * ann =
       | None -> err ("identifier not found: " ^ name))
   | Rcd fs ->
       let fs = List.map (fun (n, t) -> (n, type_term_ann ctx lvl t)) fs in
-      ( Record (List.map (fun (n, (ty, _)) -> (n, ty)) fs, Abs),
+      (* a record literal has exactly its fields: its type is closed *)
+      ( Record (List.map (fun (n, (ty, _)) -> (n, ty)) fs, Nil),
         ARcd (List.map (fun (n, (_, a)) -> (n, a)) fs) )
   | Lam (name, body) ->
       let param = fresh_var lvl in
@@ -452,6 +494,15 @@ let rec type_term_ann (ctx : ctx) (lvl : int) (trm : term) : simple_type * ann =
       let obj_ty, obj_ann = type_term_ann ctx lvl obj in
       constrain obj_ty (Record ([ (name, res) ], Abs));
       (res, ASel (obj_ann, name, res))
+  | SelOr (obj, name, default) ->
+      (* [obj.name ?? default]: the field may be missing, and [default] is
+         only evaluated when it is *)
+      let res = fresh_var lvl in
+      let obj_ty, obj_ann = type_term_ann ctx lvl obj in
+      constrain obj_ty (Record ([ (name, Opt res) ], Abs));
+      let d_ty, d_ann = type_term_ann ctx lvl default in
+      constrain d_ty res;
+      (res, ASelOr (obj_ann, name, d_ann, res))
   | Ext (obj, fs) ->
       (* [obj with {l = e, ...}] overwrites or adds the fields: [obj] may have
          anything at the labels, and its other fields are carried by [rho] *)

@@ -15,7 +15,9 @@ minimal subtyping relation of `Sub.lean`. With sorts:
 * **Scheme variables are sorted**, and an instance substitutes at each sort
   (`Subst`), so a type variable is never instantiated with `Abs`.
 * **Selection** `t.l : τ` needs `t : {l : pre τ}`: the field is present by
-  the shape of the rule, with no `τ ≤ ⊤` premise.
+  the shape of the rule, with no `τ ≤ ⊤` premise. Selection with a default,
+  `t.l ?? d : τ`, needs `t : {l : opt τ}` and `d : τ`.
+* **Record literals are closed**: the row of `{l = e; …}` ends in `nil`.
 
 **Schemes are constrained**, as in HM(X): `∀ᾱ. D ⇒ σ`, where `D` is a list
 of subtyping constraints on the quantified variables. An instance
@@ -49,12 +51,14 @@ def Ty.substM (m : Subst) : {s : Srt} → Ty s → Ty s
   | _, .cons l θ ρ => .cons l (θ.substM m) (ρ.substM m)
   | _, .pre τ => .pre (τ.substM m)
   | _, .proj l ρ => .proj l (ρ.substM m)
+  | _, .missing => .missing
+  | _, .nil => .nil
 
 /-- The empty substitution. -/
 def Subst.empty : Subst := fun _ _ => Option.none
 
 theorem Ty.substM_none : {s : Srt} → (t : Ty s) → t.substM Subst.empty = t
-  | _, .fvar _ | _, .top | _, .bot | _, .gvar _ | _, .prim _ => rfl
+  | _, .fvar _ | _, .top | _, .bot | _, .gvar _ | _, .prim _ | _, .missing | _, .nil => rfl
   | _, .union a b | _, .inter a b | _, .arrow a b => by
     simp only [Ty.substM, Ty.substM_none a, Ty.substM_none b]
   | _, .rcd ρ | _, .pre ρ | _, .proj _ ρ => by simp only [Ty.substM, Ty.substM_none ρ]
@@ -116,6 +120,9 @@ inductive Typ (E : Defs) : Ctx → Term → Ty .ty → Prop where
   | rcd : TypFields E Γ fs F → Typ E Γ (.rcd fs) (Ty.record F)
   /-- Selection: the field is present. -/
   | sel : Typ E Γ t (.rcd (.cons l (.pre τ) .top)) → Typ E Γ (.sel t l) τ
+  /-- Selection with a default: the field may be missing. -/
+  | selOr : Typ E Γ t (.rcd (.cons l (Ty.opt τ) .top)) → Typ E Γ d τ →
+      Typ E Γ (.selOr t l d) τ
   /-- `t with {fs}`: `t`'s fields `fs` may be anything, the rest is `ρ`. -/
   | ext : Typ E Γ t (.rcd (Ty.absFields F ρ)) → TypFields E Γ fs F →
       Typ E Γ (.ext t fs) (.rcd (Ty.ofFields F ρ))
@@ -192,7 +199,7 @@ theorem typ_ext :
     Typ E builtins
       (.sel (.app (.lam "r" (.ext (.var "r") [("y", .lit 2)])) (.rcd [("x", .lit 1)])) "x")
       int := by
-  let ρ : Ty .row := .cons "x" (.pre int) .top
+  let ρ : Ty .row := .cons "x" (.pre int) .nil
   have hfun : Typ E builtins (.lam "r" (.ext (.var "r") [("y", .lit 2)]))
       (.arrow (.rcd (.cons "y" .abs ρ)) (.rcd (.cons "y" (.pre int) ρ))) :=
     .lam (.ext (F := [("y", int)]) (ρ := ρ) (.var_mono rfl) (.cons .lit .nil))
@@ -209,6 +216,19 @@ theorem typ_ext :
     · subst hx; simp [Ty.field, ρ]; exact Sub.refl
     · simp [Ty.field, Ne.symm hx]; exact Sub.top
   exact .sel (.sub (.app hfun (.sub (.rcd (.cons .lit .nil)) harg)) hres)
+
+/-- `{x = 1}.y ?? 2 : int`: the record is closed, so its field `y` is
+missing, which an optional field allows. -/
+theorem typ_selOr :
+    Typ E builtins (.selOr (.rcd [("x", .lit 1)]) "y" (.lit 2)) int := by
+  have h : Sub E (Ty.record [("x", int)]) (.rcd (.cons "y" (Ty.opt int) .top)) := by
+    refine Sub.of_step (.rcd (Sub.row fun l => ?_))
+    by_cases hy : l = "y"
+    · subst hy
+      simp only [Ty.ofFields, Ty.field, show ¬ "x" = "y" by decide, ite_true, ite_false]
+      exact missing_le_opt
+    · simp only [Ty.field, Ne.symm hy, ite_false]; exact Sub.top
+  exact .selOr (.sub (.rcd (.cons .lit .nil)) h) .lit
 
 theorem typ_letPoly :
     Typ E builtins
@@ -249,7 +269,7 @@ end Examples
 /-! ## Selection needs a present field
 
 Selecting a label that a record literal does not have is not typable: the
-literal's row gives the label `Abs`, and `Abs ≰ pre τ`. -/
+literal's row gives the label `missing`, and `missing ≰ pre τ`. -/
 
 theorem Typ.sel_inv {t : Term} {l : String} : ∀ {Γ : Ctx} {u : Term} {τ : Ty .ty},
     Typ E Γ u τ → u = .sel t l →
@@ -258,6 +278,7 @@ theorem Typ.sel_inv {t : Term} {l : String} : ∀ {Γ : Ctx} {u : Term} {τ : Ty
   | _, _, _, .sub h hs, e => let ⟨τ', h₁, h₂⟩ := Typ.sel_inv h e; ⟨τ', h₁, h₂.trans hs⟩
   | _, _, _, .lit, e | _, _, _, .var _ _, e | _, _, _, .lam _, e | _, _, _, .app _ _, e
   | _, _, _, .rcd _, e | _, _, _, .ext _ _, e | _, _, _, .extNil _, e
+  | _, _, _, .selOr _ _, e
   | _, _, _, .letIn _ _ _, e | _, _, _, .letRec _ _ _ _, e => nomatch e
 
 theorem Typ.rcd_inv {fs : List (String × Term)} : ∀ {Γ : Ctx} {u : Term} {τ : Ty .ty},
@@ -266,6 +287,7 @@ theorem Typ.rcd_inv {fs : List (String × Term)} : ∀ {Γ : Ctx} {u : Term} {τ
   | _, _, _, .sub h hs, e => let ⟨F, hF, hs'⟩ := Typ.rcd_inv h e; ⟨F, hF, hs'.trans hs⟩
   | _, _, _, .lit, e | _, _, _, .var _ _, e | _, _, _, .lam _, e | _, _, _, .app _ _, e
   | _, _, _, .sel _, e | _, _, _, .ext _ _, e | _, _, _, .extNil _, e
+  | _, _, _, .selOr _ _, e
   | _, _, _, .letIn _ _ _, e | _, _, _, .letRec _ _ _ _, e => nomatch e
 
 theorem TypFields.labels {Γ : Ctx} {l : String} :
@@ -287,7 +309,7 @@ theorem not_typ_sel_missing {Γ : Ctx} {fs : List (String × Term)} {l : String}
   | rcd hr =>
     have := hr.fields l
     simp only [Ty.field_ofFields_none (hF.labels hl), Ty.field, ite_true] at this
-    exact not_abs_le_pre this
+    exact not_missing_le_pre this
 
 theorem not_typ_empty_sel {Γ : Ctx} {τ : Ty .ty} : ¬ Typ E Γ (.sel (.rcd []) "x") τ :=
   not_typ_sel_missing fun _ h => nomatch h

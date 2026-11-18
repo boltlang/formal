@@ -38,13 +38,29 @@ inductive SType where
   | arrow : SType → SType → SType
   /-- A record type, or a row in tail position (as in `Types.simple_type`). -/
   | record : SFields → SType → SType
-  /-- The absent field and the top row. -/
+  /-- `Abs`: the top field and the top row. -/
   | abs
+  /-- The field that is definitely absent. -/
+  | missing
+  /-- A field: missing, or present at the type. -/
+  | opt : SType → SType
+  /-- The empty row (in tail position): every label is missing. -/
+  | nil
 
 inductive SFields where
   | nil
   | cons : String → SType → SFields → SFields
 end
+
+/-- A present field: a type, as opposed to `Abs`, `Missing` and `Opt τ`. -/
+def SType.IsPre : SType → Prop
+  | .abs | .missing | .opt _ => False
+  | _ => True
+
+theorem SType.IsPre.ne_abs : {f : SType} → f.IsPre → f ≠ .abs
+  | .abs, h => absurd h id
+  | .var _, _ | .prim _, _ | .arrow _ _, _ | .record _ _, _ | .nil, _ => fun h => nomatch h
+  | .missing, h | .opt _, h => absurd h id
 
 namespace SFields
 
@@ -93,6 +109,16 @@ def missing (fs₀ : SFields) : SFields → SFields
 def absPairs : SFields → List (SType × SType)
   | nil => []
   | cons _ f fs => (.abs, f) :: absPairs fs
+
+/-- `(missing, f)` for every field. -/
+def misPairs : SFields → List (SType × SType)
+  | nil => []
+  | cons _ f fs => (.missing, f) :: misPairs fs
+
+/-- `(f, missing)` for every field. -/
+def toMisPairs : SFields → List (SType × SType)
+  | nil => []
+  | cons _ f fs => (f, .missing) :: toMisPairs fs
 
 end SFields
 
@@ -179,7 +205,8 @@ mutual
 /-- The variables occurring in a type. -/
 def SType.vars : SType → List Nat
   | .var v => [v]
-  | .prim _ | .abs => []
+  | .prim _ | .abs | .missing | .nil => []
+  | .opt t => t.vars
   | .arrow a b => a.vars ++ b.vars
   | .record fs t => fs.vars ++ t.vars
 
@@ -210,6 +237,16 @@ inductive Constrain : State → SType → SType → State → Prop where
       FieldsEach (s.remember .abs (.record fs t)) fs.absPairs s₁ →
       Constrain s₁ .abs t s₂ →
       Constrain s .abs (.record fs t) s₂
+  /-- The empty row is below a row that accepts every label missing. -/
+  | nilRecord : s.New .nil (.record fs t) →
+      FieldsEach (s.remember .nil (.record fs t)) fs.misPairs s₁ →
+      Constrain s₁ .nil t s₂ →
+      Constrain s .nil (.record fs t) s₂
+  /-- A row is below the empty row if it has no field at all. -/
+  | recordNil : s.New (.record fa ta) .nil → rowView (.record fa ta) = (fs₀, t₀) →
+      FieldsEach (s.remember (.record fa ta) .nil) fs₀.toMisPairs s₁ →
+      Constrain s₁ t₀ .nil s₂ →
+      Constrain s (.record fa ta) .nil s₂
   /-- Rows: common fields, then labels only on the right (from the left
   tail, expanding a row variable), then the rest into the right tail. -/
   | record : s.New (.record fa ta) (.record fb tb) →
@@ -234,18 +271,25 @@ inductive ConstrainEach : State → List (SType × SType) → State → Prop whe
   | nil : ConstrainEach s [] s
   | cons : Constrain s a b s₁ → ConstrainEach s₁ rest s₂ → ConstrainEach s ((a, b) :: rest) s₂
 
-/-- A field type below another: `Abs` is the top, and an absent field
-cannot satisfy a present one ("missing field"). -/
+/-- A field below another: `Abs` is the top; `Pre τ ≤ Opt τ` and
+`Missing ≤ Opt τ`. A field that is or may be missing cannot satisfy a
+present one ("missing field"), and a field that is or may be present cannot
+satisfy `Missing` ("unexpected field"). -/
 inductive ConstrainField : State → SType → SType → State → Prop where
   | toAbs : ConstrainField s f .abs s
-  | pre : f₀ ≠ .abs → f₁ ≠ .abs → Constrain s f₀ f₁ s₁ → ConstrainField s f₀ f₁ s₁
+  | misMis : ConstrainField s .missing .missing s
+  | misOpt : ConstrainField s .missing (.opt τ) s
+  | optOpt : τ₀ ≠ .abs → Constrain s τ₀ τ₁ s₁ → ConstrainField s (.opt τ₀) (.opt τ₁) s₁
+  | preOpt : f₀.IsPre → Constrain s f₀ τ₁ s₁ → ConstrainField s f₀ (.opt τ₁) s₁
+  | pre : f₀.IsPre → f₁.IsPre → Constrain s f₀ f₁ s₁ → ConstrainField s f₀ f₁ s₁
 
 inductive FieldsEach : State → List (SType × SType) → State → Prop where
   | nil : FieldsEach s [] s
   | cons : ConstrainField s a b s₁ → FieldsEach s₁ rest s₂ → FieldsEach s ((a, b) :: rest) s₂
 
 /-- Providing the labels `missing` from the left tail `t`: nothing to do;
-an `Abs` tail can only provide absent fields; a row variable does not
+an `Abs` tail can only provide absent fields, the empty row missing ones; a
+row variable does not
 represent the labels in its kind, which are absent too, and is expanded for
 the others (`expansion` in `lib/typer.ml`), reusing a memoized expansion
 variable. The expansion variable lacks the tail's kind and the expanded
@@ -253,6 +297,7 @@ labels. -/
 inductive Expand : State → SType → SFields → SType → State → Prop where
   | none : Expand s t .nil t s
   | abs : ms ≠ .nil → FieldsEach s ms.absPairs s₁ → Expand s .abs ms .abs s₁
+  | nil : ms ≠ .nil → FieldsEach s ms.misPairs s₁ → Expand s .nil ms .nil s₁
   | allAbsent : ms ≠ .nil → ms.presentIn (s.kind v) = .nil →
       FieldsEach s (ms.absentIn (s.kind v)).absPairs s₁ →
       Expand s (.var v) ms (.var v) s₁
@@ -314,10 +359,17 @@ inductive TypeTerm : SCtx → State → Term → SType → State → Prop where
   | app : s.kind s.next = [] → TypeTerm Γ s.fresh f stf s₁ → TypeTerm Γ s₁ a sta s₂ →
       ConstrainTop s₂ stf (.arrow sta (.var s.next)) s₃ →
       TypeTerm Γ s (.app f a) (.var s.next) s₃
-  | rcd : TypeFields Γ s fs F s₁ → TypeTerm Γ s (.rcd fs) (.record F .abs) s₁
+  /-- A record literal has exactly its fields: its row is closed. -/
+  | rcd : TypeFields Γ s fs F s₁ → TypeTerm Γ s (.rcd fs) (.record F .nil) s₁
   | sel : s.kind s.next = [] → TypeTerm Γ s.fresh t st s₁ →
       ConstrainTop s₁ st (.record (.cons l (.var s.next) .nil) .abs) s₂ →
       TypeTerm Γ s (.sel t l) (.var s.next) s₂
+  /-- `t.l ?? d`: the field may be missing, and `d` has its type. -/
+  | selOr : s.kind s.next = [] → TypeTerm Γ s.fresh t st s₁ →
+      ConstrainTop s₁ st (.record (.cons l (.opt (.var s.next)) .nil) .abs) s₂ →
+      TypeTerm Γ s₂ d std s₃ →
+      ConstrainTop s₃ std (.var s.next) s₄ →
+      TypeTerm Γ s (.selOr t l d) (.var s.next) s₄
   /-- `t with {fs}`: `t ≤ {fs ↦ Abs | ρ}`, result `{fs | ρ}`, where `ρ`
   lacks the labels of `fs`. -/
   | ext : fs ≠ [] → TypeTerm Γ s t st s₁ → TypeFields Γ s₁ fs F s₂ →

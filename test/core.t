@@ -21,11 +21,11 @@ Basics
 Records (width/depth subtyping)
 
   $ boltcore -e 'fun x -> x.f'
-  - : {f: 'a} -> 'a
+  - : {f: 'a, ..} -> 'a
   $ boltcore -e '{a = 1; b = true}.a'
   - : int
   $ boltcore -e 'fun x -> {L = succ x.v; R = x}'
-  - : 'a ∧ {v: int} -> {L: int, R: 'a}
+  - : 'a ∧ {v: int, ..} -> {L: int, R: 'a}
   $ boltcore -e '(fun r -> r.a) {a = 1; b = 2}'
   - : int
 
@@ -97,7 +97,7 @@ Recursion and recursive types (Sec. 3.4.1, 4.3.2), with `--rectypes`
   $ boltcore --rectypes -e 'let rec produce = fun arg -> {head = arg; tail = produce (succ arg)} in produce'
   - : int -> ({head: int, tail: 'a} as 'a)
   $ boltcore --rectypes -e 'let rec consume = fun strm -> add strm.head (consume strm.tail) in consume'
-  - : ({head: int, tail: 'a} as 'a) -> int
+  - : ({head: int, tail: 'a, ..} as 'a) -> int
 
 Self-application and the Y combinator
 
@@ -122,7 +122,7 @@ and `let rec` cannot build one, since it only binds functions).
   > SRC
   $ boltcore --rectypes prog.sub
   let id : 'a -> 'a
-  let length : ({isNil: bool, tail: 'a} as 'a) -> int
+  let length : ({isNil: bool, tail: 'a, ..} as 'a) -> int
   let nils : type error: let rec nils: the right-hand side must be a function
   let ok : type error: identifier not found: nils
   let use : type error: missing field: tail in {isNil: bool}
@@ -149,7 +149,7 @@ Type errors
   - : type error: missing field: a in {b: int}
   [1]
   $ boltcore --rectypes -e 'let rec f = fun x -> f x.a in f {a = {a = 1}}'
-  - : type error: cannot constrain int <: {a: α9}
+  - : type error: cannot constrain int <: {a: α9, ..}
   [1]
 
 Parse errors
@@ -184,11 +184,11 @@ More cases from the paper (Secs. 2-4)
   $ boltcore --rectypes -e 'fun f -> (fun x -> f (x x)) (fun x -> f (x x))'
   - : ('a -> 'a) -> 'a
   $ boltcore --rectypes -e 'let rec f = fun x -> f x.u in f'
-  - : ({u: 'a} as 'a) -> ⊥
+  - : ({u: 'a, ..} as 'a) -> ⊥
   $ boltcore -e 'fun x -> fun y -> fun z -> if x then y else z'
   - : bool -> 'a -> 'a -> 'a
   $ boltcore -e 'if true then {a = 1; b = true} else {b = false; c = 42}'
-  - : {b: bool}
+  - : {a?: int, b: bool, c?: int}
 
 Extensible records (rows, after Marques et al. 2024)
 
@@ -199,13 +199,13 @@ Extensible records (rows, after Marques et al. 2024)
   $ boltcore -e '{x = 1} with {x = true}'
   - : {x: bool}
   $ boltcore -e 'fun r -> (r with {y = 1}).x'
-  - : {x: 'a} -> 'a
+  - : {x: 'a, ..} -> 'a
   $ boltcore --self-check -e 'fun r -> r with {a = r.a; b = 2}'
   - : {a: 'a, b: Abs | 'b} -> {a: 'a, b: int | 'b}
   $ boltcore --raw -e 'fun r -> r with {a = r.a; b = 2}'
-  - : 'a ∧ {a: Abs, b: Abs | 'b} ∧ {a: 'c} -> {a: 'c, b: int | 'b}
+  - : 'a ∧ {a: Abs, b: Abs | 'b} ∧ {a: 'c, ..} -> {a: 'c, b: int | 'b}
   $ boltcore -e 'let rec f r = f (r with {n = succ r.n}) in f'
-  - : {n: int} -> ⊥
+  - : {n: int, ..} -> ⊥
   $ boltcore -e 'fun r -> fun s -> if true then r with {y = 1} else s with {z = 2}'
   - : {y: Abs | 'a} -> {z: Abs | 'b} -> {y: int | 'a} ∨ {z: int | 'b}
   $ boltcore -e '({x = 1} with {y = 2}).z'
@@ -214,6 +214,77 @@ Extensible records (rows, after Marques et al. 2024)
   $ boltcore -e 'fun r -> r with {y}'
   parse error: 1:19: expected '=' (at '}')
   [2]
+
+Closed records: a record literal has exactly its fields. `{x: int, ..}` is
+open (any other fields), which is what selection asks for. A closed record
+can be used where an open one is expected.
+
+  $ boltcore -e '{a = 1; b = true}'
+  - : {a: int, b: bool}
+  $ boltcore -e 'fun r -> r.a'
+  - : {a: 'a, ..} -> 'a
+  $ boltcore -e '(fun r -> r.a) {a = 1; b = true}'
+  - : int
+  $ boltcore -e 'fun f -> f {x = 1}'
+  - : ({x: int} -> 'a) -> 'a
+  $ boltcore -e '{}'
+  - : {}
+
+Optional fields: `r.l ?? d` is the field if it is present, and `d` otherwise.
+`l?: τ` is a field that is missing, or present at `τ`
+
+  $ boltcore -e 'fun r -> r.y ?? 0'
+  - : {y?: 'a, ..} -> 'a ∨ int
+  $ boltcore -e '(fun r -> r.y ?? 0) {x = 1}'
+  - : int
+  $ boltcore -e '(fun r -> r.y ?? 0) {y = true}'
+  - : bool ∨ int
+  $ boltcore -e 'fun r -> add (r.x ?? 1) (r.y ?? r.x ?? 2)'
+  - : {x?: int, y?: int, ..} -> int
+  $ boltcore -e 'fun r -> (r.a ?? {}).b ?? 0'
+  - : {a?: {b?: 'a, ..}, ..} -> 'a ∨ int
+  $ boltcore -e 'fun x -> x.a ?? x'
+  - : 'a ∧ {a?: 'a, ..} -> 'a
+
+A field given in one branch only is optional; plain selection then fails
+
+  $ boltcore -e 'fun b -> if b then {y = 1} else {}'
+  - : bool -> {y?: int}
+  $ boltcore -e 'fun b -> (if b then {y = 1} else {}).y ?? 0'
+  - : bool -> int
+  $ boltcore -e 'fun b -> (if b then {y = 1} else {}).y'
+  - : type error: missing field: y in {}
+  [1]
+  $ boltcore -e 'fun b -> if b then {x = 1} else {y = 2}'
+  - : bool -> {x?: int, y?: int}
+
+A field read both ways is required: `Opt τ ∧ Pre σ = Pre (τ ∧ σ)`
+
+  $ boltcore --self-check -e 'fun r -> {a = r.y ?? 0; b = r.y}'
+  - : {y: 'a, ..} -> {a: 'a ∨ int, b: 'a}
+  $ boltcore --raw -e 'fun r -> {a = r.y ?? 0; b = r.y}'
+  - : 'a ∧ {y: 'b, ..} ∧ {y?: 'c, ..} -> {a: 'c ∨ int, b: 'b}
+
+With let-polymorphism, extrusion and rows
+
+  $ boltcore --self-check -e 'let f = fun r -> r.y ?? 0 in {a = f {}; b = f {y = 3}; c = f {z = true}}'
+  - : {a: int, b: int, c: int}
+  $ boltcore --self-check -e 'fun r -> let f = fun d -> r.y ?? d in {a = f 1; b = f true}'
+  - : {y?: 'a, ..} -> {a: 'a ∨ int, b: 'a ∨ bool}
+  $ boltcore --self-check -e 'fun r -> (r with {y = 1}).y ?? 2'
+  - : {..} -> int
+  $ boltcore --self-check -e 'fun b -> fun r -> if b then r with {x = 1} else {}'
+  - : bool -> {x: Abs | 'a} -> {x: int | 'a} ∨ {}
+  $ boltcore --self-check -e 'let rec f = fun r -> f (r with {n = r.n ?? 0}) in f'
+  - : {n?: ⊤, ..} -> ⊥
+
+`??` binds weaker than application, and its left operand is a selection
+
+  $ boltcore -e 'fun r -> succ r.n ?? 0'
+  parse error: 1:19: the left operand of '??' must be a field selection (at '??')
+  [2]
+  $ boltcore -e 'fun r -> succ (r.n ?? 0)'
+  - : {n?: int, ..} -> int
 
 A label is set at most once in a `with`:
 
@@ -226,7 +297,7 @@ becomes the neutral element (here ⊤ in an intersection) instead of an
 unguarded recursive type like `('g ∧ 'h as 'g)`
 
   $ boltcore --raw -e 'let rec count r = if r.done then r else count (r with {n = succ r.n}) in count'
-  - : 'a ∨ ('b ∧ {n: Abs | 'c ∧ {done: 'd ∧ bool | 'e}} ∧ {n: 'f ∧ int} ∧ 'g ∧ 'h ∧ 'i ∧ ⊤ ∧ {done: 'd ∧ bool} -> 'h ∨ {n: 'j ∨ int | 'c})
+  - : 'a ∨ ('b ∧ {n: Abs | 'c ∧ {done: 'd ∧ bool | 'e}} ∧ {n: 'f ∧ int, ..} ∧ 'g ∧ 'h ∧ 'i ∧ ⊤ ∧ {done: 'd ∧ bool, ..} -> 'h ∨ {n: 'j ∨ int | 'c})
 
 Kinds: the row variable of `r with {y = …}` lacks y; `r with {}` is just r
 

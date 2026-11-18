@@ -16,9 +16,11 @@ Format (variables are numbers, labels and names are strings):
 ```
 type  ::= {"var": n} | {"prim": s} | {"fun": [type, type]}
         | {"rec": [[[s, type], ...], type]} | "abs"
+        | "missing" | {"opt": type} | "nil"
 ann   ::= {"lit": n} | {"var": x} | {"inst": [x, [[n, n], ...]]}
         | {"lam": [x, type, ann]} | {"app": [ann, ann, type]}
         | {"rcd": [[s, ann], ...]} | {"sel": [ann, s, type]}
+        | {"selor": [ann, s, ann, type]}
         | {"ext": [ann, [[s, ann], ...], type]}
         | {"let": [x, [n, ...], ann, ann]}
         | {"letrec": [x, [n, ...], type, ann, ann]}
@@ -26,7 +28,9 @@ cert  ::= {"log": [[type, type], ...], "bounds": [[n, [type, ...], [type, ...]],
            "kinds": [[n, [s, ...]], ...], "if": n, "term": ann}
 ```
 
-`bounds` lists a variable's lower, then upper bounds.
+`bounds` lists a variable's lower, then upper bounds. `"abs"` is the top
+field and the top row, `"missing"` and `{"opt": τ}` are fields, and `"nil"`
+is the empty row: a closed record `{x: τ}` is `{"rec": [[["x", τ]], "nil"]}`.
 -/
 
 open Lean BoltCore BoltCore.Alg
@@ -54,10 +58,13 @@ def jTag (j : Json) : Except String (String × Json) := do
 mutual
 partial def parseTy (j : Json) : Except String SType := do
   if j == Json.str "abs" then return .abs
+  if j == Json.str "missing" then return .missing
+  if j == Json.str "nil" then return .nil
   let (k, v) ← jTag j
   match k with
   | "var" => return .var (← jNat v)
   | "prim" => return .prim (← v.getStr?)
+  | "opt" => return .opt (← parseTy v)
   | "fun" => let (a, b) ← jPair v; return .arrow (← parseTy a) (← parseTy b)
   | "rec" => let (fs, t) ← jPair v; return .record (← parseTyFields (← jArr fs)) (← parseTy t)
   | _ => throw s!"unknown type: {j.compress}"
@@ -83,6 +90,8 @@ partial def parseAnn (j : Json) : Except String Ann := do
   | "app", [f, a, st] => return .app (← parseAnn f) (← parseAnn a) (← parseTy st)
   | "rcd", fs => return .rcd (← parseAnnFields fs)
   | "sel", [t, l, st] => return .sel (← parseAnn t) (← l.getStr?) (← parseTy st)
+  | "selor", [t, l, d, st] =>
+    return .selOr (← parseAnn t) (← l.getStr?) (← parseAnn d) (← parseTy st)
   | "ext", [t, fs, ρ] => return .ext (← parseAnn t) (← parseAnnFields (← jArr fs)) (← parseTy ρ)
   | "let", [x, gen, r, b] =>
     return .letIn (← x.getStr?) (← (← jArr gen).mapM jNat) (← parseAnn r) (← parseAnn b)
@@ -151,6 +160,9 @@ partial def showTy : SType → String
   | .arrow a b => s!"({showTy a} → {showTy b})"
   | .record fs t => "{" ++ showFields fs ++ " | " ++ showTy t ++ "}"
   | .abs => "Abs"
+  | .missing => "Missing"
+  | .opt t => s!"{showTy t}?"
+  | .nil => "{}"
 
 partial def showFields : SFields → String
   | .nil => ""

@@ -44,9 +44,9 @@ variables of strictly lower rank. -/
 def Defs.Ranked (E : Defs) (r : Nat → Nat) : Prop :=
   ∀ s n (u : Ty s), E s n u → ∀ m ∈ u.gvars, r m < r n
 
-/-- Atoms: variables, primitives and opaque fields. -/
+/-- Atoms: variables, primitives, opaque fields and the missing field. -/
 def Ty.IsAtom : Ty s → Prop
-  | .fvar _ | .gvar _ | .prim _ | .proj _ _ => True
+  | .fvar _ | .gvar _ | .prim _ | .proj _ _ | .missing => True
   | _ => False
 
 /-- One layer of subtyping, relative to the coinductive hypothesis `R`. -/
@@ -82,6 +82,8 @@ inductive Step (E : Defs) (R : Rel) : {s : Srt} → Ty s → Ty s → Prop where
       Step E R (.proj l (.gvar n)) b
   | projDefR {a : Ty .field} : (∀ u : Ty .row, E .row n u → Step E R a (u.field l)) →
       Step E R a (.proj l (.gvar n))
+  /-- The missing field is only below itself (and `Abs`, by `top`). -/
+  | missing : Step E R .missing .missing
 
 theorem Step.mono {R R' : Rel} (hR : ∀ s x y, R s x y → R' s x y) {s : Srt} {a b : Ty s} :
     Step E R a b → Step E R' a b := by
@@ -107,6 +109,7 @@ theorem Step.mono {R R' : Rel} (hR : ∀ s x y, R s x y → R' s x y) {s : Srt} 
   | proj => exact .proj
   | projDefL hd _ ih => exact .projDefL hd ih
   | projDefR _ ih => exact .projDefR ih
+  | missing => exact .missing
 
 /-- **Rows compare field by field**: every comparison of rows, by any rule,
 gives one between each pair of fields. -/
@@ -133,7 +136,7 @@ theorem Step.fields {R : Rel} {s : Srt} {a b : Ty s} (h : Step E R a b) (l : Str
     cases ‹Srt› <;> simp only [Ty.field] at * <;> first | exact .top | exact .projDefL hd ih
   | defR _ ih =>
     cases ‹Srt› <;> simp only [Ty.field] at * <;> first | exact .top | exact .projDefR ih
-  | prim | arrow | rcd | pre | proj | projDefL | projDefR =>
+  | prim | arrow | rcd | pre | proj | projDefL | projDefR | missing =>
     first | exact .top | (simp only [Ty.field]; exact .top)
   | row h _ => exact h l
 
@@ -192,6 +195,8 @@ theorem step_refl : {s : Srt} → (t : Ty s) → Step E (fun _ => Eq) t t
       · exact (step_refl ρ).fields l'
   | _, .pre τ => .pre (step_refl τ)
   | _, .proj _ _ => .proj
+  | _, .missing => .missing
+  | _, .nil => .row fun _ => .missing
 
 theorem Sub.refl {s : Srt} {t : Ty s} : Sub E t t :=
   Sub.coind (fun _ => Eq) (by rintro _ x y rfl; exact step_refl x) rfl
@@ -250,6 +255,7 @@ theorem cut_right {s : Srt} {y z : Ty s} (h : Step E R y z) :
   | proj => intro _ _ hp; cases hp with
     | atom => exact .proj
     | projDefR hl _ => exact (Step.projDefR hl).toComp
+  | missing => intro _ _ hp; cases hp with | atom => exact .missing
   | unionL h₁ h₂ _ _ => intro _ _ hp; cases hp with
     | atom h => simp [Ty.IsAtom] at h
     | unionR₁ ih => exact ih _ h₁
@@ -287,6 +293,7 @@ theorem cut_nr {s : Srt} {x y : Ty s} (hl : Step E R x y) :
   | gvar => intro hs z hr; exact cut_right hr hs (.atom trivial)
   | prim => intro hs z hr; exact cut_right hr hs (.atom trivial)
   | proj => intro hs z hr; exact cut_right hr hs (.atom trivial)
+  | missing => intro hs z hr; exact cut_right hr hs (.atom trivial)
   | unionL _ _ ih₁ ih₂ => intro hs z hr; exact .unionL (ih₁ hs z hr) (ih₂ hs z hr)
   | unionR₁ _ ih => intro hs z hr; exact cut_right hr hs (.unionR₁ (ih hs))
   | unionR₂ _ ih => intro hs z hr; exact cut_right hr hs (.unionR₂ (ih hs))
@@ -331,6 +338,61 @@ theorem not_abs_le_pre {τ : Ty .ty} : ¬ Sub E Ty.abs (.pre τ) := fun h => by
 theorem not_abs_le_of_le_pre {θ : Ty .field} {τ : Ty .ty} (h : Sub E θ (.pre τ)) :
     ¬ Sub E Ty.abs θ :=
   fun h' => not_abs_le_pre (h'.trans h)
+
+/-! ## The field lattice: `pre τ ≤ opt τ`, `missing ≤ opt τ`, `opt τ ≤ Abs`
+
+`missing` is the field that is definitely absent, and an optional field is
+the union `opt τ = pre τ ∪ missing`, so its rules are those of unions. A
+field that is or may be missing is not below a present one, a field that is
+or may be present is not below `missing`, and `Abs` (no guarantee) is below
+neither `missing` nor an optional field. -/
+
+theorem pre_le_opt {τ : Ty .ty} : Sub E (.pre τ) (Ty.opt τ) :=
+  Sub.of_step (.unionR₁ (Sub.refl (t := Ty.pre τ)).step)
+
+theorem missing_le_opt {τ : Ty .ty} : Sub E .missing (Ty.opt τ) :=
+  Sub.of_step (.unionR₂ .missing)
+
+theorem opt_le_abs {τ : Ty .ty} : Sub E (Ty.opt τ) Ty.abs := Sub.top
+
+theorem missing_le_abs : Sub E .missing Ty.abs := Sub.top
+
+/-- `opt` is monotone. -/
+theorem opt_le_opt {τ τ' : Ty .ty} (h : Sub E τ τ') : Sub E (Ty.opt τ) (Ty.opt τ') :=
+  Sub.of_step (.unionL (.unionR₁ (.pre h.step)) (.unionR₂ .missing))
+
+/-- A present field below an optional one: `pre τ ≤ opt τ'` when `τ ≤ τ'`. -/
+theorem pre_le_opt_of_le {τ τ' : Ty .ty} (h : Sub E τ τ') : Sub E (.pre τ) (Ty.opt τ') :=
+  Sub.of_step (.unionR₁ (.pre h.step))
+
+/-- `missing ≰ pre τ`: a missing field does not satisfy a present one. -/
+theorem not_missing_le_pre {τ : Ty .ty} : ¬ Sub E .missing (.pre τ) := fun h => by
+  cases h.step
+
+/-- `pre τ ≰ missing`: a present field is not missing. -/
+theorem not_pre_le_missing {τ : Ty .ty} : ¬ Sub E (.pre τ) .missing := fun h => by
+  cases h.step
+
+/-- `opt τ ≰ pre σ`: an optional field does not satisfy a present one. -/
+theorem not_opt_le_pre {τ σ : Ty .ty} : ¬ Sub E (Ty.opt τ) (.pre σ) := fun h => by
+  cases h.step with
+  | unionL _ h₂ => cases h₂
+
+/-- `opt τ ≰ missing`. -/
+theorem not_opt_le_missing {τ : Ty .ty} : ¬ Sub E (Ty.opt τ) .missing := fun h => by
+  cases h.step with
+  | unionL h₁ _ => cases h₁
+
+/-- `Abs ≰ missing`: a field nothing is known about is not known to be
+missing. -/
+theorem not_abs_le_missing : ¬ Sub E Ty.abs .missing := fun h => by
+  cases h.step
+
+/-- `Abs ≰ opt τ`: a forgotten field cannot be passed as an optional one. -/
+theorem not_abs_le_opt {τ : Ty .ty} : ¬ Sub E Ty.abs (Ty.opt τ) := fun h => by
+  cases h.step with
+  | unionR₁ h => cases h
+  | unionR₂ h => cases h
 
 /-! ## Coinduction up to transitivity -/
 
@@ -410,7 +472,7 @@ theorem field_in_compound_tail :
 theorem bottom_tail : Sub E (.rcd .bot) (.rcd (.cons "x" (.pre int) .top)) :=
   Sub.of_step (.rcd (Sub.row fun _ => Sub.bot))
 
-/-- `{} ≰ {x: int}`: the field `x` of the empty record is `Abs`. -/
+/-- `{..} ≰ {x: int, ..}`: the field `x` of the top record is `Abs`. -/
 theorem not_empty_le_field : ¬ Sub E (.rcd .top) (.rcd (.cons "x" (.pre int) .top)) := by
   intro h
   cases h.step with
@@ -418,6 +480,43 @@ theorem not_empty_le_field : ¬ Sub E (.rcd .top) (.rcd (.cons "x" (.pre int) .t
     have := hr.fields "x"
     simp only [Ty.field, ite_true] at this
     exact not_abs_le_pre this
+
+/-- Width subtyping is kept: the empty row is below the top row, so a closed
+record is below the open one with the same fields. -/
+theorem nil_le_top : Sub E Ty.nil (.top : Ty .row) := Sub.top
+
+/-- `{x: int} ≤ {x: int, y?: int}`: an optional field can be left out. -/
+theorem closed_le_optional :
+    Sub E (.rcd (.cons "x" (.pre int) .nil))
+        (.rcd (.cons "x" (.pre int) (.cons "y" (Ty.opt int) .nil))) := by
+  refine Sub.of_step (.rcd (Sub.row fun l => ?_))
+  by_cases hx : l = "x"
+  · subst hx; simp only [Ty.field, ite_true]; exact Sub.refl
+  · by_cases hy : l = "y"
+    · subst hy
+      simp only [Ty.field, show ¬ "x" = "y" by decide, ite_true, ite_false]
+      exact missing_le_opt
+    · simp only [Ty.field, Ne.symm hx, Ne.symm hy, ite_false]; exact Sub.refl
+
+/-- `{x: int, z: int} ≰ {x: int}`: a closed record has no other fields. -/
+theorem not_extra_le_closed :
+    ¬ Sub E (.rcd (.cons "x" (.pre int) (.cons "z" (.pre int) .nil)))
+        (.rcd (.cons "x" (.pre int) .nil)) := by
+  intro h
+  cases h.step with
+  | rcd hr =>
+    have := hr.fields "z"
+    simp only [Ty.field, show ¬ "x" = "z" by decide, ite_true, ite_false] at this
+    exact not_pre_le_missing this
+
+/-- `{..} ≰ {}`: a record that may have other fields is not closed. -/
+theorem not_top_le_nil : ¬ Sub E (.rcd .top) (.rcd .nil) := by
+  intro h
+  cases h.step with
+  | rcd hr =>
+    have := hr.fields "x"
+    simp only [Ty.field] at this
+    exact not_abs_le_missing this
 
 end Rows
 

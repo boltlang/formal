@@ -23,14 +23,14 @@ Unions, intersections, records
 
   $ boltcore --compare "int" "int ∨ bool"
   int is strictly more general than int ∨ bool
-  $ boltcore --compare "{x: int, y: int}" "{x: int}"
-  {x: int, y: int} is strictly more general than {x: int}
+  $ boltcore --compare "{x: int, y: int, ..}" "{x: int, ..}"
+  {x: int, y: int, ..} is strictly more general than {x: int, ..}
   $ boltcore --compare "bool -> 'a -> 'a -> 'a" "bool -> 'a -> 'b -> 'a ∨ 'b"
   bool -> 'a -> 'a -> 'a is equivalent to bool -> 'a -> 'b -> 'a ∨ 'b
   $ boltcore --compare "(int -> int) ∧ (bool -> bool) -> ⊤" "(int ∨ bool -> int ∧ bool) -> ⊤"
   (int -> int) ∧ (bool -> bool) -> ⊤ is equivalent to (int ∨ bool -> int ∧ bool) -> ⊤
-  $ boltcore --compare "{x: int} ∧ {y: bool} -> ⊤" "{x: int, y: bool} -> ⊤"
-  {x: int} ∧ {y: bool} -> ⊤ is equivalent to {x: int, y: bool} -> ⊤
+  $ boltcore --compare "{x: int, ..} ∧ {y: bool, ..} -> ⊤" "{x: int, y: bool, ..} -> ⊤"
+  {x: int, ..} ∧ {y: bool, ..} -> ⊤ is equivalent to {x: int, y: bool, ..} -> ⊤
 
 The two simplified forms of `twice` are equivalent (see README)
 
@@ -45,8 +45,8 @@ Recursive types: unrolling preserves meaning
   (⊤ -> 'a as 'a) is equivalent to ⊤ -> ⊤ -> (⊤ -> 'a as 'a)
   $ boltcore --compare "({head: int, tail: 'a} as 'a) -> int" "{head: int, tail: {head: int, tail: ({head: int, tail: 'a} as 'a)}} -> int"
   ({head: int, tail: 'a} as 'a) -> int is equivalent to {head: int, tail: {head: int, tail: ({head: int, tail: 'a} as 'a)}} -> int
-  $ boltcore --compare "({head: int, tail: 'a} as 'a) -> int" "{head: int} -> int"
-  ({head: int, tail: 'a} as 'a) -> int is strictly less general than {head: int} -> int
+  $ boltcore --compare "({head: int, tail: 'a, ..} as 'a) -> int" "{head: int, ..} -> int"
+  ({head: int, tail: 'a, ..} as 'a) -> int is strictly less general than {head: int, ..} -> int
   $ boltcore --compare "(int -> 'a as 'a)" "(int -> int -> 'b as 'b)"
   (int -> 'a as 'a) is equivalent to (int -> int -> 'a as 'a)
 
@@ -89,7 +89,8 @@ A mismatch is reported with the direction of the difference
   [1]
 
 Rows: `{fields | tail}`; inside braces `|` starts the row tail, so unions in
-field types use `∨`. `Abs` is the top field ("no guarantee").
+field types use `∨`. `Abs` is the top field ("no guarantee"). `{x: int, ..}`
+is open: its tail is the top row.
 
   $ boltcore --compare "{y: Abs | 'a} -> {y: int | 'a}" "{x: int} -> {x: int, y: int}"
   {y: Abs | 'a} -> {y: int | 'a} is strictly more general than {x: int} -> {x: int, y: int}
@@ -102,16 +103,70 @@ y, and `{| 'a}` (in which nothing lists y) means `{y: Abs | 'a}`.
   {y: Abs | 'a} -> {y: int | 'a} is strictly more general than {y: Abs | 'a} -> {| 'a}
   $ boltcore --compare "{x: int | 'a}" "{x: int}"
   {x: int | 'a} is strictly more general than {x: int}
-  $ boltcore --compare "{x: int, y: Abs}" "{x: int}"
-  {x: int, y: Abs} is equivalent to {x: int}
-  $ boltcore --compare "{x: Abs}" "{}"
-  {x: Abs} is equivalent to {}
-  $ boltcore --compare "{x: int} -> ⊤" "{x: int | 'a} -> ⊤"
-  {x: int} -> ⊤ is equivalent to {x: int | 'a} -> ⊤
+  $ boltcore --compare "{x: int, y: Abs, ..}" "{x: int, ..}"
+  {x: int, y: Abs, ..} is equivalent to {x: int, ..}
+  $ boltcore --compare "{x: Abs, ..}" "{..}"
+  {x: Abs, ..} is equivalent to {..}
+  $ boltcore --compare "{x: int, ..} -> ⊤" "{x: int | 'a} -> ⊤"
+  {x: int, ..} -> ⊤ is equivalent to {x: int | 'a} -> ⊤
   $ boltcore --compare "{x: int ∨ bool}" "{x: int | 'a}"
   {x: int ∨ bool} is strictly less general than {x: int | 'a}
-  $ boltcore --compare "{n: int | 'b ∧ {done: bool}} -> ⊤" "{n: int, done: bool} -> ⊤"
-  {n: int | 'a ∧ {done: bool}} -> ⊤ is equivalent to {n: int, done: bool} -> ⊤
+  $ boltcore --compare "{n: int | 'b ∧ {done: bool, ..}} -> ⊤" "{n: int, done: bool, ..} -> ⊤"
+  {n: int | 'a ∧ {done: bool, ..}} -> ⊤ is equivalent to {n: int, done: bool, ..} -> ⊤
+
+Closed and open records: `{x: int}` has no other fields
+
+  $ boltcore --compare "{x: int, y: int}" "{x: int}"
+  {x: int, y: int} is incomparable to {x: int}
+  $ boltcore --compare "{x: int}" "{x: int, ..}"
+  {x: int} is strictly more general than {x: int, ..}
+  $ boltcore --compare "{x: int} -> ⊤" "{x: int, ..} -> ⊤"
+  {x: int} -> ⊤ is strictly less general than {x: int, ..} -> ⊤
+  $ boltcore --compare "{x: int | 'a} -> {| 'a}" "{x: int} -> {}"
+  {x: int | 'a} -> {| 'a} is strictly more general than {x: int} -> {}
+  $ boltcore --compare "{x: int, y: Missing}" "{x: int}"
+  {x: int, y: Missing} is equivalent to {x: int}
+
+`Abs` in a parameter does not ask for the field; a type variable does
+
+  $ boltcore --compare "{x: Abs, ..} -> int" "{x: 'a, ..} -> int"
+  {x: Abs, ..} -> int is strictly more general than {x: 'a, ..} -> int
+
+Optional fields: `Pre τ ≤ Opt τ`, `Missing ≤ Opt τ`, `Opt τ ≤ Abs`
+
+  $ boltcore --compare "{y: int}" "{y?: int}"
+  {y: int} is strictly more general than {y?: int}
+  $ boltcore --compare "{}" "{y?: int}"
+  {} is strictly more general than {y?: int}
+  $ boltcore --compare "{y?: int}" "{y?: int, ..}"
+  {y?: int} is strictly more general than {y?: int, ..}
+  $ boltcore --compare "{y?: int, ..}" "{..}"
+  {y?: int, ..} is strictly more general than {..}
+  $ boltcore --compare "{y?: int, ..} -> int" "{y: int, ..} -> int"
+  {y?: int, ..} -> int is strictly more general than {y: int, ..} -> int
+  $ boltcore --compare "{y?: int, ..} -> int" "{} -> int"
+  {y?: int, ..} -> int is strictly more general than {} -> int
+  $ boltcore --compare "{y?: int, ..} -> int" "{..} -> int"
+  {y?: int, ..} -> int is strictly less general than {..} -> int
+  $ boltcore --compare "{y?: int, ..} -> int" "{y: bool} -> int"
+  {y?: int, ..} -> int is incomparable to {y: bool} -> int
+
+The lattice equations of fields that simplification uses
+
+  $ boltcore --compare "{x: int} ∨ {}" "{x?: int}"
+  {x: int} ∨ {} is equivalent to {x?: int}
+  $ boltcore --compare "{x: int} ∨ {y: bool}" "{x?: int, y?: bool}"
+  {x: int} ∨ {y: bool} is equivalent to {x?: int, y?: bool}
+  $ boltcore --compare "{x: int, ..} ∧ {x?: bool, ..} -> int" "{x: int ∧ bool, ..} -> int"
+  {x: int, ..} ∧ {x?: bool, ..} -> int is equivalent to {x: int ∧ bool, ..} -> int
+  $ boltcore --compare "{x?: int, ..} ∧ {x?: bool, ..} -> int" "{x?: int ∧ bool, ..} -> int"
+  {x?: int, ..} ∧ {x?: bool, ..} -> int is equivalent to {x?: int ∧ bool, ..} -> int
+  $ boltcore --compare "{x?: int, ..} ∧ {x: Missing, ..} -> int" "{x: Missing, ..} -> int"
+  {x?: int, ..} ∧ {x: Missing, ..} -> int is equivalent to {x: Missing, ..} -> int
+  $ boltcore --compare "{y: int ∧ Missing, ..} -> int" "{y: Missing, ..} -> int"
+  {y: int ∧ Missing, ..} -> int is strictly less general than {y: Missing, ..} -> int
+  $ boltcore --compare "{x?: ⊥}" "{}"
+  {x?: ⊥} is equivalent to {}
 
 The meaning of unguarded recursion (from raw coalescing of variable cycles)
 is the neutral element of its context

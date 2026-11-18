@@ -38,10 +38,17 @@ open State
 /-- A constraint is accepted by the log: reflexive, or logged. -/
 def Logged (s : State) (a b : SType) : Prop := a = b ∨ (a, b) ∈ s.log
 
-/-- A field constraint: `Abs` is the top field; otherwise both are present. -/
+/-- A field constraint (mirrors `ConstrainField`): `Abs` is the top field,
+`Missing` and a present field are below an optional one. A field is below
+itself (the fields of a row expansion are those it was asked for). -/
 inductive FieldR (R : SType → SType → Prop) : SType → SType → Prop where
+  | refl : FieldR R f f
   | toAbs : FieldR R f .abs
-  | pre : f₀ ≠ .abs → f₁ ≠ .abs → R f₀ f₁ → FieldR R f₀ f₁
+  | misMis : FieldR R .missing .missing
+  | misOpt : FieldR R .missing (.opt τ)
+  | optOpt : τ₀ ≠ .abs → R τ₀ τ₁ → FieldR R (.opt τ₀) (.opt τ₁)
+  | preOpt : f₀.IsPre → R f₀ τ₁ → FieldR R f₀ (.opt τ₁)
+  | pre : f₀.IsPre → f₁.IsPre → R f₀ f₁ → FieldR R f₀ f₁
 
 /-- Two field lists with the same labels, related field by field. -/
 inductive SFields.Rel (Q : SType → SType → Prop) : SFields → SFields → Prop where
@@ -61,6 +68,7 @@ inductive ExpandG (σ : Nat → Bounds) (R : SType → SType → Prop) :
     SType → SFields → SType → Prop where
   | none : ExpandG σ R t .nil t
   | abs : ms ≠ .nil → (∀ p ∈ ms.absPairs, FieldR R p.1 p.2) → ExpandG σ R .abs ms .abs
+  | nil : ms ≠ .nil → (∀ p ∈ ms.misPairs, FieldR R p.1 p.2) → ExpandG σ R .nil ms .nil
   | varAbsent (K : List String) : (∀ p ∈ (ms.absentIn K).absPairs, FieldR R p.1 p.2) →
       ms.presentIn K = .nil → ExpandG σ R (.var v) ms (.var v)
   | var (K : List String) : ms ≠ .nil → (∀ p ∈ (ms.absentIn K).absPairs, FieldR R p.1 p.2) →
@@ -75,6 +83,11 @@ inductive GStep (σ : Nat → Bounds) (R : SType → SType → Prop) : SType →
   | arrow : R l₁ l₀ → R r₀ r₁ → GStep σ R (.arrow l₀ r₀) (.arrow l₁ r₁)
   | absRecord : (∀ p ∈ fs.absPairs, FieldR R p.1 p.2) → R .abs t →
       GStep σ R .abs (.record fs t)
+  | nilRecord : (∀ p ∈ fs.misPairs, FieldR R p.1 p.2) → R .nil t →
+      GStep σ R .nil (.record fs t)
+  | recordNil : rowView (.record fa ta) = (fs₀, t₀) →
+      (∀ p ∈ fs₀.toMisPairs, FieldR R p.1 p.2) → R t₀ .nil →
+      GStep σ R (.record fa ta) .nil
   | record : rowView (.record fa ta) = (fs₀, t₀) → rowView (.record fb tb) = (fs₁, t₁) →
       (∀ p ∈ fs₀.common fs₁, FieldR R p.1 p.2) →
       ExpandG σ R t₀ (fs₀.missing fs₁) t₀' →
@@ -166,6 +179,8 @@ theorem Constrain.grows : Constrain s a b s' → Grows s s'
   | .arrow _ h₁ h₂ => Grows.remember.trans (h₁.grows.trans h₂.grows)
   | .absR _ => .remember
   | .absRecord _ h₁ h₂ => Grows.remember.trans (h₁.grows.trans h₂.grows)
+  | .nilRecord _ h₁ h₂ => Grows.remember.trans (h₁.grows.trans h₂.grows)
+  | .recordNil _ _ h₁ h₂ => Grows.remember.trans (h₁.grows.trans h₂.grows)
   | .record _ _ _ h₁ h₂ h₃ => Grows.remember.trans (h₁.grows.trans (h₂.grows.trans h₃.grows))
   | .varL _ _ h => (Grows.remember.trans .addUpper).trans h.grows
   | .varR _ _ h => (Grows.remember.trans .addLower).trans h.grows
@@ -175,8 +190,8 @@ theorem ConstrainEach.grows : ConstrainEach s ps s' → Grows s s'
   | .cons h₁ h₂ => h₁.grows.trans h₂.grows
 
 theorem ConstrainField.grows : ConstrainField s a b s' → Grows s s'
-  | .toAbs => .refl
-  | .pre _ _ h => h.grows
+  | .toAbs | .misMis | .misOpt => .refl
+  | .optOpt _ h | .preOpt _ h | .pre _ _ h => h.grows
 
 theorem FieldsEach.grows : FieldsEach s ps s' → Grows s s'
   | .nil => .refl
@@ -184,7 +199,7 @@ theorem FieldsEach.grows : FieldsEach s ps s' → Grows s s'
 
 theorem Expand.grows : Expand s t ms t' s' → Grows s s'
   | .none => .refl
-  | .abs _ h => h.grows
+  | .abs _ h | .nil _ h => h.grows
   | .allAbsent _ _ h => h.grows
   | .memo _ _ h₁ _ h₂ => h₁.grows.trans h₂.grows
   | .fresh _ _ h₁ _ _ h₂ => h₁.grows.trans (Grows.expand.trans h₂.grows)
@@ -197,7 +212,12 @@ theorem Logged.mono (g : Grows s s') : Logged s a b → Logged s' a b
   | .inr h => .inr (g.log _ h)
 
 theorem FieldR.mono (hR : ∀ x y, R x y → R' x y) : FieldR R a b → FieldR R' a b
+  | .refl => .refl
   | .toAbs => .toAbs
+  | .misMis => .misMis
+  | .misOpt => .misOpt
+  | .optOpt h₀ h => .optOpt h₀ (hR _ _ h)
+  | .preOpt h₀ h => .preOpt h₀ (hR _ _ h)
   | .pre h₀ h₁ h => .pre h₀ h₁ (hR _ _ h)
 
 theorem SFields.Rel.mono {Q Q' : SType → SType → Prop} (hQ : ∀ x y, Q x y → Q' x y) :
@@ -209,6 +229,7 @@ theorem ExpandG.mono (hσ : ∀ v x, x ∈ (σ v).upper → x ∈ (σ' v).upper)
     (hR : ∀ x y, R x y → R' x y) : ExpandG σ R t ms t' → ExpandG σ' R' t ms t'
   | .none => .none
   | .abs hm h => .abs hm (fun p hp => (h p hp).mono hR)
+  | .nil hm h => .nil hm (fun p hp => (h p hp).mono hR)
   | .varAbsent K h hp => .varAbsent K (fun p q => (h p q).mono hR) hp
   | .var K hm h hp hu hrel =>
     .var K hm (fun p q => (h p q).mono hR) hp (hσ _ _ hu) (hrel.mono fun _ _ h => h.mono hR)
@@ -218,6 +239,9 @@ theorem GStep.mono (g : Grows s s') :
   | .absR => .absR
   | .arrow h₁ h₂ => .arrow (h₁.mono g) (h₂.mono g)
   | .absRecord hf ht => .absRecord (fun p hp => (hf p hp).mono fun _ _ => Logged.mono g) (ht.mono g)
+  | .nilRecord hf ht => .nilRecord (fun p hp => (hf p hp).mono fun _ _ => Logged.mono g) (ht.mono g)
+  | .recordNil h₀ hf ht =>
+    .recordNil h₀ (fun p hp => (hf p hp).mono fun _ _ => Logged.mono g) (ht.mono g)
   | .record h₀ h₁ hf he ht =>
     .record h₀ h₁ (fun p hp => (hf p hp).mono fun _ _ => Logged.mono g)
       (he.mono g.upper fun _ _ => Logged.mono g) (ht.mono g)
@@ -287,10 +311,7 @@ theorem Constrain.installs (h : Constrain s (.var v) b s') (hc : CacheInLog s) (
 
 theorem SFields.Rel.refl_logged {s : State} : ∀ fs : SFields, SFields.Rel (FieldR (Logged s)) fs fs
   | .nil => .nil
-  | .cons _ f fs => .cons (by
-      by_cases h : f = .abs
-      · subst h; exact .toAbs
-      · exact .pre h h (.inl rfl)) (SFields.Rel.refl_logged fs)
+  | .cons _ _ fs => .cons .refl (SFields.Rel.refl_logged fs)
 
 mutual
 theorem Constrain.logged : Constrain s a b s' → CacheInLog s → CacheInLog s' ∧ Logged s' a b
@@ -302,6 +323,14 @@ theorem Constrain.logged : Constrain s a b s' → CacheInLog s → CacheInLog s'
     ⟨r₂.1, remember_logged.mono (h₁.grows.trans h₂.grows)⟩
   | .absR _, hc => ⟨hc.remember, remember_logged⟩
   | .absRecord _ h₁ h₂, hc =>
+    have r₁ := h₁.logged hc.remember
+    have r₂ := h₂.logged r₁.1
+    ⟨r₂.1, remember_logged.mono (h₁.grows.trans h₂.grows)⟩
+  | .nilRecord _ h₁ h₂, hc =>
+    have r₁ := h₁.logged hc.remember
+    have r₂ := h₂.logged r₁.1
+    ⟨r₂.1, remember_logged.mono (h₁.grows.trans h₂.grows)⟩
+  | .recordNil _ _ h₁ h₂, hc =>
     have r₁ := h₁.logged hc.remember
     have r₂ := h₂.logged r₁.1
     ⟨r₂.1, remember_logged.mono (h₁.grows.trans h₂.grows)⟩
@@ -332,6 +361,10 @@ theorem ConstrainEach.logged :
 theorem ConstrainField.logged :
     ConstrainField s a b s' → CacheInLog s → CacheInLog s' ∧ FieldR (Logged s') a b
   | .toAbs, hc => ⟨hc, .toAbs⟩
+  | .misMis, hc => ⟨hc, .misMis⟩
+  | .misOpt, hc => ⟨hc, .misOpt⟩
+  | .optOpt h₀ h, hc => have r := h.logged hc; ⟨r.1, .optOpt h₀ r.2⟩
+  | .preOpt h₀ h, hc => have r := h.logged hc; ⟨r.1, .preOpt h₀ r.2⟩
   | .pre h₀ h₁ h, hc => have r := h.logged hc; ⟨r.1, .pre h₀ h₁ r.2⟩
 
 theorem FieldsEach.logged :
@@ -350,6 +383,7 @@ theorem Expand.logged :
     Expand s t ms t' s' → CacheInLog s → CacheInLog s' ∧ ExpandG s'.bounds (Logged s') t ms t'
   | .none, hc => ⟨hc, .none⟩
   | .abs hm h, hc => have r := h.logged hc; ⟨r.1, .abs hm r.2⟩
+  | .nil hm h, hc => have r := h.logged hc; ⟨r.1, .nil hm r.2⟩
   | .allAbsent (s := s₀) (v := v) _ hp h, hc =>
     have r := h.logged hc; ⟨r.1, .varAbsent (s₀.kind v) r.2 hp⟩
   | .memo (s := s₀) (v := v) hm hp h₁ _ h₂, hc =>
@@ -410,6 +444,16 @@ theorem Constrain.just : Constrain s a b s' → CacheInLog s → JustExcept s P 
     have j₂ := h₂.just r₁.1 (h₁.just hc.remember h.remember)
     j₂.close (.absRecord (fun p hp => (r₁.2 p hp).mono fun _ _ => Logged.mono h₂.grows)
       (h₂.logged r₁.1).2)
+  | .nilRecord _ h₁ h₂, hc, h =>
+    have r₁ := h₁.logged hc.remember
+    have j₂ := h₂.just r₁.1 (h₁.just hc.remember h.remember)
+    j₂.close (.nilRecord (fun p hp => (r₁.2 p hp).mono fun _ _ => Logged.mono h₂.grows)
+      (h₂.logged r₁.1).2)
+  | .recordNil _ e₀ h₁ h₂, hc, h =>
+    have r₁ := h₁.logged hc.remember
+    have j₂ := h₂.just r₁.1 (h₁.just hc.remember h.remember)
+    j₂.close (.recordNil e₀ (fun p hp => (r₁.2 p hp).mono fun _ _ => Logged.mono h₂.grows)
+      (h₂.logged r₁.1).2)
   | .record _ e₀ e₁ h₁ h₂ h₃, hc, h =>
     have r₁ := h₁.logged hc.remember
     have r₂ := h₂.logged r₁.1
@@ -433,8 +477,8 @@ theorem ConstrainEach.just :
 
 theorem ConstrainField.just :
     ConstrainField s a b s' → CacheInLog s → JustExcept s P → JustExcept s' P
-  | .toAbs, _, h => h
-  | .pre _ _ h, hc, hj => h.just hc hj
+  | .toAbs, _, h | .misMis, _, h | .misOpt, _, h => h
+  | .optOpt _ h, hc, hj | .preOpt _ h, hc, hj | .pre _ _ h, hc, hj => h.just hc hj
 
 theorem FieldsEach.just :
     FieldsEach s ps s' → CacheInLog s → JustExcept s P → JustExcept s' P
@@ -443,7 +487,7 @@ theorem FieldsEach.just :
 
 theorem Expand.just : Expand s t ms t' s' → CacheInLog s → JustExcept s P → JustExcept s' P
   | .none, _, h => h
-  | .abs _ h, hc, hj => h.just hc hj
+  | .abs _ h, hc, hj | .nil _ h, hc, hj => h.just hc hj
   | .allAbsent _ _ h, hc, hj => h.just hc hj
   | .memo _ _ h₁ _ h₂, hc, hj => h₂.just (h₁.logged hc).1 (h₁.just hc hj)
   | .fresh _ _ h₁ _ _ h₂, hc, hj =>
@@ -494,7 +538,7 @@ theorem Constrain.consist :
   | .arrow _ h₁ h₂, hc, h =>
     h₂.consist (h₁.logged hc.remember).1 (h₁.consist hc.remember h.remember)
   | .absR _, _, h => h.remember
-  | .absRecord _ h₁ h₂, hc, h =>
+  | .absRecord _ h₁ h₂, hc, h | .nilRecord _ h₁ h₂, hc, h | .recordNil _ _ h₁ h₂, hc, h =>
     h₂.consist (h₁.logged hc.remember).1 (h₁.consist hc.remember h.remember)
   | .record _ _ _ h₁ h₂ h₃, hc, h =>
     have r₁ := h₁.logged hc.remember
@@ -519,8 +563,8 @@ theorem ConstrainEach.consist :
 
 theorem ConstrainField.consist :
     ConstrainField s a b s' → CacheInLog s → ConsExcept s P → ConsExcept s' P
-  | .toAbs, _, h => h
-  | .pre _ _ h, hc, hs => h.consist hc hs
+  | .toAbs, _, h | .misMis, _, h | .misOpt, _, h => h
+  | .optOpt _ h, hc, hs | .preOpt _ h, hc, hs | .pre _ _ h, hc, hs => h.consist hc hs
 
 theorem FieldsEach.consist :
     FieldsEach s ps s' → CacheInLog s → ConsExcept s P → ConsExcept s' P
@@ -530,7 +574,7 @@ theorem FieldsEach.consist :
 theorem Expand.consist :
     Expand s t ms t' s' → CacheInLog s → ConsExcept s P → ConsExcept s' P
   | .none, _, h => h
-  | .abs _ h, hc, hs => h.consist hc hs
+  | .abs _ h, hc, hs | .nil _ h, hc, hs => h.consist hc hs
   | .allAbsent _ _ h, hc, hs => h.consist hc hs
   | .memo _ _ h₁ _ h₂, hc, hs => h₂.consist (h₁.logged hc).1 (h₁.consist hc hs)
   | .fresh _ _ h₁ _ _ h₂, hc, hs => h₂.consist (h₁.logged hc).1 (h₁.consist hc hs).expand
@@ -563,6 +607,7 @@ theorem TypeTerm.inv : TypeTerm Γ s t st s' → Inv s → Inv s'
   | .app _ h₁ h₂ hc, hi => (hc.sound (h₂.inv (h₁.inv hi.fresh))).1
   | .rcd h, hi => h.inv hi
   | .sel _ h hc, hi => (hc.sound (h.inv hi.fresh)).1
+  | .selOr _ h hc hd hc', hi => (hc'.sound (hd.inv (hc.sound (h.inv hi.fresh)).1)).1
   | .ext _ h₁ h₂ _ hc, hi => (hc.sound (h₂.inv (h₁.inv hi)).fresh).1
   | .extNil h, hi => h.inv hi
   | .letIn h₁ h₂, hi => h₂.inv (h₁.inv hi)

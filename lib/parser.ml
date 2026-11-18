@@ -7,14 +7,16 @@
     expr    ::= 'fun' ident { ident } '->' expr
               | 'let' ['rec'] ident { ident } '=' expr 'in' expr
               | 'if' expr 'then' expr 'else' expr
-              | app
+              | app [ '??' expr ]
     app     ::= sel { sel } [ fun-or-if-expr ]
     sel     ::= atom { '.' ident | 'with' '{' [ field { ';' field } [';'] ] '}' }
     atom    ::= int | ident | '(' expr ')' | '{' [ field { ';' field } [';'] ] '}'
     field   ::= ident '=' expr
     v}
 
-    The fields of a [with] have distinct labels.
+    The fields of a [with] have distinct labels. The left operand of [??]
+    is a field selection: [r.a ?? d] is the field [a] of [r] if it is
+    present, and [d] otherwise. [??] binds weaker than application.
 
     [let f x y = e] is sugar for [let f = fun x -> fun y -> e], and
     [if c then a else b] for [if c a b]. Line comments start with [//]. *)
@@ -27,7 +29,7 @@ type token =
   | INT of int
   | IDENT of string
   | FUN | LET | REC | IN | IF | THEN | ELSE | WITH
-  | ARROW | EQ | SEMI | DOT
+  | ARROW | EQ | SEMI | DOT | QQ
   | LPAREN | RPAREN | LBRACE | RBRACE
   | EOF
 
@@ -36,7 +38,7 @@ let show_token = function
   | IDENT s -> s
   | FUN -> "fun" | LET -> "let" | REC -> "rec" | IN -> "in"
   | IF -> "if" | THEN -> "then" | ELSE -> "else" | WITH -> "with"
-  | ARROW -> "->" | EQ -> "=" | SEMI -> ";" | DOT -> "."
+  | ARROW -> "->" | EQ -> "=" | SEMI -> ";" | DOT -> "." | QQ -> "??"
   | LPAREN -> "(" | RPAREN -> ")" | LBRACE -> "{" | RBRACE -> "}"
   | EOF -> "end of input"
 
@@ -67,6 +69,7 @@ let tokenize (src : string) : (token * (int * int)) array =
           while !j < n && src.[!j] <> '\n' do incr j done;
           loop !j
       | '-' when i + 1 < n && src.[i + 1] = '>' -> emit ARROW 2
+      | '?' when i + 1 < n && src.[i + 1] = '?' -> emit QQ 2
       | '=' -> emit EQ 1
       | ';' -> emit SEMI 1
       | '.' -> emit DOT 1
@@ -125,7 +128,14 @@ let parse_program (src : string) : item list =
         expect ELSE;
         let b = expr () in
         App (App (App (Var "if", c), a), b)
-    | _ -> app ()
+    | _ -> (
+        let t = app () in
+        match (peek (), t) with
+        | QQ, Sel (obj, name) ->
+            advance ();
+            SelOr (obj, name, expr ())
+        | QQ, _ -> fail "the left operand of '??' must be a field selection"
+        | _ -> t)
   and let_head () =
     expect LET;
     let isrec = peek () = REC in
@@ -211,14 +221,21 @@ let parse_program (src : string) : item list =
     arrow ::= union [ '->' arrow ]
     union ::= inter { ('∨' | '|') inter }
     inter ::= atom { ('∧' | '&') atom }
-    atom  ::= tyvar | ident | 'Abs' | '⊤' | 'top' | '⊥' | 'bot' | '(' ty ')'
-            | '{' [ field { ',' field } ] [ '|' ty ] '}'
-    field ::= ident ':' ty
+    atom  ::= base { '?' }
+    base  ::= tyvar | ident | 'Abs' | 'Missing' | '⊤' | 'top' | '⊥' | 'bot'
+            | '(' ty ')'
+            | '{' [ field { ',' field } ] [ [','] '..' | '|' ty ] '}'
+    field ::= ident ['?'] ':' ty
     v}
 
     Type variables are written ['a], ['b1], ... Inside braces, ['|'] starts
     the row tail, so a union in a field type must use ['∨'] or parentheses;
-    elsewhere ['|'] is an ASCII spelling of ['∨']. [Abs] is the absent field
+    elsewhere ['|'] is an ASCII spelling of ['∨'].
+
+    A record type is closed unless it says otherwise: [{x: int}] has no
+    other fields, [{x: int, ..}] may have any, and [{x: int | 'a}] has those
+    of the row ['a]. [x?: τ] is an optional field ([τ?] away from a field),
+    [Missing] the field that is definitely absent, and [Abs] the top field
     (or the top row in tail position). *)
 
 type ty_token =
@@ -226,6 +243,7 @@ type ty_token =
   | T_IDENT of string
   | T_ARROW | T_OR | T_BAR | T_AND | T_TOP | T_BOT | T_AS
   | T_LPAREN | T_RPAREN | T_LBRACE | T_RBRACE | T_COLON | T_COMMA
+  | T_QUESTION | T_DOTDOT
   | T_EOF
 
 let show_ty_token = function
@@ -233,7 +251,8 @@ let show_ty_token = function
   | T_IDENT s -> s
   | T_ARROW -> "->" | T_OR -> "∨" | T_BAR -> "|" | T_AND -> "∧" | T_TOP -> "⊤" | T_BOT -> "⊥"
   | T_AS -> "as" | T_LPAREN -> "(" | T_RPAREN -> ")" | T_LBRACE -> "{"
-  | T_RBRACE -> "}" | T_COLON -> ":" | T_COMMA -> "," | T_EOF -> "end of input"
+  | T_RBRACE -> "}" | T_COLON -> ":" | T_COMMA -> "," | T_QUESTION -> "?"
+  | T_DOTDOT -> ".." | T_EOF -> "end of input"
 
 let tokenize_type (src : string) : (ty_token * int) array =
   let n = String.length src in
@@ -257,6 +276,8 @@ let tokenize_type (src : string) : (ty_token * int) array =
       | '}' -> emit T_RBRACE 1
       | ':' -> emit T_COLON 1
       | ',' -> emit T_COMMA 1
+      | '?' -> emit T_QUESTION 1
+      | '.' when has i ".." -> emit T_DOTDOT 2
       | _ when has i "∨" -> emit T_OR (String.length "∨")
       | _ when has i "∧" -> emit T_AND (String.length "∧")
       | _ when has i "⊤" -> emit T_TOP (String.length "⊤")
@@ -308,9 +329,14 @@ let parse_type (src : string) : Types.typ =
     while peek () = T_AND do advance (); t := Inter (!t, atom ()) done;
     !t
   and atom () =
+    let t = ref (base ()) in
+    while peek () = T_QUESTION do advance (); t := Optional !t done;
+    !t
+  and base () =
     match peek () with
     | T_VAR v -> advance (); TypeVariable v
-    | T_IDENT "Abs" -> advance (); Absent
+    | T_IDENT "Abs" -> advance (); AbsType
+    | T_IDENT "Missing" -> advance (); MissingType
     | T_IDENT s -> advance (); PrimitiveType s
     | T_TOP -> advance (); Top
     | T_BOT -> advance (); Bot
@@ -321,13 +347,21 @@ let parse_type (src : string) : Types.typ =
           match peek () with
           | T_IDENT n ->
               advance ();
+              let optional = peek () = T_QUESTION in
+              if optional then advance ();
               expect T_COLON;
               let t = ty ~bar:false () in
-              if peek () = T_COMMA then (advance (); (n, t) :: fields ()) else [ (n, t) ]
+              let f = (n, if optional then Optional t else t) in
+              if peek () = T_COMMA then (advance (); f :: fields ()) else [ f ]
           | _ -> []
         in
         let fs = fields () in
-        let tail = if peek () = T_BAR then (advance (); ty ()) else Absent in
+        let tail =
+          match peek () with
+          | T_BAR -> advance (); ty ()
+          | T_DOTDOT -> advance (); AbsType
+          | _ -> NilType
+        in
         expect T_RBRACE;
         RecordType (fs, tail)
     | _ -> fail "expected type"

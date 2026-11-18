@@ -14,6 +14,8 @@ inductive Term where
   | app : Term → Term → Term
   | rcd : List (String × Term) → Term
   | sel : Term → String → Term
+  /-- `t.l ?? d`: the field `l` of `t` if it is present, else `d`. -/
+  | selOr : Term → String → Term → Term
   /-- `t with {l = e; ...}`: extend or update fields. -/
   | ext : Term → List (String × Term) → Term
   | letIn : (isRec : Bool) → String → Term → Term → Term
