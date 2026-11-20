@@ -126,10 +126,12 @@ let infer_kinds (t : typ) : (string, SSet.t) Hashtbl.t =
 (** Kinds of the rigid variables of the current check. Reset by {!subsumes}. *)
 let rigid_kinds : (string, SSet.t) Hashtbl.t = Hashtbl.create 8
 
-(** The kind of an atomic tail. *)
-let tail_kind = function
+(** The kind of a tail: of an atomic one, or of a join of rigid row
+    variables ({!merge_rows}), which lacks the labels all of them lack. *)
+let rec tail_kind = function
   | Flex x -> x.fkind
   | Rigid n -> kind_of rigid_kinds n
+  | Union (t :: ts) -> List.fold_left (fun k t -> SSet.inter k (tail_kind t)) (tail_kind t) ts
   | _ -> SSet.empty
 
 let to_node ~flexible (t : typ) : node =
@@ -363,8 +365,22 @@ let expansion x labels =
 
 (** Merge the rows of a meet ([inter]) or join, when this is exact: every
     label missing from one row must be known there (its tail is [Absn] or
-    [Niln]), and the tails must combine into an atomic tail. *)
+    [Niln]), and the tails must combine: into an atomic tail, or, for a
+    join, into a join of rigid row variables. The simplifier merges
+    [{x: σ | ρ₁} ∨ {x: τ | ρ₂}] into [{x: σ ∨ τ | ρ₁ ∨ ρ₂}] ([Simplify.add_row]),
+    so the two rows have to be one row here too; only the right-hand side
+    has joins of rows, and its variables are rigid. *)
 let merge_rows ~inter rows =
+  (* the variables of a join of rigid row variables *)
+  let rec rigids = function
+    | Rigid n -> Some [ n ]
+    | Union (_ :: _ as ts) ->
+        List.fold_left
+          (fun acc t ->
+            match (acc, rigids t) with Some a, Some b -> Some (a @ b) | _ -> None)
+          (Some []) ts
+    | _ -> None
+  in
   let covers (fs, t) (gs, _) =
     t = Absn || t = Niln || List.for_all (fun (n, _) -> List.mem_assoc n fs) gs
   in
@@ -376,6 +392,11 @@ let merge_rows ~inter rows =
       | true, Union [], _ | true, _, Union [] -> Some (Union [])
       | false, Union [], t | false, t, Union [] -> Some t (* bottom is neutral in a join *)
       | false, Absn, _ | false, _, Absn -> Some Absn
+      | false, _, _ -> (
+          match (rigids t0, rigids t1) with
+          | Some a, Some b ->
+              Some (Union (List.map (fun n -> Rigid n) (List.sort_uniq String.compare (a @ b))))
+          | _ -> None)
       | _ -> None
   in
   let field f0 f1 =

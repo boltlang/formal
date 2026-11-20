@@ -118,6 +118,9 @@ type checker's expansion rule, with flexible row variables expanded and
 memoized per label set, and:
 
 - rows distribute over non-empty unions and intersections of tails;
+- a union of rows that list the same labels is one row, also over
+  different row variables: `{x: σ | 'a} ∨ {x: τ | 'b}` is
+  `{x: σ ∨ τ | 'a ∨ 'b}`, as the simplifier merges them;
 - rows that can't be merged, on the left against a closed row on the
   right, are compared field by field, and the right tail receives the
   *meet* of their remainders (committing to one left row could bind a

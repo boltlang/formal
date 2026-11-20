@@ -222,3 +222,17 @@ no known number of positional arguments, and no signature would take it
   - : (h: {*: [], x: int} ∨ {*: [int]} -> 'a) -> {a: 'a, b: 'a}
   $ boltcore --self-check -e 'fn (h) -> {a = h(1); b = h(true)}'
   - : (h: {*: [bool ∨ int]} -> 'a) -> {a: 'a, b: 'a}
+
+A union of rows over different row variables is one row over the union of
+the variables, when both list the same labels: the simplifier merges them,
+so the checker has to agree. With two extended records in the branches of an
+`if`, the simplified type then lets the two row variables be one
+
+  $ boltcore --compare "{x: bool | 'a} ∨ {x: int | 'b}" "{x: bool ∨ int | 'a ∨ 'b}"
+  {x: bool | 'a} ∨ {x: int | 'b} is equivalent to {x: bool ∨ int | 'a ∨ 'b}
+  $ boltcore --compare "{x: bool | 'a} ∨ {y: int | 'b}" "{x: bool, y: int | 'a ∨ 'b}"
+  {x: bool | 'a} ∨ {y: int | 'b} is strictly more general than {x: bool, y: int | 'a ∨ 'b}
+  $ boltcore --compare "(r: {x: Abs | 'a}) -> (s: {x: Abs | 'b}) -> {x: int | 'a}" "(r: {x: Abs | 'a}) -> (s: {x: Abs | 'b}) -> {x: int | 'a} ∨ {x: int | 'b}"
+  (r: {x: Abs | 'a}) -> (s: {x: Abs | 'b}) -> {x: int | 'a} is strictly more general than (r: {x: Abs | 'a}) -> (s: {x: Abs | 'b}) -> {x: int | 'a} ∨ {x: int | 'b}
+  $ boltcore --self-check -e 'fn (b, r, s) -> if b then r with {x = 1} else s with {x = true}'
+  - : (b: bool, r: {x: Abs | 'a}, s: {x: Abs | 'a}) -> {x: bool ∨ int | 'a}
