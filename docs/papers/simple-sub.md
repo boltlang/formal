@@ -68,7 +68,7 @@ Theorem 1 (soundness) through Lemma 2 (soundness of constraining).
   meant to be nominal, as in Bolt (#4). `--rectypes` restores the paper's
   equi-recursive types, and the paper's recursive examples in the tests use
   it. Following both directions is conservative:
-  `fun x -> if true then x else {a = x}` is rejected, as HM rejects it,
+  `fn (x) -> if true then x else {a = x}` is rejected, as HM rejects it,
   although its type `'a -> 'a ∨ {a: 'a}` is not recursive (#5).
 - **Raw coalescing only produces contractive types.** Every recursive
   occurrence is under a function or a record field. A variable cycle with

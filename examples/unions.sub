@@ -1,17 +1,17 @@
 // Unions and intersections arise from merging lower and upper bounds.
 
 // The result may be either branch: an int or a record.
-let either b = if b then 1 else {a = 1}
+let either(b) = if b then 1 else {a = 1}
 
 // The argument flows to both a record and a function use: its type gets
 // an intersection of upper bounds.
-let both x = {r = x.f; s = x 1}
+let both(x) = {r = x.f; s = x(1)}
 
 // Choosing between two records yields a union; selecting a field common to
 // both is fine.
-let pick b = if b then {x = 1; y = true} else {x = 2; z = false}
-let picked_x b = (pick b).x
+let pick(b) = if b then {x = 1; y = true} else {x = 2; z = false}
+let picked_x(b) = pick(b).x
 
 // The result of `choose` is the union of both argument types.
-let choose b x y = if b then x else y
-let mixed = choose true 1 {a = 2}
+let choose(b, x, y) = if b then x else y
+let mixed = choose(true, 1, {a = 2})

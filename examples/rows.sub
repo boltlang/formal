@@ -5,27 +5,27 @@
 
 // The paper's example (Marques et al. 2024): the input's other fields flow
 // through to the output via the row variable.
-let addY r = r with {y = 1}
-let fromX = addY {x = 1}
-let xAgain = (addY {x = 1}).x
+let addY(r) = r with {y = 1}
+let fromX = addY({x = 1})
+let xAgain = addY({x = 1}).x
 
 // Update can change a field's type.
-let flipX r = r with {x = not r.x}
-let boolToInt r = r with {x = if r.x then 1 else 0}
-let changed = boolToInt {x = true; keep = 42}
+let flipX(r) = r with {x = not(r.x)}
+let boolToInt(r) = r with {x = if r.x then 1 else 0}
+let changed = boolToInt({x = true; keep = 42})
 
 // Several fields at once (each label at most once: `with {a = 1; a = true}`
 // is a parse error).
-let setBoth r = r with {a = 1; b = true}
+let setBoth(r) = r with {a = 1; b = true}
 
 // Let-polymorphism: one function, two unrelated record shapes.
-let both = {fromX = (addY {x = 1}).x; fromZ = (addY {z = true}).z}
+let both = {fromX = addY({x = 1}).x; fromZ = addY({z = true}).z}
 
 // Branches with different extensions give a union of rows.
-let either b r s = if b then r with {y = 1} else s with {z = 2}
+let either(b, r, s) = if b then r with {y = 1} else s with {z = 2}
 
 // Recursion over rows terminates (row expansions are memoized).
-let rec count r = if r.done then r else count (r with {n = succ r.n})
+let rec count(r) = if r.done then r else count(r with {n = succ(r.n)})
 
 // Extension does not invent fields: z was never there.
 let noZ = ({x = 1} with {y = 2}).z

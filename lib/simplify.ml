@@ -48,10 +48,16 @@ type compact = {
   prims : SSet.t;
   rows : row list;
   fn : (compact * compact) option;
+  sigs : cparam list list;
+      (** parameter lists (as a function domain); each stands for a union of
+          argument records, so they are never merged with [rows] or with
+          each other *)
   pres : pres;
 }
 
 and row = { fields : compact SMap.t; tail : compact }
+
+and cparam = { cname : string; ckind : Types.pkind; cty : compact; copt : bool }
 
 (** [rec_vars] holds the bounds of recursive variables, which cannot be
     inlined since they are cyclic.
@@ -71,14 +77,14 @@ type scheme = {
 }
 
 let empty =
-  { vars = ISet.empty; prims = SSet.empty; rows = []; fn = None; pres = P }
+  { vars = ISet.empty; prims = SSet.empty; rows = []; fn = None; sigs = []; pres = P }
 
 let of_var v = { empty with vars = ISet.singleton v }
 let abs_c = { empty with pres = A }
 let mis_c = { empty with pres = M }
 
 let has_parts c =
-  not (ISet.is_empty c.vars && SSet.is_empty c.prims && c.rows = [] && c.fn = None)
+  not (ISet.is_empty c.vars && SSet.is_empty c.prims && c.rows = [] && c.fn = None && c.sigs = [])
 
 let is_empty c = c.pres = P && not (has_parts c)
 let is_abs_only c = c.pres = A && not (has_parts c)
@@ -118,11 +124,21 @@ let rec compare_compact a b =
         let c = compare a.pres b.pres in
         if c <> 0 then c
         else
+          let c = List.compare compare_sig a.sigs b.sigs in
+          if c <> 0 then c
+          else
           Option.compare
             (fun (l0, r0) (l1, r1) ->
               let c = compare_compact l0 l1 in
               if c <> 0 then c else compare_compact r0 r1)
             a.fn b.fn
+
+and compare_sig a b =
+  List.compare
+    (fun p q ->
+      let c = compare (p.cname, p.ckind, p.copt) (q.cname, q.ckind, q.copt) in
+      if c <> 0 then c else compare_compact p.cty q.cty)
+    a b
 
 and compare_row a b =
   let c = SMap.compare compare_compact a.fields b.fields in
@@ -163,6 +179,10 @@ let rec merge pol a b =
           merge_opt
             (fun (l0, r0) (l1, r1) -> (merge (not pol) l0 l1, merge pol r0 r1))
             a.fn b.fn;
+        sigs =
+          List.fold_left
+            (fun acc g -> if List.exists (fun h -> compare_sig g h = 0) acc then acc else acc @ [ g ])
+            a.sigs b.sigs;
         pres;
       }
     in
@@ -177,6 +197,30 @@ let rec merge pol a b =
     | false, (P | O), (P | O) -> parts P
     | false, M, O | false, O, M -> mis_c
     | false, _, _ -> parts PM
+
+(** The length of a list compact type ([{hd; tl}] cells ending in [{}]),
+    if it is one. *)
+and list_len c =
+  match c with
+  | { rows = [ r ]; _ } when is_empty { c with rows = [] } ->
+      if SMap.is_empty r.fields && is_nil_tail r.tail then Some 0
+      else if SMap.cardinal r.fields = 2 && is_nil_tail r.tail then
+        Option.bind (SMap.find_opt "tl" r.fields) (fun tl ->
+            if SMap.mem "hd" r.fields then Option.map succ (list_len tl) else None)
+      else None
+  | _ -> None
+
+(** Argument records stand apart unless they pass the same number of
+    positional arguments: a signature picks the record [Dₖ] to compare an
+    argument with by that number, so a join of records with different
+    numbers is not a record a signature can take. For a fixed number the
+    comparison is field by field, and merging is exact. *)
+and same_spine r0 r1 =
+  match (SMap.find_opt Types.args_label r0.fields, SMap.find_opt Types.args_label r1.fields) with
+  | None, None -> true
+  | Some l0, Some l1 -> (
+      match (list_len l0, list_len l1) with Some a, Some b -> a = b | _ -> false)
+  | _ -> false
 
 and add_row pol rows r =
   let labels r = List.map fst (SMap.bindings r.fields) in
@@ -193,7 +237,9 @@ and add_row pol rows r =
   (* an empty row and a row with variables stay apart: merged, the tail
      would be "ρ ∨ {}" or "ρ ∧ {}", which reads worse than two records *)
   let apart a b = is_nil_tail a.tail && has_parts b.tail in
-  let mergeable r0 = covers r0 r && covers r r0 && not (apart r0 r || apart r r0) in
+  let mergeable r0 =
+    covers r0 r && covers r r0 && (not (apart r0 r || apart r r0)) && same_spine r0 r
+  in
   match List.find_opt mergeable rows with
   | Some r0 ->
       (* merge into the first compatible row, keeping the others in place *)
@@ -234,6 +280,11 @@ let compact_type (ty : simple_type) : scheme =
     | Abs -> abs_c
     | Missing | Nil -> mis_c
     | Opt t -> { (go t pol ISet.empty in_process) with pres = O }
+    | Sig ps ->
+        let param (p : Types.sparam) =
+          { cname = p.sname; ckind = p.skind; cty = go p.sty pol ISet.empty in_process; copt = p.sopt }
+        in
+        { empty with sigs = [ List.map param ps ] }
     | Record (fs, t) ->
         let fields =
           List.fold_left
@@ -329,7 +380,8 @@ let simplify (sch : scheme) : scheme =
       (fun (l, r) ->
         analyze (not pol) l;
         analyze pol r)
-      t.fn
+      t.fn;
+    List.iter (List.iter (fun p -> analyze pol p.cty)) t.sigs
   in
   analyze true sch.term;
   (* v -> Some w: replace v with w; v -> None: remove v *)
@@ -424,6 +476,7 @@ let simplify (sch : scheme) : scheme =
       prims = t.prims;
       rows = List.map (fun r -> mk_row (SMap.map go r.fields) (go r.tail)) t.rows;
       fn = Option.map (fun (l, r) -> (go l, go r)) t.fn;
+      sigs = List.map (List.map (fun p -> { p with cty = go p.cty })) t.sigs;
       pres = t.pres;
     }
   in
@@ -512,6 +565,13 @@ let coalesce_compact (sch : scheme) : typ =
                 in
                 RecordType (fs, tail))
               t.rows
+          @ List.map
+              (fun g ->
+                SigType
+                  (List.map
+                     (fun p -> { tname = p.cname; tkind = p.ckind; tty = go Ty p.cty pol ip; topt = p.copt })
+                     g))
+              t.sigs
           @ (match t.fn with
              | Some (l, r) ->
                  let l = go Ty l (not pol) ip in

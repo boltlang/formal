@@ -57,6 +57,7 @@ let rec rename (m : (int, var_state) Hashtbl.t) = function
   | Function (a, b) -> Function (rename m a, rename m b)
   | Record (fs, t) -> Record (List.map (fun (n, f) -> (n, rename m f)) fs, rename m t)
   | Opt t -> Opt (rename m t)
+  | Sig ps -> Sig (List.map (fun p -> { p with sty = rename m p.sty }) ps)
   | (Primitive _ | Abs | Missing | Nil) as t -> t
 
 (** Copy the generalized variables [freshen_above] did not copy. *)
@@ -120,6 +121,9 @@ and extrude1 ty pol lvl c =
         let fs = List.map (fun (n, f) -> (n, field f)) fs in
         Record (fs, extrude t pol lvl c)
     | Opt t -> Opt (extrude t pol lvl c)
+    | Sig ps ->
+        (* parameters are fields of the argument records: same polarity *)
+        Sig (List.map (fun p -> { p with sty = extrude p.sty pol lvl c }) ps)
     | Abs | Missing | Nil -> ty
     | Variable vs -> (
         match PolarTbl.find_opt c (vs.id, pol) with
@@ -227,6 +231,7 @@ let rec vars_of acc = function
   | Function (l, r) -> vars_of (vars_of acc l) r
   | Record (fs, t) -> List.fold_left (fun acc (_, f) -> vars_of acc f) (vars_of acc t) fs
   | Opt t -> vars_of acc t
+  | Sig ps -> List.fold_left (fun acc p -> vars_of acc p.sty) acc ps
   | Primitive _ | Abs | Missing | Nil -> acc
 
 (** Does [v] reach itself through a type constructor? A search over
@@ -358,11 +363,63 @@ let constrain (lhs : simple_type) (rhs : simple_type) : unit =
       | _, Variable rv ->
           let lhs' = extrude lhs true rv.level (PolarTbl.create 8) in
           go lhs' rhs
+      | Record _, Sig ps -> call lhs ps
+      | Sig ps, (Record _ | Sig _) ->
+          (* a signature is the union of its records *)
+          List.iter (fun (_, d) -> go d rhs) (sig_domains ps)
       | _ ->
           err
             (Printf.sprintf "cannot constrain %s <: %s" (show_simple lhs)
                (show_simple rhs))
     end
+  (* An argument record below a signature: the number of positional
+     arguments picks [Dₖ], then it is an ordinary record constraint. When
+     the record is closed, its named arguments are checked first, for
+     better messages than those of the field constraints. *)
+  and call args ps =
+    let fs0, t0 = row_view args in
+    let elems =
+      match List.assoc_opt args_label fs0 with Some l -> list_elems l | None -> None
+    in
+    let k =
+      match elems with
+      | Some ts -> List.length ts
+      | None -> err "a function with a parameter list needs an argument list of known length"
+    in
+    let m, p = sig_bounds ps in
+    if k > p then
+      err (Printf.sprintf "too many positional arguments: %d given, at most %d" k p);
+    if k < m then begin
+      List.iter
+        (fun (n, _) ->
+          if List.exists (fun q -> q.sname = n && q.skind = PosOnly) ps then
+            err (Printf.sprintf "argument %s is positional-only" n))
+        fs0;
+      err (Printf.sprintf "too few positional arguments: %d given, at least %d" k m)
+    end;
+    let d = Option.get (sig_domain ps k) in
+    (if t0 = Nil then
+       let fsd, _ = row_view d in
+       let named = List.filter (fun (n, _) -> n <> args_label) fs0 in
+       List.iter
+         (fun (n, _) ->
+           if not (List.mem_assoc n fsd) then
+             match List.find_opt (fun q -> q.sname = n) ps with
+             | Some { skind = PosOnly; _ } ->
+                 err (Printf.sprintf "argument %s is positional-only" n)
+             | Some _ ->
+                 err (Printf.sprintf "argument %s is given twice, by position and by name" n)
+             | None -> err (Printf.sprintf "unexpected argument %s" n))
+         named;
+       List.iter
+         (fun (n, f) ->
+           match f with
+           | Opt _ -> ()
+           | _ ->
+               if n <> args_label && not (List.mem_assoc n named) then
+                 err (Printf.sprintf "missing argument %s" n))
+         fsd);
+    go args d
   (* fields: [Pre τ ≤ Opt τ], [Missing ≤ Opt τ], [Opt τ ≤ Abs]; a field
      that is or may be missing cannot satisfy a present one, and a field
      that is or may be present cannot satisfy [Missing] *)
@@ -410,6 +467,7 @@ let freshen_above_copies (lim : int) (ty : simple_type) (lvl : int) :
           let fs = List.map (fun (n, f) -> (n, freshen f)) fs in
           Record (fs, freshen t)
       | Opt t -> Opt (freshen t)
+      | Sig ps -> Sig (List.map (fun p -> { p with sty = freshen p.sty }) ps)
       | Primitive _ | Abs | Missing | Nil -> ty
   in
   let ty = freshen ty in
@@ -441,6 +499,9 @@ type ann =
   | AExt of ann * (string * ann) list * simple_type
   | ALet of string * var_state list * ann * ann
   | ALetRec of string * var_state list * simple_type * ann * ann
+  | AFn of (string * simple_type * ann option) list * ann
+      (** each parameter's type and annotated default; not yet in the Lean
+          development *)
 
 (** A [let]'s right-hand side: its generalized variables, the type of the
     name in its own body (for [let rec]), and the annotated term. *)
@@ -518,6 +579,35 @@ let rec type_term_ann (ctx : ctx) (lvl : int) (trm : term) : simple_type * ann =
         constrain obj_ty (Record (List.map (fun (n, _) -> (n, Abs)) fs, rho));
         (Record (fs, rho), AExt (obj_ann, anns, rho))
       end
+  | Fn (ps, body) ->
+      (* each default is typed in the scope of the parameters before it and
+         flows into its parameter's type, as an argument would *)
+      let ctx', params =
+        List.fold_left
+          (fun (ctx', acc) (p : param) ->
+            let ty = fresh_var lvl in
+            let d =
+              Option.map
+                (fun d ->
+                  let d_ty, d_ann = type_term_ann ctx' lvl d in
+                  constrain d_ty ty;
+                  d_ann)
+                p.default
+            in
+            (StringMap.add p.name (Simple ty) ctx', (p, ty, d) :: acc))
+          (ctx, []) ps
+      in
+      let params = List.rev params in
+      let body_ty, body_ann = type_term_ann ctx' lvl body in
+      let sg =
+        Sig
+          (List.map
+             (fun ((p : param), ty, d) ->
+               { sname = p.name; skind = p.kind; sty = ty; sopt = d <> None })
+             params)
+      in
+      ( Function (sg, body_ty),
+        AFn (List.map (fun ((p : param), ty, d) -> (p.name, ty, d)) params, body_ann) )
   | Let (isrec, name, rhs, body) ->
       let sch, la = type_let_rhs_ann ctx lvl isrec name rhs in
       let ty, body_ann = type_term_ann (StringMap.add name sch ctx) lvl body in
@@ -535,7 +625,7 @@ let rec type_term_ann (ctx : ctx) (lvl : int) (trm : term) : simple_type * ann =
     [let rec ones = {head = 1; tail = ones}] is rejected. *)
 and type_let_rhs_ann ctx lvl isrec name rhs : type_scheme * let_ann =
   (match rhs with
-  | Lam _ -> ()
+  | Lam _ | Fn _ -> ()
   | _ when isrec ->
       err (Printf.sprintf "let rec %s: the right-hand side must be a function" name)
   | _ -> ());
@@ -571,6 +661,12 @@ let if_var = ref 0
     is parsed as [if c a b] with [if : ∀α. bool -> α -> α -> α]. *)
 let builtins () : ctx =
   let fn a b = Function (a, b) in
+  (* positional-only parameters, under names source code cannot write *)
+  let call ts r =
+    Function
+      ( Sig (List.mapi (fun i t -> { sname = "#" ^ string_of_int i; skind = PosOnly; sty = t; sopt = false }) ts),
+        r )
+  in
   let if_ty =
     let vs = fresh_state 1 in
     if_var := vs.id;
@@ -584,8 +680,8 @@ let builtins () : ctx =
        [
          ("true", Simple bool_t);
          ("false", Simple bool_t);
-         ("not", Simple (fn bool_t bool_t));
-         ("succ", Simple (fn int_t int_t));
-         ("add", Simple (fn int_t (fn int_t int_t)));
+         ("not", Simple (call [ bool_t ] bool_t));
+         ("succ", Simple (call [ int_t ] int_t));
+         ("add", Simple (call [ int_t; int_t ] int_t));
          ("if", if_ty);
        ])

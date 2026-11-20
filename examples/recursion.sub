@@ -1,16 +1,16 @@
 // Recursive functions and the recursive types they produce.
 
 // An infinite stream producer: its result type is a recursive record.
-let rec produce n = {head = n; tail = produce (succ n)}
+let rec produce(n) = {head = n; tail = produce(succ(n))}
 
 // A consumer that walks a stream: its *argument* type is recursive.
-let rec sum s = add s.head (sum s.tail)
+let rec sum(s) = add(s.head, sum(s.tail))
 
 // Feeding the producer into the consumer type-checks.
-let total = sum (produce 0)
+let total = sum(produce(0))
 
-// A function that ignores its argument and returns itself: μa. ⊤ → a.
-let rec eat x = eat
+// A function that ignores its argument and returns itself.
+let rec eat(x) = eat
 
 // Cyclic data is rejected: evaluation is eager, so `let rec` only binds
 // functions (`ones` would be read before it exists).
@@ -18,8 +18,8 @@ let rec ones = {head = 1; tail = ones}
 let first = ones.tail.tail.head
 
 // Self-application needs recursive / intersection types; no recursion here.
-let self x = x x
+let self(x) = x(x)
 
 // The Y combinator, applied to a function returning itself.
-let y f = (fun x -> f (x x)) (fun x -> f (x x))
-let yeat = y (fun f -> fun x -> f)
+let y(f) = (fn (x) -> f(x(x)))(fn (x) -> f(x(x)))
+let yeat = y(fn (f) -> fn (x) -> f)

@@ -23,6 +23,10 @@
 open Types
 open Typer
 
+(** Raised for programs the Lean development cannot check yet: parameter
+    lists ([fn], signatures, the built-ins that take them). *)
+exception Unsupported of string
+
 type t = {
   log : (simple_type * simple_type) list;
   vars : var_state list;  (** the variables of the log *)
@@ -110,6 +114,7 @@ let rec ty = function
   | Missing -> "\"missing\""
   | Nil -> "\"nil\""
   | Opt t -> Printf.sprintf "{\"opt\": %s}" (ty t)
+  | Sig _ -> raise (Unsupported "parameter lists")
 
 let gen_ids (gen : var_state list) = list (fun (v : var_state) -> string_of_int v.id) gen
 
@@ -131,6 +136,7 @@ let rec ann = function
   | ALetRec (x, gen, t, r, b) ->
       Printf.sprintf "{\"letrec\": [%s, %s, %s, %s, %s]}" (json_string x) (gen_ids gen) (ty t)
         (ann r) (ann b)
+  | AFn _ -> raise (Unsupported "parameter lists")
 
 and fields fs = list (fun (n, a) -> Printf.sprintf "[%s, %s]" (json_string n) (ann a)) fs
 

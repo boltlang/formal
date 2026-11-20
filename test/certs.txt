@@ -1,23 +1,23 @@
 # Extra programs for scripts/check-certs.sh, one per line: let-polymorphism
 # with extrusion (outer variables constrained inside a generalized let),
 # nested lets, rows and records under extrusion.
-fun f -> let g = fun x -> f x in g
-fun f -> let g = fun x -> let h = fun y -> f x y in h in g
-fun a -> let g = fun x -> if true then x else a in {p = g 1; q = g true}
-fun r -> let f = fun x -> r with {y = x} in {a = f 1; b = f true}
-fun r -> let f = fun s -> if true then r else s in {a = f {x = 1}; b = f {y = 2}}
-fun f -> let g = fun x -> f (f x) in g
-let k = fun x -> fun y -> x in let c = k 1 in c true
-fun z -> let a = fun x -> (z x).f in a
-fun u -> let g = fun x -> let y = u x in (fun w -> w) y in g
-fun u -> let g = fun x -> u in let h = fun y -> g y y in h
-fun p -> let f = fun x -> p.a x in let g = fun y -> f (f y) in g
-fun r -> let f = fun x -> {v = r.v; w = x} in f
-fun q -> let f = fun x -> (q with {z = x}).z in f
-fun f -> let g = fun x -> f {a = x} in let h = fun y -> g (g y) in h
-fun x -> let y = x in let z = y in z
-fun f -> let id = fun x -> x in let g = fun y -> f (id y) in {a = g; b = id}
-fun f -> let a = fun x -> f x in let b = fun x -> a x in let c = fun x -> b x in c
-let compose = fun f -> fun g -> fun x -> f (g x) in compose succ succ
-fun a -> fun b -> let f = fun x -> if x then a else b in f
-fun r -> let get = fun s -> s.x in let upd = fun s -> s with {x = get r} in upd
+fn (f) -> let g(x) = f(x) in g
+fn (f) -> let g(x) = let h(y) = f(x)(y) in h in g
+fn (a) -> let g(x) = if true then x else a in {p = g(1); q = g(true)}
+fn (r) -> let f(x) = r with {y = x} in {a = f(1); b = f(true)}
+fn (r) -> let f(s) = if true then r else s in {a = f({x = 1}); b = f({y = 2})}
+fn (f) -> let g(x) = f(f(x)) in g
+let k(x) = fn (y) -> x in let c = k(1) in c(true)
+fn (z) -> let a(x) = z(x).f in a
+fn (u) -> let g(x) = let y = u(x) in (fn (w) -> w)(y) in g
+fn (u) -> let g(x) = u in let h(y) = g(y)(y) in h
+fn (p) -> let f(x) = p.a(x) in let g(y) = f(f(y)) in g
+fn (r) -> let f(x) = {v = r.v; w = x} in f
+fn (q) -> let f(x) = q with {z = x}.z in f
+fn (f) -> let g(x) = f({a = x}) in let h(y) = g(g(y)) in h
+fn (x) -> let y = x in let z = y in z
+fn (f) -> let id(x) = x in let g(y) = f(id(y)) in {a = g; b = id}
+fn (f) -> let a(x) = f(x) in let b(x) = a(x) in let c(x) = b(x) in c
+let compose(f) = fn (g) -> fn (x) -> f(g(x)) in compose(succ)(succ)
+fn (a) -> fn (b) -> let f(x) = if x then a else b in f
+fn (r) -> let get(s) = s.x in let upd(s) = s with {x = get(r)} in upd

@@ -7,29 +7,29 @@
 
 // `r.y ?? d` is field y if it is present, and d otherwise (d is only
 // evaluated then). The field has type `y?: τ`: missing, or present at τ.
-let get_y r = r.y ?? 0
-let none = get_y {x = 1}
-let some = get_y {y = 2}
-let other = get_y {y = true}
+let get_y(r) = r.y ?? 0
+let none = get_y({x = 1})
+let some = get_y({y = 2})
+let other = get_y({y = true})
 
 // A field given in only one branch is optional in the result.
-let maybe b = if b then {y = 1} else {}
-let read b = (maybe b).y ?? 0
+let maybe(b) = if b then {y = 1} else {}
+let read(b) = maybe(b).y ?? 0
 
 // Plain selection needs the field to be present.
-let unsafe b = (maybe b).y
+let unsafe(b) = maybe(b).y
 
 // Reading a field both ways makes it required.
-let both r = {a = r.y ?? 0; b = r.y}
+let both(r) = {a = r.y ?? 0; b = r.y}
 
 // Defaults chain, and a default can read other fields.
-let chain r = r.x ?? r.y ?? 2
+let chain(r) = r.x ?? r.y ?? 2
 
 // The default applies to the innermost selection only.
-let nested r = (r.a ?? {}).b ?? 0
+let nested(r) = (r.a ?? {}).b ?? 0
 
 // Records that differ in several fields: each field becomes optional.
-let pick b = if b then {x = 1} else {y = true}
+let pick(b) = if b then {x = 1} else {y = true}
 
 // A row variable and a closed record stay apart.
-let extend b r = if b then r with {x = 1} else {}
+let extend(b, r) = if b then r with {x = 1} else {}

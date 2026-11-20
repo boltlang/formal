@@ -42,9 +42,14 @@ type node =
   | Missn  (** the field that is definitely absent *)
   | Optn of node  (** a field: missing, or present at the type *)
   | Niln  (** the empty row: every field is [Missn] *)
+  | Sign of sparam list
+      (** a parameter list: the union of its argument records [Dₖ]
+          ({!Types.sig_domain}), never merged with other types *)
   | Union of node list  (** [Union []] is ⊥ *)
   | Inter of node list  (** [Inter []] is ⊤ *)
   | Ref of node ref  (** recursive knot *)
+
+and sparam = { gname : string; gkind : Types.pkind; gty : node; gopt : bool }
 
 and flex = {
   fid : int;
@@ -112,6 +117,7 @@ let infer_kinds (t : typ) : (string, SSet.t) Hashtbl.t =
         tails (SSet.of_list (List.map fst fs)) t;
         go t
     | RecursiveType (_, b) | Optional b -> go b
+    | SigType ps -> List.iter (fun p -> go p.tty) ps
     | _ -> ()
   in
   go t;
@@ -172,6 +178,12 @@ let to_node ~flexible (t : typ) : node =
         (* the tail continues the same row: not a guard *)
         Row (fs, go env pol tail)
     | PrimitiveType n -> Prim n
+    | SigType ps ->
+        (* the parameters are fields of the argument records *)
+        Sign
+          (List.map
+             (fun p -> { gname = p.tname; gkind = p.tkind; gty = go (guard env) pol p.tty; gopt = p.topt })
+             ps)
     | TypeVariable n -> (
         match List.assoc_opt n env with
         | Some (cell, true) -> Ref cell
@@ -198,11 +210,66 @@ let rec node_eq a b =
       && node_eq t u
   | Absn, Absn | Missn, Missn | Niln, Niln -> true
   | Optn a, Optn b -> node_eq a b
+  | Sign ps, Sign qs ->
+      List.equal
+        (fun p q ->
+          String.equal p.gname q.gname && p.gkind = q.gkind && p.gopt = q.gopt
+          && node_eq p.gty q.gty)
+        ps qs
   | Union xs, Union ys | Inter xs, Inter ys -> List.equal node_eq xs ys
   | Ref c1, Ref c2 -> c1 == c2
   | _ -> false
 
 let mem_pair a b = List.exists (fun (x, y) -> node_eq x a && node_eq y b)
+
+(** {1 Parameter lists}
+
+    As in the type checker ({!Types.sig_domain}): [Dₖ] is the closed record
+    of the arguments when [k] are passed by position. *)
+
+let rec list_node = function
+  | [] -> Row ([], Niln)
+  | t :: ts -> Row ([ ("hd", t); ("tl", list_node ts) ], Niln)
+
+let sig_bounds ps =
+  let m = List.length (List.filter (fun p -> p.gkind = PosOnly && not p.gopt) ps) in
+  (m, List.length (List.filter (fun p -> p.gkind <> KwOnly) ps))
+
+let sig_domain ps k =
+  let m, p = sig_bounds ps in
+  if k < m || k > p then None
+  else
+    let field q = (q.gname, if q.gopt then Optn q.gty else q.gty) in
+    let rec split i = function
+      | q :: rest when q.gkind <> KwOnly ->
+          let pos, named = split (i + 1) rest in
+          if i < k then (q.gty :: pos, named)
+          else if q.gkind = Either then (pos, field q :: named)
+          else (pos, named)
+      | rest -> ([], List.map field rest)
+    in
+    let pos, named = split 0 ps in
+    Some (Row ((args_label, list_node pos) :: named, Niln))
+
+let sig_domains ps =
+  let m, p = sig_bounds ps in
+  List.filter_map (sig_domain ps) (List.init (p - m + 1) (fun i -> m + i))
+
+(** The elements of a list type whose spine is known. *)
+let list_elems n =
+  let rec go fuel n =
+    if fuel = 0 then None
+    else
+      match n with
+      | Ref c -> go (fuel - 1) !c
+      | Row ([], Niln) -> Some []
+      | Row (fs, Niln) when List.length fs = 2 -> (
+          match (List.assoc_opt "hd" fs, List.assoc_opt "tl" fs) with
+          | Some hd, Some tl -> Option.map (fun ts -> hd :: ts) (go (fuel - 1) tl)
+          | _ -> None)
+      | _ -> None
+  in
+  go 1000 n
 
 (** {1 Rows} *)
 
@@ -314,8 +381,19 @@ let merge_rows ~inter rows =
   let field f0 f1 =
     of_view ((if inter then view_meet else view_join) (field_view f0) (field_view f1))
   in
+  (* argument records with different numbers of positional arguments stay
+     apart, as in the simplifier ([Simplify.same_spine]) *)
+  let same_spine (fs0, _) (fs1, _) =
+    match (List.assoc_opt args_label fs0, List.assoc_opt args_label fs1) with
+    | None, None -> true
+    | Some l0, Some l1 -> (
+        match (list_elems l0, list_elems l1) with
+        | Some a, Some b -> List.length a = List.length b
+        | _ -> false)
+    | _ -> false
+  in
   let merge ((fs0, t0) as r0) ((fs1, t1) as r1) =
-    if not (covers r0 r1 && covers r1 r0) then None
+    if not (covers r0 r1 && covers r1 r0 && same_spine r0 r1) then None
     else
       Option.map
         (fun t ->
@@ -356,6 +434,7 @@ type atoms = {
   prims : string list;
   funs : (node * node) list;
   rows : ((string * node) list * node) list;
+  sigs : node list;
   abs : bool;  (** contains the absent field / top row *)
   absorbing : bool;  (** contains ⊥ (in a meet) or ⊤ (in a join) *)
   others : node list;  (** flexible variables etc.: cannot be decided *)
@@ -370,12 +449,13 @@ let atoms ~inter n =
       | Fun (l, r) -> { acc with funs = (l, r) :: acc.funs }
       | Row (fs, t) -> { acc with rows = (fs, t) :: acc.rows }
       | Niln -> { acc with rows = ([], Niln) :: acc.rows }
+      | Sign _ -> { acc with sigs = a :: acc.sigs }
       | Absn -> { acc with abs = true }
       | Union [] when inter -> { acc with absorbing = true }
       | Inter [] when not inter -> { acc with absorbing = true }
       | other -> { acc with others = other :: acc.others })
     (flatten ~inter [] n)
-    { rigids = []; prims = []; funs = []; rows = []; abs = false; absorbing = false; others = [] }
+    { rigids = []; prims = []; funs = []; rows = []; sigs = []; abs = false; absorbing = false; others = [] }
 
 (** Merge the function atoms of a meet ([inter]) or join. *)
 let merge_funs ~inter = function
@@ -427,6 +507,17 @@ let rec sub hyps pending a b =
     | Niln, Row (fs, t) ->
         let unlocked = pending @ hyps in
         List.for_all (fun (_, f) -> field_sub unlocked Missn f) fs && sub unlocked [] Niln t
+    (* a signature is the union of its records; an argument record is below
+       it when it is below the record its number of positional arguments
+       picks *)
+    | Sign ps, _ -> List.for_all (fun d -> sub hyps pending d b) (sig_domains ps)
+    | Row (fs, _), Sign ps -> (
+        match Option.bind (List.assoc_opt args_label fs) list_elems with
+        | None -> false
+        | Some ts -> (
+            match sig_domain ps (List.length ts) with
+            | Some d -> sub hyps pending a d
+            | None -> false))
     | _ ->
         let l = atoms ~inter:true a and r = atoms ~inter:false b in
         let unlocked = pending @ hyps in
@@ -434,7 +525,11 @@ let rec sub hyps pending a b =
         (* in a meet, Abs on its own is the top row *)
         let lrows = if l.abs && l.rows = [] then [ ([], Absn) ] else l.rows in
         let lrows = merge_rows ~inter:true lrows and rrows = merge_rows ~inter:false r.rows in
-        l.absorbing || r.absorbing || r.abs
+        List.exists (fun x -> attempt (fun () -> sub hyps pending x b)) l.sigs
+        || List.exists
+             (fun y -> List.exists (fun (fs, t) -> attempt (fun () -> sub hyps pending (Row (fs, t)) y)) lrows)
+             r.sigs
+        || l.absorbing || r.absorbing || r.abs
         || shares l.rigids r.rigids
         || shares l.prims r.prims
         || attempt (fun () ->

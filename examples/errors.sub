@@ -1,20 +1,20 @@
 // Ill-typed declarations. Each is reported and skipped; later
 // declarations still type-check.
 
-let not_a_function = 1 2
-let wrong_arg = succ true
+let not_a_function = 1(2)
+let wrong_arg = succ(true)
 let missing_field = {a = 1}.b
-let bad_record_arg = (fun r -> r.a) {b = 1}
+let bad_record_arg = (fn (r) -> r.a)({b = 1})
 
 // NOT an error: `x` is used both as a bool and as an int, so it gets the
 // argument type `int ∧ bool`. That type is uninhabited, so the function can
 // never be called, but MLsub-style systems do not reject the definition.
-let conflict x = succ (if x then x else 0)
-let call_conflict = conflict true
+let conflict(x) = succ(if x then x else 0)
+let call_conflict = conflict(true)
 
 // No flow typing: `length` requires `tail` even when `isNil` is true.
-let rec length l = if l.isNil then 0 else succ (length l.tail)
-let finite = length {isNil = false; tail = {isNil = true}}
+let rec length(l) = if l.isNil then 0 else succ(length(l.tail))
+let finite = length({isNil = false; tail = {isNil = true}})
 
 // This one is fine, to show recovery.
-let fine = succ 41
+let fine = succ(41)

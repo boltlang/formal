@@ -43,6 +43,13 @@ let coalesce_type (ty : simple_type) : typ =
     | Missing -> MissingType
     | Nil -> NilType
     | Opt t -> Optional (go t polar in_process [])
+    | Sig ps ->
+        (* the parameters are fields of the argument records: same polarity *)
+        SigType
+          (List.map
+             (fun p ->
+               { tname = p.sname; tkind = p.skind; tty = go p.sty polar in_process []; topt = p.sopt })
+             ps)
     | Variable vs -> (
         let vs_pol = (vs.id, polar) in
         if PolarSet.mem vs_pol in_process && List.mem vs.id parents then

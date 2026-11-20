@@ -63,29 +63,29 @@ Non-polar types are rejected
 
 `--expect` checks inferred types against the paper, modulo equivalence
 
-  $ boltcore -e 'fun f -> fun x -> f (f x)' --expect "('a ∨ 'b -> 'b) -> 'a -> 'b"
-  - : ('a ∨ 'b -> 'a) -> 'b -> 'a
-  $ boltcore -e 'fun x -> 42' --expect "⊤ -> int"
-  - : ⊤ -> int
-  $ boltcore --rectypes -e 'let rec f = fun x -> {L = x; R = f x} in f' --expect "'a -> ({L: 'a, R: 'b} as 'b)"
-  - : 'a -> ({L: 'a, R: 'b} as 'b)
-  $ boltcore --rectypes -e 'let rec f = fun x -> f in f' --expect "(⊤ -> 'a as 'a)"
-  - : (⊤ -> 'a as 'a)
-  $ boltcore --rectypes -e 'let rec x = (let y = x in (fun x -> y)) in x' --expect "(⊤ -> 'a as 'a)"
+  $ boltcore -e 'fn (f) -> fn (x) -> f(f(x))' --expect "(f: {*: ['a ∨ 'b]} -> 'b) -> (x: 'a) -> 'b"
+  - : (f: {*: ['a ∨ 'b]} -> 'a) -> (x: 'b) -> 'a
+  $ boltcore -e 'fn (x) -> 42' --expect "(x: ⊤) -> int"
+  - : (x: ⊤) -> int
+  $ boltcore --rectypes -e 'let rec f(x) = {L = x; R = f(x)} in f' --expect "(x: 'a) -> ({L: 'a, R: 'b} as 'b)"
+  - : (x: 'a) -> ({L: 'a, R: 'b} as 'b)
+  $ boltcore --rectypes -e 'let rec f(x) = f in f' --expect "((x: ⊤) -> 'a as 'a)"
+  - : ((x: ⊤) -> 'a as 'a)
+  $ boltcore --rectypes -e 'let rec x = let y = x in fn (x) -> y in x' --expect "((x: ⊤) -> 'a as 'a)"
   - : type error: let rec x: the right-hand side must be a function
   [1]
-  $ boltcore -e 'fun x -> {L = add x 1; R = if true then 0 else x}' --expect "int -> {L: int, R: int}"
-  - : int -> {L: int, R: int}
+  $ boltcore -e 'fn (x) -> {L = add(x, 1); R = if true then 0 else x}' --expect "(x: int) -> {L: int, R: int}"
+  - : (x: int) -> {L: int, R: int}
 
 A mismatch is reported with the direction of the difference
 
-  $ boltcore -e 'fun f -> fun x -> f (f x)' --expect "('a -> 'a) -> 'a -> 'a"
-  - : ('a ∨ 'b -> 'a) -> 'b -> 'a
-    expected ('a -> 'a) -> 'a -> 'a, but inferred type is strictly more general
+  $ boltcore -e 'fn (f) -> fn (x) -> f(f(x))' --expect "(f: {*: ['a]} -> 'a) -> (x: 'a) -> 'a"
+  - : (f: {*: ['a ∨ 'b]} -> 'a) -> (x: 'b) -> 'a
+    expected (f: {*: ['a]} -> 'a) -> (x: 'a) -> 'a, but inferred type is strictly more general
   [1]
-  $ boltcore -e 'fun x -> x' --expect "⊤ -> ⊥"
-  - : 'a -> 'a
-    expected ⊤ -> ⊥, but inferred type is strictly less general
+  $ boltcore -e 'fn (x) -> x' --expect "(x: ⊤) -> ⊥"
+  - : (x: 'a) -> 'a
+    expected (x: ⊤) -> ⊥, but inferred type is strictly less general
   [1]
 
 Rows: `{fields | tail}`; inside braces `|` starts the row tail, so unions in
@@ -178,15 +178,47 @@ is the neutral element of its context
 
 `--expect` on rows, against Marques et al.'s type for record extension
 
-  $ boltcore -e 'fun r -> r with {y = 1}' --expect "{y: Abs | 'r} -> {y: int | 'r}"
-  - : {y: Abs | 'a} -> {y: int | 'a}
-  $ boltcore -e '(fun r -> r with {y = 1}) {x = 1}' --expect "{x: int, y: int}"
+  $ boltcore -e 'fn (r) -> r with {y = 1}' --expect "(r: {y: Abs | 'r}) -> {y: int | 'r}"
+  - : (r: {y: Abs | 'a}) -> {y: int | 'a}
+  $ boltcore -e '(fn (r) -> r with {y = 1})({x = 1})' --expect "{x: int, y: int}"
   - : {x: int, y: int}
-  $ boltcore -e 'fun r -> r with {y = 1}' --expect "{| 'r} -> {y: int | 'r}"
-  - : {y: Abs | 'a} -> {y: int | 'a}
+  $ boltcore -e 'fn (r) -> r with {y = 1}' --expect "(r: {| 'r}) -> {y: int | 'r}"
+  - : (r: {y: Abs | 'a}) -> {y: int | 'a}
   $ boltcore --compare "{x: int | 'a} -> {y: int | 'a}" "{x: int, y: Abs | 'a} -> {y: int | 'a}"
   {x: int | 'a} -> {y: int | 'a} is equivalent to {x: int, y: Abs | 'a} -> {y: int | 'a}
-  $ boltcore -e 'fun r -> r with {y = 1}' --expect "{x: int} -> {x: int, y: int}"
-  - : {y: Abs | 'a} -> {y: int | 'a}
-    expected {x: int} -> {x: int, y: int}, but inferred type is strictly more general
+  $ boltcore -e 'fn (r) -> r with {y = 1}' --expect "(r: {x: int}) -> {x: int, y: int}"
+  - : (r: {y: Abs | 'a}) -> {y: int | 'a}
+    expected (r: {x: int}) -> {x: int, y: int}, but inferred type is strictly more general
   [1]
+
+Parameter lists (issue #2). A signature stands for the union of its argument
+records, one per number of positional arguments; it is compared through
+them, and never merged with records. Optional parameters can be dropped, and
+an either-way parameter can be used as positional-only or keyword-only, not
+the other way round
+
+  $ boltcore --compare "(x: int, y?: int) -> int" "(x: int) -> int"
+  (x: int, y?: int) -> int is strictly more general than (x: int) -> int
+  $ boltcore --compare "(x: int) -> int" "(int, /) -> int"
+  (x: int) -> int is strictly more general than (int, /) -> int
+  $ boltcore --compare "(x: int) -> int" "(*, x: int) -> int"
+  (x: int) -> int is strictly more general than (*, x: int) -> int
+  $ boltcore --compare "(int, /, b: int, c?: int, *, d: int) -> int" "(int, /, b: int, c?: int, *, d: int) -> int"
+  (int, /, b: int, c?: int, *, d: int) -> int is equivalent to (int, /, b: int, c?: int, *, d: int) -> int
+  $ boltcore --compare "() -> int" "(x?: int) -> int"
+  () -> int is strictly less general than (x?: int) -> int
+
+Two calls with different numbers of positional arguments give a union of
+argument records, which stays a union: merged field by field it would have
+no known number of positional arguments, and no signature would take it
+
+  $ boltcore --compare "(({*: [], x: int} ∨ {*: [int]}) -> int) -> int" "((x: int, y?: int) -> int) -> int"
+  ({*: [], x: int} ∨ {*: [int]} -> int) -> int is strictly more general than ((x: int, y?: int) -> int) -> int
+  $ boltcore --compare "(({*: [], x: int} ∨ {*: [int]}) -> int) -> int" "((int, /) -> int) -> int"
+  ({*: [], x: int} ∨ {*: [int]} -> int) -> int is strictly less general than ((int, /) -> int) -> int
+  $ boltcore --compare "(({*: {hd?: int, tl?: {}}, x?: int}) -> int) -> int" "((x: int, y?: int) -> int) -> int"
+  ({*: {hd?: int, tl?: {}}, x?: int} -> int) -> int is incomparable to ((x: int, y?: int) -> int) -> int
+  $ boltcore --self-check -e 'fn (h) -> {a = h(1); b = h(x = 2)}'
+  - : (h: {*: [], x: int} ∨ {*: [int]} -> 'a) -> {a: 'a, b: 'a}
+  $ boltcore --self-check -e 'fn (h) -> {a = h(1); b = h(true)}'
+  - : (h: {*: [bool ∨ int]} -> 'a) -> {a: 'a, b: 'a}

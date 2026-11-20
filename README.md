@@ -8,7 +8,7 @@ project builds on and how we differ from it.
 
 ```sh
 dune build
-dune exec -- boltcore -e 'fun f -> fun x -> f (f x)'
+dune exec -- boltcore -e 'fn (f) -> fn (x) -> f(f(x))'
 dune exec -- boltcore program.sub                     # or read from stdin
 dune exec -- boltcore --raw -e '...'                  # coalesced, not simplified
 dune exec -- boltcore --rectypes -e '...'             # allow recursive types
@@ -26,7 +26,7 @@ scripts/check-certs.sh                                # certify every example
 |---|---|
 | `lib/` | the type checker: syntax and parser, inference (`typer.ml`), coalescing, simplification, subsumption, certificates |
 | `bin/main.ml` | the `boltcore` command |
-| `examples/` | commented programs: basics, records, rows, optional fields, unions, polymorphism, recursion, errors |
+| `examples/` | commented programs: basics, calls, records, rows, optional fields, unions, polymorphism, recursion, errors |
 | `test/` | cram tests: core inference (`core.t`), the examples (`examples.t`), subsumption (`subsume.t`); extra programs for certificates (`certs.txt`) |
 | `lean/` | the mechanized metatheory ([`lean/README.md`](lean/README.md)) |
 | `scripts/check-certs.sh` | certifies every example and test program with the Lean checker |
@@ -36,21 +36,39 @@ scripts/check-certs.sh                                # certify every example
 ## The language
 
 ```
-program ::= { 'let' ['rec'] x { x } '=' e | e }
-e       ::= n | x | fun x { x } -> e | e e | let ['rec'] x { x } = e in e
+program ::= { 'let' ['rec'] x [ps] '=' e | e }
+e       ::= n | x | fn ps -> e | e(a, …) | let ['rec'] x [ps] = e in e
           | if e then e else e | {l = e; …} | e.l | e.l ?? e | e with {l = e; …}
+ps      ::= (p, …)        p ::= x | x = e | / | *
+a       ::= e | x = e
 ```
 
-Built-ins: `true`, `false`, `not`, `succ`, `add`, and
-`if : ∀α. bool → α → α → α`. Types are MLsub's: primitives, functions,
-records, `⊤`, `⊥`, unions in positive and intersections in negative
-positions, type variables, and let-polymorphism.
+Built-ins: `true`, `false`, `not(b)`, `succ(n)`, `add(m, n)` (all
+positional-only). Types are MLsub's: primitives, functions, records, `⊤`,
+`⊥`, unions in positive and intersections in negative positions, type
+variables, and let-polymorphism, plus parameter lists.
 
 Design decisions that differ from the papers:
 
+- **Parameter lists and calls** (the second part of #2). Every function
+  takes a parameter list and every call passes an argument list; there is
+  no application by juxtaposition, and parentheses after a term are always
+  a call. Passing follows Python: a parameter can be passed by position or
+  by name, one with a default can be left out, and unknown names are
+  rejected. Parameters before a `/` are positional-only, after a `*`
+  keyword-only. `let f(x, y = 0) = add(x, y)` has type
+  `(x: int, y?: int) -> int`; `f(1)`, `f(1, y = 2)` and `f(y = 2, x = 1)`
+  are fine, `f(1, x = 2)` and `f(1, z = 2)` are not. A call passes one
+  closed record, `{*: [positional…], named…}`, and a signature stands for
+  the union of the records it accepts, one per number of positional
+  arguments. Signatures are their own type constructor, never merged with
+  records, and argument records with different numbers of positional
+  arguments are not merged either. See `examples/calls.sub`. The Lean
+  development does not have parameter lists yet, so programs that use
+  them, including any use of a built-in function, get no certificate.
 - **Extensible records.** `r with {l = e}` adds field `l`, or overwrites
-  it, possibly changing its type: `fun r -> r with {y = 1}` has type
-  `{y: Abs | 'a} -> {y: int | 'a}`. Records are rows of fields over a tail.
+  it, possibly changing its type: `fn (r) -> r with {y = 1}` has type
+  `(r: {y: Abs | 'a}) -> {y: int | 'a}`. Records are rows of fields over a tail.
   `Abs` is the *top* field, "no guarantee", and the top row. Row variables
   have kinds, the labels they do not represent. A label may be set only
   once in a `with`. See
@@ -58,11 +76,11 @@ Design decisions that differ from the papers:
 - **Closed records and optional fields** (the first part of #2). A record
   literal has exactly its fields: `{x = 1} : {x: int}`, whose tail is the
   empty row. `{x: int, ..}` is open (tail `Abs`), which is what selection
-  asks for: `fun r -> r.x : {x: 'a, ..} -> 'a`. Width subtyping is
+  asks for: `fn (r) -> r.x : (r: {x: 'a, ..}) -> 'a`. Width subtyping is
   unchanged, since the empty row is below `Abs`. Fields form a lattice:
   `Missing` (definitely absent) and a present field are below the optional
   field `x?: τ`, which is below `Abs`. `r.x ?? d` reads an optional field,
-  with `d` when it is missing: `fun r -> r.x ?? 0 : {x?: 'a, ..} -> 'a ∨ int`.
+  with `d` when it is missing: `fn (r) -> r.x ?? 0 : (r: {x?: 'a, ..}) -> 'a ∨ int`.
   A field given in one branch only is optional:
   `if b then {y = 1} else {} : {y?: int}`.
 - **No structural recursive types** by default: as with an occurs check, a

@@ -12,6 +12,13 @@ type term =
   | Ext of term * (string * term) list
       (** [t with {a = s; b = u}]: extend or update fields *)
   | Let of bool * string * term * term  (** [let rec? x = s in t] *)
+  | Fn of param list * term
+      (** [fn (x₁ [= d₁], …, xₙ [= dₙ]) -> t]: a function of a parameter
+          list (issue #2). A default is evaluated at each call, in the scope
+          of the parameters before it. Called with an argument record
+          ({!Types.args_label}). *)
+
+and param = { name : string; kind : Types.pkind; default : term option }
 
 (** A top-level program item. *)
 type item =
@@ -33,6 +40,13 @@ let rec show = function
       show t ^ " with {"
       ^ String.concat "; " (List.map (fun (n, t) -> n ^ " = " ^ show t) fs)
       ^ "}"
+  | Fn (ps, t) ->
+      let param p =
+        p.name ^ match p.default with Some d -> " = " ^ show d | None -> ""
+      in
+      Printf.sprintf "(fn %s -> %s)"
+        (Types.show_params (List.map (fun p -> (p.kind, param p)) ps))
+        (show t)
   | Let (r, x, s, t) ->
       Printf.sprintf "(let %s%s = %s in %s)"
         (if r then "rec " else "")

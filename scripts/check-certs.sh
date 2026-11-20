@@ -31,13 +31,19 @@ for f in examples/*.sub; do echo "file $f"; done > "$tmp/programs"
 sed -n "s/^  \$ boltcore \(--raw \|--self-check \)*-e '\([^']*\)'.*/expr \2/p" test/*.t >> "$tmp/programs"
 grep -v '^#' test/certs.txt | grep . | sed 's/^/expr /' >> "$tmp/programs"
 
-accepted=0 partial=0 rejected=0 known_rej=0 skipped=0 n=0
+accepted=0 partial=0 rejected=0 known_rej=0 skipped=0 unsupported=0 n=0
 while IFS= read -r line; do
   n=$((n + 1))
   kind=${line%% *} prog=${line#* }
   cert="$tmp/$n.json"
   if [ "$kind" = file ]; then name=$prog; set -- "$prog"; else name="-e '$prog'"; set -- -e "$prog"; fi
   out=$("$boltcore" --cert "$cert" "$@" 2>&1 || true)
+  if [ ! -f "$cert" ] && printf '%s\n' "$out" | grep -q '^no certificate:'; then
+    # parameter lists (issue #2) are not in the Lean development yet
+    unsupported=$((unsupported + 1))
+    [ -z "$verbose" ] || echo "skipped, not supported by the checker yet: $name"
+    continue
+  fi
   if [ ! -f "$cert" ]; then  # a parse error (some tests are)
     skipped=$((skipped + 1))
     [ -z "$verbose" ] || echo "skipped, does not parse: $name"
@@ -63,5 +69,6 @@ while IFS= read -r line; do
 done < "$tmp/programs"
 
 echo "$n programs: $accepted accepted, $partial accepted without their ill-typed items," \
-  "$known_rej known rejections, $rejected rejected, $skipped skipped (parse errors)"
+  "$known_rej known rejections, $rejected rejected, $skipped skipped (parse errors)," \
+  "$unsupported skipped (parameter lists, not in the Lean development yet)"
 [ "$rejected" -eq 0 ]

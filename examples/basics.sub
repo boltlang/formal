@@ -1,13 +1,16 @@
-// Basic inference: functions, application, higher-order functions.
+// Basic inference: functions, calls, higher-order functions.
+//
+// Every function takes a parameter list and every call passes an argument
+// list: `f(x, y)`. A function can return a function.
 
-let const = fun x -> fun y -> x
-let id = fun x -> x
-let apply f x = f x
-let compose f g x = f (g x)
-let twice f x = f (f x)
-let flip f x y = f y x
+let const(x, y) = x
+let id(x) = x
+let apply(f, x) = f(x)
+let compose(f, g) = fn (x) -> f(g(x))
+let twice(f) = fn (x) -> f(f(x))
+let flip(f) = fn (x, y) -> f(y, x)
 
-// Using built-ins: succ, add, not
-let inc = add 1
-let plus2 = twice succ
-let negate_twice = twice not
+// Using built-ins: succ, add, not (their parameters are positional-only)
+let inc = fn (x) -> add(1, x)
+let plus2 = twice(succ)
+let negate_twice = twice(not)

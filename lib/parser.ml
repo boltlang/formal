@@ -2,48 +2,65 @@
 
     {v
     program ::= { item }
-    item    ::= 'let' ['rec'] ident { ident } '=' expr     -- top-level, no 'in'
+    item    ::= 'let' ['rec'] ident [ params ] '=' expr     -- top-level, no 'in'
               | expr
-    expr    ::= 'fun' ident { ident } '->' expr
-              | 'let' ['rec'] ident { ident } '=' expr 'in' expr
+    expr    ::= 'fn' params '->' expr
+              | 'let' ['rec'] ident [ params ] '=' expr 'in' expr
               | 'if' expr 'then' expr 'else' expr
-              | app [ '??' expr ]
-    app     ::= sel { sel } [ fun-or-if-expr ]
-    sel     ::= atom { '.' ident | 'with' '{' [ field { ';' field } [';'] ] '}' }
-    atom    ::= int | ident | '(' expr ')' | '{' [ field { ';' field } [';'] ] '}'
+              | post [ '??' expr ]
+    post    ::= atom { '.' ident | 'with' record | args }
+    atom    ::= int | ident | '(' expr ')' | record
+    record  ::= '{' [ field { ';' field } [';'] ] '}'
     field   ::= ident '=' expr
+    params  ::= '(' [ param { ',' param } [','] ] ')'
+    param   ::= ident [ '=' expr ] | '/' | '*'
+    args    ::= '(' [ arg { ',' arg } [','] ] ')'
+    arg     ::= expr | ident '=' expr
     v}
+
+    Every function takes a parameter list and every call passes an argument
+    list (issue #2); parentheses after a term are always a call. The
+    parameters before a [/] are positional-only, those after a [*]
+    keyword-only, the others can be passed either way. Among the parameters
+    that can be passed by position, those with a default come last. In a
+    call, positional arguments come first.
+
+    [let f(ps) = e] is sugar for [let f = fn (ps) -> e], and
+    [if c then a else b] for the core application [if c a b]. A call
+    [f(a, b, x = c)] is the application of [f] to the argument record
+    [{* = [a, b]; x = c}] (the label [*] is {!Types.args_label}; a list is
+    nested records [{hd; tl}] ending in [{}]).
 
     The fields of a [with] have distinct labels. The left operand of [??]
     is a field selection: [r.a ?? d] is the field [a] of [r] if it is
-    present, and [d] otherwise. [??] binds weaker than application.
-
-    [let f x y = e] is sugar for [let f = fun x -> fun y -> e], and
-    [if c then a else b] for [if c a b]. Line comments start with [//]. *)
+    present, and [d] otherwise. Line comments start with [//]. *)
 
 open Syntax
+
+type pkind = Types.pkind = PosOnly | Either | KwOnly
 
 exception Parse_error of string
 
 type token =
   | INT of int
   | IDENT of string
-  | FUN | LET | REC | IN | IF | THEN | ELSE | WITH
-  | ARROW | EQ | SEMI | DOT | QQ
+  | FN | LET | REC | IN | IF | THEN | ELSE | WITH
+  | ARROW | EQ | SEMI | DOT | QQ | COMMA | SLASH | STAR
   | LPAREN | RPAREN | LBRACE | RBRACE
   | EOF
 
 let show_token = function
   | INT n -> string_of_int n
   | IDENT s -> s
-  | FUN -> "fun" | LET -> "let" | REC -> "rec" | IN -> "in"
+  | FN -> "fn" | LET -> "let" | REC -> "rec" | IN -> "in"
   | IF -> "if" | THEN -> "then" | ELSE -> "else" | WITH -> "with"
   | ARROW -> "->" | EQ -> "=" | SEMI -> ";" | DOT -> "." | QQ -> "??"
+  | COMMA -> "," | SLASH -> "/" | STAR -> "*"
   | LPAREN -> "(" | RPAREN -> ")" | LBRACE -> "{" | RBRACE -> "}"
   | EOF -> "end of input"
 
 let keyword = function
-  | "fun" -> Some FUN | "let" -> Some LET | "rec" -> Some REC
+  | "fn" -> Some FN | "let" -> Some LET | "rec" -> Some REC
   | "in" -> Some IN | "if" -> Some IF | "then" -> Some THEN
   | "else" -> Some ELSE | "with" -> Some WITH | _ -> None
 
@@ -73,6 +90,9 @@ let tokenize (src : string) : (token * (int * int)) array =
       | '=' -> emit EQ 1
       | ';' -> emit SEMI 1
       | '.' -> emit DOT 1
+      | ',' -> emit COMMA 1
+      | '/' -> emit SLASH 1
+      | '*' -> emit STAR 1
       | '(' -> emit LPAREN 1
       | ')' -> emit RPAREN 1
       | '{' -> emit LBRACE 1
@@ -93,10 +113,19 @@ let tokenize (src : string) : (token * (int * int)) array =
   loop 0;
   Array.of_list (List.rev !toks)
 
+(** The argument record of a call. *)
+let args_record (pos : term list) (named : (string * term) list) : term =
+  let rec list = function
+    | [] -> Rcd []
+    | t :: ts -> Rcd [ ("hd", t); ("tl", list ts) ]
+  in
+  Rcd ((Types.args_label, list pos) :: named)
+
 let parse_program (src : string) : item list =
   let toks = tokenize src in
   let p = ref 0 in
   let peek () = fst toks.(!p) in
+  let peek2 () = if !p + 1 < Array.length toks then fst toks.(!p + 1) else EOF in
   let advance () = if !p < Array.length toks - 1 then incr p in
   let fail msg =
     let l, c = snd toks.(!p) in
@@ -104,17 +133,27 @@ let parse_program (src : string) : item list =
   in
   let expect t = if peek () = t then advance () else fail ("expected '" ^ show_token t ^ "'") in
   let ident () = match peek () with IDENT s -> advance (); s | _ -> fail "expected identifier" in
-  let rec idents () = match peek () with IDENT s -> advance (); s :: idents () | _ -> [] in
-  let lams params body = List.fold_right (fun x b -> Lam (x, b)) params body in
-  let starts_atom = function INT _ | IDENT _ | LPAREN | LBRACE -> true | _ -> false in
+  (* a comma-separated list in parentheses, with an optional trailing comma *)
+  let parens item =
+    expect LPAREN;
+    let rec go () =
+      if peek () = RPAREN then (advance (); [])
+      else
+        let x = item () in
+        match peek () with
+        | COMMA -> advance (); x :: go ()
+        | RPAREN -> advance (); [ x ]
+        | _ -> fail "expected ',' or ')'"
+    in
+    go ()
+  in
   let rec expr () =
     match peek () with
-    | FUN ->
+    | FN ->
         advance ();
-        let params = idents () in
-        if params = [] then fail "expected parameter";
+        let ps = params () in
         expect ARROW;
-        lams params (expr ())
+        Fn (ps, expr ())
     | LET -> (
         let isrec, name, rhs = let_head () in
         match peek () with
@@ -129,7 +168,7 @@ let parse_program (src : string) : item list =
         let b = expr () in
         App (App (App (Var "if", c), a), b)
     | _ -> (
-        let t = app () in
+        let t = post () in
         match (peek (), t) with
         | QQ, Sel (obj, name) ->
             advance ();
@@ -141,23 +180,81 @@ let parse_program (src : string) : item list =
     let isrec = peek () = REC in
     if isrec then advance ();
     let name = ident () in
-    let params = idents () in
+    let ps = if peek () = LPAREN then Some (params ()) else None in
     expect EQ;
-    (isrec, name, lams params (expr ()))
-  and app () =
-    let f = ref (sel ()) in
-    while starts_atom (peek ()) do f := App (!f, sel ()) done;
-    (* allow a trailing lambda / let / if as the last argument *)
-    (match peek () with
-     | FUN | IF -> f := App (!f, expr ())
-     | _ -> ());
-    !f
-  and sel () =
+    let rhs = expr () in
+    (isrec, name, match ps with Some ps -> Fn (ps, rhs) | None -> rhs)
+  (* a parameter list, with its markers checked as in Python *)
+  and params () =
+    let items =
+      parens (fun () ->
+          match peek () with
+          | SLASH -> advance (); `Slash
+          | STAR -> advance (); `Star
+          | _ ->
+              let name = ident () in
+              let default = if peek () = EQ then (advance (); Some (expr ())) else None in
+              `Param (name, default))
+    in
+    let slash = List.mem `Slash items and star = List.mem `Star items in
+    let rec go kind seen_default = function
+      | [] -> []
+      | `Slash :: rest ->
+          if kind <> PosOnly then fail "'/' must come before '*', and only once";
+          go Either seen_default rest
+      | `Star :: rest ->
+          if kind = KwOnly then fail "'*' may appear only once";
+          if not (List.exists (function `Param _ -> true | _ -> false) rest) then
+            fail "'*' must be followed by a parameter";
+          go KwOnly seen_default rest
+      | `Param (name, default) :: rest ->
+          if kind <> KwOnly && seen_default && default = None then
+            fail
+              (Printf.sprintf
+                 "parameter %s has no default but follows one that has" name);
+          let seen_default = seen_default || (kind <> KwOnly && default <> None) in
+          { name; kind; default } :: go kind seen_default rest
+    in
+    (match items with `Slash :: _ -> fail "'/' must follow a parameter" | _ -> ());
+    ignore star;
+    let ps = go (if slash then PosOnly else Either) false items in
+    let rec dup = function
+      | [] -> ()
+      | q :: rest ->
+          if List.exists (fun r -> r.name = q.name) rest then
+            fail (Printf.sprintf "parameter %s is given twice" q.name);
+          dup rest
+    in
+    dup ps;
+    ps
+  and args () =
+    let items =
+      parens (fun () ->
+          match (peek (), peek2 ()) with
+          | IDENT n, EQ -> advance (); advance (); `Named (n, expr ())
+          | _ -> `Pos (expr ()))
+    in
+    let rec split = function
+      | [] -> ([], [])
+      | `Pos t :: rest ->
+          let pos, named = split rest in
+          (t :: pos, named)
+      | `Named (n, t) :: rest ->
+          if List.exists (function `Pos _ -> true | _ -> false) rest then
+            fail "a positional argument follows a named one";
+          let _, named = split rest in
+          if List.mem_assoc n named then fail (Printf.sprintf "argument %s is given twice" n);
+          ([], (n, t) :: named)
+    in
+    let pos, named = split items in
+    args_record pos named
+  and post () =
     let t = ref (atom ()) in
     let continue = ref true in
     while !continue do
       match peek () with
       | DOT -> advance (); t := Sel (!t, ident ())
+      | LPAREN -> t := App (!t, args ())
       | WITH ->
           advance ();
           (match atom () with
@@ -200,15 +297,31 @@ let parse_program (src : string) : item list =
         Rcd (fields ())
     | _ -> fail "expected expression"
   in
+  (* an item ends where the next one starts: without application by
+     juxtaposition, [f x] would otherwise be the two items [f] and [x] *)
+  let next () =
+    match peek () with
+    | LET | EOF -> ()
+    | _ -> fail "expected 'let' or end of input (a call needs parentheses: f(x))"
+  in
   let rec items () =
     match peek () with
     | EOF -> []
     | LET -> (
         let isrec, name, rhs = let_head () in
         match peek () with
-        | IN -> advance (); let body = expr () in Expr (Let (isrec, name, rhs, body)) :: items ()
-        | _ -> Decl (isrec, name, rhs) :: items ())
-    | _ -> let e = expr () in Expr e :: items ()
+        | IN ->
+            advance ();
+            let body = expr () in
+            next ();
+            Expr (Let (isrec, name, rhs, body)) :: items ()
+        | _ ->
+            next ();
+            Decl (isrec, name, rhs) :: items ())
+    | _ ->
+        let e = expr () in
+        next ();
+        Expr e :: items ()
   in
   items ()
 
@@ -243,7 +356,7 @@ type ty_token =
   | T_IDENT of string
   | T_ARROW | T_OR | T_BAR | T_AND | T_TOP | T_BOT | T_AS
   | T_LPAREN | T_RPAREN | T_LBRACE | T_RBRACE | T_COLON | T_COMMA
-  | T_QUESTION | T_DOTDOT
+  | T_QUESTION | T_DOTDOT | T_SLASH | T_STAR | T_LBRACK | T_RBRACK
   | T_EOF
 
 let show_ty_token = function
@@ -252,7 +365,8 @@ let show_ty_token = function
   | T_ARROW -> "->" | T_OR -> "∨" | T_BAR -> "|" | T_AND -> "∧" | T_TOP -> "⊤" | T_BOT -> "⊥"
   | T_AS -> "as" | T_LPAREN -> "(" | T_RPAREN -> ")" | T_LBRACE -> "{"
   | T_RBRACE -> "}" | T_COLON -> ":" | T_COMMA -> "," | T_QUESTION -> "?"
-  | T_DOTDOT -> ".." | T_EOF -> "end of input"
+  | T_DOTDOT -> ".." | T_SLASH -> "/" | T_STAR -> "*" | T_LBRACK -> "[" | T_RBRACK -> "]"
+  | T_EOF -> "end of input"
 
 let tokenize_type (src : string) : (ty_token * int) array =
   let n = String.length src in
@@ -277,6 +391,10 @@ let tokenize_type (src : string) : (ty_token * int) array =
       | ':' -> emit T_COLON 1
       | ',' -> emit T_COMMA 1
       | '?' -> emit T_QUESTION 1
+      | '/' -> emit T_SLASH 1
+      | '*' -> emit T_STAR 1
+      | '[' -> emit T_LBRACK 1
+      | ']' -> emit T_RBRACK 1
       | '.' when has i ".." -> emit T_DOTDOT 2
       | _ when has i "∨" -> emit T_OR (String.length "∨")
       | _ when has i "∧" -> emit T_AND (String.length "∧")
@@ -302,6 +420,7 @@ let parse_type (src : string) : Types.typ =
   let toks = tokenize_type src in
   let p = ref 0 in
   let peek () = fst toks.(!p) in
+  let peek_at i = if !p + i < Array.length toks then fst toks.(!p + i) else T_EOF in
   let advance () = if !p < Array.length toks - 1 then incr p in
   let fail msg =
     raise (Parse_error (Printf.sprintf "type, offset %d: %s (at '%s')" (snd toks.(!p)) msg (show_ty_token (peek ()))))
@@ -340,13 +459,27 @@ let parse_type (src : string) : Types.typ =
     | T_IDENT s -> advance (); PrimitiveType s
     | T_TOP -> advance (); Top
     | T_BOT -> advance (); Bot
-    | T_LPAREN -> advance (); let t = ty () in expect T_RPAREN; t
+    | T_LPAREN -> advance (); paren_or_sig ()
+    | T_LBRACK ->
+        advance ();
+        let rec elems () =
+          if peek () = T_RBRACK then (advance (); [])
+          else
+            let t = ty () in
+            match peek () with
+            | T_COMMA -> advance (); t :: elems ()
+            | T_RBRACK -> advance (); [ t ]
+            | _ -> fail "expected ',' or ']'"
+        in
+        List.fold_right (fun t l -> RecordType ([ ("hd", t); ("tl", l) ], NilType)) (elems ())
+          (RecordType ([], NilType))
     | T_LBRACE ->
         advance ();
         let rec fields () =
           match peek () with
-          | T_IDENT n ->
+          | (T_IDENT _ | T_STAR) as tok ->
               advance ();
+              let n = match tok with T_IDENT n -> n | _ -> args_label in
               let optional = peek () = T_QUESTION in
               if optional then advance ();
               expect T_COLON;
@@ -365,6 +498,50 @@ let parse_type (src : string) : Types.typ =
         expect T_RBRACE;
         RecordType (fs, tail)
     | _ -> fail "expected type"
+  (* after '(': a parenthesized type, or a parameter list *)
+  and paren_or_sig () =
+    let named () =
+      match (peek (), peek_at 1, peek_at 2) with
+      | T_IDENT _, T_COLON, _ | T_IDENT _, T_QUESTION, T_COLON -> true
+      | _ -> false
+    in
+    let item () =
+      match peek () with
+      | T_SLASH -> advance (); `Slash
+      | T_STAR -> advance (); `Star
+      | T_IDENT n when named () ->
+          advance ();
+          let opt = peek () = T_QUESTION in
+          if opt then advance ();
+          expect T_COLON;
+          `Named (n, ty (), opt)
+      | _ -> `Unnamed (ty ())
+    in
+    let rec items () =
+      if peek () = T_RPAREN then (advance (); [])
+      else
+        let x = item () in
+        match peek () with
+        | T_COMMA -> advance (); x :: items ()
+        | T_RPAREN -> advance (); [ x ]
+        | _ -> fail "expected ',' or ')'"
+    in
+    match items () with
+    | [ `Unnamed t ] -> t
+    | items ->
+        let slash = List.mem `Slash items in
+        let rec go kind i = function
+          | [] -> []
+          | `Slash :: rest -> go Either i rest
+          | `Star :: rest -> go KwOnly i rest
+          | `Unnamed t :: rest ->
+              if kind <> PosOnly then fail "a parameter without a name must be positional-only";
+              let t, opt = match t with Optional t -> (t, true) | t -> (t, false) in
+              { tname = "#" ^ string_of_int i; tkind = kind; tty = t; topt = opt } :: go kind (i + 1) rest
+          | `Named (n, t, opt) :: rest ->
+              { tname = n; tkind = kind; tty = t; topt = opt } :: go kind (i + 1) rest
+        in
+        SigType (go (if slash then PosOnly else Either) 0 items)
   in
   let t = ty () in
   if peek () <> T_EOF then fail "unexpected input after type";

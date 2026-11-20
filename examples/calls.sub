@@ -1,0 +1,34 @@
+// Parameter lists and calls (issue #2). Passing follows Python: a
+// parameter can be passed by position or by name; one with a default can
+// be left out. Unknown names are rejected.
+
+let f(x, y = 0) = add(x, y)
+let defaulted = f(1)
+let positional = f(1, 2)
+let mixed = f(1, y = 2)
+let by_name = f(y = 2, x = 1)
+let missing = f(y = 2)
+let twice_x = f(1, x = 2)
+let too_many = f(1, 2, 3)
+let unknown = f(1, z = 2)
+
+// Parameters before `/` are positional-only, those after `*` keyword-only.
+let g(a, /, b, c = 0, *, d) = add(a, add(b, add(c, d)))
+let g1 = g(1, 2, d = 3)
+let g2 = g(1, b = 2, d = 3)
+let g_named_a = g(a = 1, b = 2, d = 3)
+let g_no_d = g(1, 2, 3, 4)
+
+// A default is evaluated at each call and can read earlier parameters.
+let range(lo, hi = add(lo, 10)) = {lo = lo; hi = hi}
+let r = range(1)
+
+// A function with optional parameters can be passed where one without them
+// is expected, and an either-way parameter used by position or by name.
+let call_xy(h) = {a = h(1); b = h(x = 2)}
+let ok = call_xy(f)
+let not_by_name = call_xy(succ)
+
+// Functions with no parameters.
+let zero() = 0
+let z = zero()
