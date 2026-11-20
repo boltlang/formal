@@ -585,6 +585,18 @@ theorem TypeTerm.kinds : TypeTerm Γ s t st s' → CtxK K Γ → Inv₂ s → KI
     exact ⟨hc.kinds (h.inv₂ i.fresh) r.1 r.2.1
       ⟨⟨trivial, hv, trivial⟩, trivial, fun _ h => nomatch h⟩
       (.of_nonvarR (fun _ h => nomatch h)), trivial, hv⟩
+  | .ite hn hc h₁ ha h₂ hb h₃, hΓ, i, k => by
+    have hv := KEmpty.var_nil (k.kind ▸ hn)
+    have rc := hc.kinds hΓ i.fresh ⟨k.kind, k.log, k.exps⟩
+    have i₁ := hc.inv₂ i.fresh
+    have k₁ := h₁.kinds i₁ rc.1 rc.2.1 trivial (.of_nonvarR (fun _ h => nomatch h))
+    have i₂ := h₁.inv₂ i₁
+    have ra := ha.kinds hΓ i₂ k₁
+    have i₃ := ha.inv₂ i₂
+    have k₂ := h₂.kinds i₃ ra.1 ra.2.1 trivial (.of_empty ra.2.2 hv)
+    have i₄ := h₂.inv₂ i₃
+    have rb := hb.kinds hΓ i₄ k₂
+    exact ⟨h₃.kinds (hb.inv₂ i₄) rb.1 rb.2.1 trivial (.of_empty rb.2.2 hv), trivial, hv⟩
   | .selOr hn h hc hd hc', hΓ, i, k => by
     have hv := KEmpty.var_nil (k.kind ▸ hn)
     have r := h.kinds hΓ i.fresh ⟨k.kind, k.log, k.exps⟩

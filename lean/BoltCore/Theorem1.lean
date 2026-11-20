@@ -41,6 +41,9 @@ theorem TypeTerm.log_grows : TypeTerm Γ s t st s' → ∀ p, p ∈ s.log → p 
   | .app _ h₁ h₂ hc => fun p hp => hc.log_grows p (h₂.log_grows p (h₁.log_grows p hp))
   | .rcd h => h.log_grows
   | .sel _ h hc => fun p hp => hc.log_grows p (h.log_grows p hp)
+  | .ite _ hc h₁ ha h₂ hb h₃ => fun p hp =>
+    h₃.log_grows p (hb.log_grows p (h₂.log_grows p (ha.log_grows p (h₁.log_grows p
+      (hc.log_grows p hp)))))
   | .selOr _ h hc hd hc' => fun p hp =>
     hc'.log_grows p (hd.log_grows p (hc.log_grows p (h.log_grows p hp)))
   | .ext _ h₁ h₂ _ hc => fun p hp => hc.log_grows p (h₂.log_grows p (h₁.log_grows p hp))
@@ -72,6 +75,9 @@ theorem TypeTerm.kind_eq : TypeTerm Γ s t st s' → s'.kind = s.kind
   | .app _ h₁ h₂ hc => (hc.kind_eq.trans h₂.kind_eq).trans h₁.kind_eq
   | .rcd h => h.kind_eq
   | .sel _ h hc => hc.kind_eq.trans h.kind_eq
+  | .ite _ hc h₁ ha h₂ hb h₃ =>
+    ((((h₃.kind_eq.trans hb.kind_eq).trans h₂.kind_eq).trans ha.kind_eq).trans h₁.kind_eq).trans
+      hc.kind_eq
   | .selOr _ h hc hd hc' => ((hc'.kind_eq.trans hd.kind_eq).trans hc.kind_eq).trans h.kind_eq
   | .ext _ h₁ h₂ _ hc => (hc.kind_eq.trans h₂.kind_eq).trans h₁.kind_eq
   | .extNil h => h.kind_eq
@@ -259,6 +265,24 @@ theorem TypeTerm.soundR {E : Defs} {f : Nat → Nat} {sf : State} (H : RenSound 
     have r := h.nac hΓ i.fresh n
     exact .sel (.sub (h.soundR H hΓ i.fresh n (fun p hp => hlog p (hc.log_grows p hp)))
       (H.sub hc.logged hlog r.2.2.ne_abs))
+  | .ite _ hc h₁ ha h₂ hb h₃, hΓ, i, n, hlog => by
+    have rc := hc.nac hΓ i.fresh n
+    have i₁ := hc.inv₂ i.fresh
+    have n₁ := h₁.nac i₁ rc.2.1 trivial rc.1
+    have i₂ := h₁.inv₂ i₁
+    have ra := ha.nac hΓ i₂ n₁
+    have i₃ := ha.inv₂ i₂
+    have n₂ := h₂.nac i₃ ra.2.1 trivial ra.1
+    have i₄ := h₂.inv₂ i₃
+    have rb := hb.nac hΓ i₄ n₂
+    have hlog₅ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog p (h₃.log_grows p hp)
+    have hlog₄ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog₅ p (hb.log_grows p hp)
+    have hlog₃ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog₄ p (h₂.log_grows p hp)
+    have hlog₂ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog₃ p (ha.log_grows p hp)
+    have hlog₁ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog₂ p (h₁.log_grows p hp)
+    exact .ite (.sub (hc.soundR H hΓ i.fresh n hlog₁) (H.sub h₁.logged hlog₂ rc.2.2.ne_abs))
+      (.sub (ha.soundR H hΓ i₂ n₁ hlog₃) (H.sub h₂.logged hlog₄ ra.2.2.ne_abs))
+      (.sub (hb.soundR H hΓ i₄ n₂ hlog₅) (H.sub h₃.logged hlog rb.2.2.ne_abs))
   | .selOr _ h hc hd hc', hΓ, i, n, hlog => by
     have r := h.nac hΓ i.fresh n
     have i₁ := h.inv₂ i.fresh

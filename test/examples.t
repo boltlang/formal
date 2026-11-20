@@ -35,7 +35,7 @@ simplified type is equivalent to the raw coalesced one.
   let z : int
   [1]
   $ boltcore --rectypes --self-check ../examples/errors.sub
-  let not_a_function : type error: cannot constrain int <: ({*: [int]} -> α2)
+  let not_a_function : type error: cannot constrain int <: ({*: [int]} -> α1)
   let wrong_arg : type error: cannot constrain bool <: int
   let missing_field : type error: missing field: b in {a: int}
   let bad_record_arg : type error: missing field: a in {b: int}
@@ -57,7 +57,7 @@ simplified type is equivalent to the raw coalesced one.
   let chain : (r: {x?: 'a, y?: 'a, ..}) -> 'a ∨ int
   let nested : (r: {a?: {b?: 'a, ..}, ..}) -> 'a ∨ int
   let pick : (b: bool) -> {x?: int, y?: bool}
-  let extend : (b: bool, r: {x: Abs | 'a}) -> {x: int | 'a} ∨ {}
+  let extend : (b: bool, r: {x: Abs | 'a}) -> {} ∨ {x: int | 'a}
   [1]
   $ boltcore --self-check ../examples/polymorphism.sub
   let id : (x: 'a) -> 'a
@@ -83,7 +83,7 @@ simplified type is equivalent to the raw coalesced one.
   let changed : {keep: int, x: int}
   let setBoth : (r: {a: Abs, b: Abs | 'a}) -> {a: int, b: bool | 'a}
   let both : {fromX: int, fromZ: bool}
-  let either : (b: bool, r: {y: Abs | 'a}, s: {z: Abs | 'b}) -> {y: int | 'a} ∨ {z: int | 'b}
+  let either : (b: bool, r: {y: Abs | 'a}, s: {z: Abs | 'b}) -> {z: int | 'b} ∨ {y: int | 'a}
   let count : (r: 'a ∧ {n: int | 'b ∧ {done: bool, ..}} ∧ {done: bool, ..}) -> 'a ∨ {n: int | 'b}
   let noZ : type error: missing field: z in {x: int}
   [1]

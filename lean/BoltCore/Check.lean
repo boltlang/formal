@@ -602,6 +602,8 @@ inductive Ann where
   | letRec : String → List Nat → SType → Ann → Ann → Ann
   /-- `fn (…) -> t`, with the type of each parameter. -/
   | fn : AParams → Ann → Ann
+  /-- `if c then a else b`, with the type of the result. -/
+  | ite : Ann → Ann → Ann → SType → Ann
 
 inductive AFields where
   | nil
@@ -628,6 +630,7 @@ def Ann.erase : Ann → Term
   | .letIn x _ r b => .letIn false x r.erase b.erase
   | .letRec x _ _ r b => .letIn true x r.erase b.erase
   | .fn ps t => .fn ps.erase t.erase
+  | .ite c a b _ => .ite c.erase a.erase b.erase
 
 def AFields.erase : AFields → List (String × Term)
   | .nil => []
@@ -708,6 +711,13 @@ def infer (Γ : PCtx) : Ann → Option SType
         else none
       | none => none
     else none
+  | .ite cnd a b st =>
+    match infer Γ cnd, infer Γ a, infer Γ b with
+    | some stc, some sta, some stb =>
+      if stc ≠ .abs ∧ c.Accepts stc (.prim "bool") ∧ sta ≠ .abs ∧ c.Accepts sta st ∧
+          stb ≠ .abs ∧ c.Accepts stb st
+      then some st else none
+    | _, _, _ => none
   | .fn ps t =>
     match inferParams Γ ps with
     | some (P, Γ') =>
@@ -830,6 +840,17 @@ theorem infer_sound : ∀ {Γ : PCtx} {a : Ann} {st : SType}, infer c Γ a = som
         · cases h
       · cases h
     · cases h
+  | Γ, .ite cnd a b st', st, h => by
+    simp only [infer] at h
+    split at h
+    · next hc ha hb =>
+      split at h
+      · next hk =>
+        cases h
+        exact .ite (infer_sound hc) hk.1 hk.2.1 (infer_sound ha) hk.2.2.1 hk.2.2.2.1
+          (infer_sound hb) hk.2.2.2.2.1 hk.2.2.2.2.2
+      · cases h
+    · cases h
   | Γ, .fn ps t, st, h => by
     simp only [infer] at h
     split at h
@@ -880,12 +901,8 @@ end Infer
 
 /-! ## The checker -/
 
-/-- The built-ins of `lib/typer.ml`, with `if : ∀α. bool → α → α → α` for
-the variable `α = k` (the certificate gives it no bounds, so the scheme is
-the expected one, with no constraints). -/
-def pbuiltins (k : Nat) : PCtx :=
-  builtins.map (fun p => (p.1, .mono p.2)) ++
-    [("if", .poly [k] (.arrow (.prim "bool") (.arrow (.var k) (.arrow (.var k) (.var k)))))]
+/-- The built-ins of `lib/typer.ml`. -/
+def pbuiltins : PCtx := builtins.map fun p => (p.1, .mono p.2)
 
 /-- **Theorem 1 for the executable checker**: if the certificate checks,
 and the annotated term checks against it, the term has the computed type

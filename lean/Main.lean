@@ -27,9 +27,10 @@ ann   ::= {"lit": n} | {"var": x} | {"inst": [x, [[n, n], ...]]}
         | {"let": [x, [n, ...], ann, ann]}
         | {"letrec": [x, [n, ...], type, ann, ann]}
         | {"fn": [[param, ...], ann]}
+        | {"if": [ann, ann, ann, type]}
 param ::= [x, kind, type] | [x, kind, type, ann]
 cert  ::= {"log": [[type, type], ...], "bounds": [[n, [type, ...], [type, ...]], ...],
-           "kinds": [[n, [s, ...]], ...], "if": n, "term": ann}
+           "kinds": [[n, [s, ...]], ...], "term": ann}
 ```
 
 `bounds` lists a variable's lower, then upper bounds. `"abs"` is the top
@@ -124,6 +125,8 @@ partial def parseAnn (j : Json) : Except String Ann := do
     return .letRec (← x.getStr?) (← (← jArr gen).mapM jNat) (← parseTy stx) (← parseAnn r)
       (← parseAnn b)
   | "fn", [ps, t] => return .fn (← parseAnnParams (← jArr ps)) (← parseAnn t)
+  | "if", [c, a, b, st] =>
+    return .ite (← parseAnn c) (← parseAnn a) (← parseAnn b) (← parseTy st)
   | _, _ => throw s!"unknown term: {j.compress}"
 
 partial def parseAnnFields : List Json → Except String AFields
@@ -146,7 +149,6 @@ end
 
 structure Input where
   cert : Certificate
-  ifVar : Nat
   term : Ann
 
 /-! ## Ranks
@@ -185,7 +187,7 @@ def parseInput (j : Json) : Except String Input := do
   let kinds ← (← jArr (← j.getObjVal? "kinds")).mapM fun e => do
     let (v, ls) ← jPair e; return (← jNat v, ← (← jArr ls).mapM (·.getStr?))
   let ranks := (computeRanks vars).getD []
-  return { cert := { log, vars, kinds, ranks }, ifVar := ← jNat (← j.getObjVal? "if"),
+  return { cert := { log, vars, kinds, ranks },
            term := ← parseAnn (← j.getObjVal? "term") }
 
 /-! ## Printing -/
@@ -264,6 +266,9 @@ partial def whereFails (c : Certificate) (Γ : PCtx) : Ann → Option String
         if c.genB Γ gen then whereFails c ((x, .poly gen stx) :: Γ) b
         else some s!"let rec {x}: cannot generalize {gen} (or its type is not accepted)"
       | none => here a
+  | a@(.ite cnd t e _) =>
+    (((whereFails c Γ cnd).orElse fun _ => whereFails c Γ t).orElse fun _ =>
+      whereFails c Γ e).orElse fun _ => here a
   | a@(.fn ps t) =>
     (params Γ ps).orElse fun _ =>
       match inferParams c Γ ps with
@@ -289,13 +294,10 @@ def run (inp : Input) : Except (List String) SType := do
   let c := inp.cert
   unless c.ranks.length > 0 || c.vars.isEmpty do
     throw ["structural recursive type: no ranking exists"]
-  unless (c.bounds inp.ifVar).lower.isEmpty && (c.bounds inp.ifVar).upper.isEmpty &&
-      (c.kind inp.ifVar).isEmpty do
-    throw [s!"the variable α{inp.ifVar} of `if` has bounds or a kind"]
   unless c.check do throw (diagnose c)
-  match infer c (pbuiltins inp.ifVar) inp.term with
+  match infer c pbuiltins inp.term with
   | some st => pure st
-  | none => throw [(whereFails c (pbuiltins inp.ifVar) inp.term).getD "skeleton check fails"]
+  | none => throw [(whereFails c pbuiltins inp.term).getD "skeleton check fails"]
 
 def main (args : List String) : IO UInt32 := do
   let [path] := args | IO.eprintln "usage: boltcore-check CERT.json"; return 2

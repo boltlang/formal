@@ -49,7 +49,7 @@ one unsorted syntax of simple types, translated into the sorts by position.
 | `BoltCore/Sub.lean` | guarded coinductive subtyping, rows compared field by field (`Step.fields`), `Abs ≰ pre τ` (`not_abs_le_pre`); reflexivity, transitivity (cut elimination by sort, for any relation), coinduction up to transitivity, ranked (non-recursive) definitions, the paper's §5.1.3 example with graph variables, row examples |
 | `BoltCore/Rows.lean` | row algebra; exactness of the row rewrites in `lib/simplify.ml` and `lib/subsume.ml` |
 | `BoltCore/Lattice.lean` | the MLsub lattice equations: what the minimal rules cannot derive (`not_fun_merge`, `not_pre_union`), and the sequent-style plan |
-| `BoltCore/Typing.lean` | declarative typing (constrained schemes `∀ᾱ. D ⇒ σ`, with constraints at any sort, for built-ins and let-polymorphism; record extension; selection of present fields `pre τ` only; selection with a default of optional fields; closed record literals; functions of a parameter list, `fn`) with examples; selecting a missing field is untypable (`not_typ_sel_missing`), and so is passing an argument twice (`not_twice_le_sig`) |
+| `BoltCore/Typing.lean` | declarative typing (constrained schemes `∀ᾱ. D ⇒ σ`, with constraints at any sort, for built-ins and let-polymorphism; record extension; selection of present fields `pre τ` only; selection with a default of optional fields; closed record literals; conditionals; functions of a parameter list, `fn`) with examples; selecting a missing field is untypable (`not_typ_sel_missing`), and so is passing an argument twice (`not_twice_le_sig`) |
 | `BoltCore/Eval.lean` | operational semantics: values, closures and a call-by-value interpreter with fuel; the binding of arguments to the parameters of a `fn`; the built-ins as values; the calls of issue #2 as examples |
 | `BoltCore/Safety.lean` | type safety: typing of values (`VTyp`), canonical forms by inverting one layer of subtyping, argument records against parameter lists (`ArgsOK`), and safety by induction on the fuel (`safe`, `type_safety`) |
 | `BoltCore/Algorithm.lean` | model of `lib/typer.ml` (no levels): state, `Constrain`/`TypeTerm` as big-step relations; signatures `sig P` with their two constraint rules, and `fn`; ranked bounds (`StructRanked`) rule out structural recursive types |
@@ -184,9 +184,10 @@ parameters that can take them, each other parameter takes the argument of
 its name or the value of its default, evaluated in the scope of the
 parameters before it, and every argument has to be taken. So `f(y = 2)`,
 `f(1, x = 2)`, `f(1, 2, 3)` and `f(1, z = 2)` are errors of the semantics
-for `f = fn (x, y = 10) -> …`, not only of the type checker. The built-ins
-are values; `if` is an ordinary curried function, as in `lib/typer.ml`, so
-both branches are evaluated.
+for `f = fn (x, y = 10) -> …`, not only of the type checker. The built-in
+functions are values. `if c then a else b` is a term (`Term.ite`), not a
+function: only the branch that `c` chooses is evaluated, so a recursive
+function can stop.
 
 `type_safety`: if `t : τ` from the built-ins, then `eval n builtinEnv t` is
 never an error, for any `n`, and a value it gives has type `τ`

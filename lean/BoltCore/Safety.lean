@@ -117,9 +117,6 @@ inductive VTyp (E : Defs) : Val → Ty .ty → Prop where
   | not : Sub E (.arrow (builtinSig [bool]) bool) τ → VTyp E (.op .not) τ
   | succ : Sub E (.arrow (builtinSig [int]) int) τ → VTyp E (.op .succ) τ
   | add : Sub E (.arrow (builtinSig [int, int]) int) τ → VTyp E (.op .add) τ
-  | ite : Sub E (.arrow bool (.arrow α (.arrow α α))) τ → VTyp E (.op .ite) τ
-  | ite1 : Sub E (.arrow α (.arrow α α)) τ → VTyp E (.ite1 b) τ
-  | ite2 : VTyp E v α → Sub E (.arrow α α) τ → VTyp E (.ite2 b v) τ
 
 /-- The fields of a record value, with their types. -/
 inductive VFTyp (E : Defs) : Binds → List (String × Ty .ty) → Prop where
@@ -143,9 +140,6 @@ theorem VTyp.sub {v : Val} {τ τ' : Ty .ty} (h : VTyp E v τ) (hs : Sub E τ τ
   | not h => exact .not (h.trans hs)
   | succ h => exact .succ (h.trans hs)
   | add h => exact .add (h.trans hs)
-  | ite h => exact .ite (h.trans hs)
-  | ite1 h => exact .ite1 (h.trans hs)
-  | ite2 hv h => exact .ite2 hv (h.trans hs)
 
 theorem ETyp.mono {ρ : Binds} {Γ : Ctx} {x : String} {v : Val} {τ : Ty .ty} (hv : VTyp E v τ)
     (hρ : ETyp E ρ Γ) : ETyp E (.cons x v ρ) ((x, .mono τ) :: Γ) :=
@@ -188,7 +182,7 @@ theorem VTyp.canon {v : Val} {τ : Ty .ty} (h : VTyp E v τ) :
   | cloRec _ hf ht h =>
     obtain ⟨a, b, hs⟩ := Typ.fun_arrow hf ht
     exact .inr (.inr (.inr ⟨a, b, hs.trans h⟩))
-  | not h | succ h | add h | ite h | ite1 h | ite2 _ h => exact .inr (.inr (.inr ⟨_, _, h⟩))
+  | not h | succ h | add h => exact .inr (.inr (.inr ⟨_, _, h⟩))
 
 theorem VTyp.int_inv {v : Val} (h : VTyp E v (.prim "int")) : ∃ i, v = .int i := by
   rcases h.canon with ⟨i, e, _⟩ | ⟨_, _, hs⟩ | ⟨_, _, _, _, hs⟩ | ⟨_, _, hs⟩
@@ -689,6 +683,13 @@ theorem evalSucc (ih : Safe E n) : ∀ {Γ : Ctx} {t : Term} {τ : Ty .ty}, Typ 
   | _, _, _, .extNil ht, _, _, hρ, h => by
     simp only [eval] at h
     exact ih.ev ht hρ h
+  | _, _, _, .ite hc ha hb, _, _, hρ, h => by
+    simp only [eval] at h
+    obtain ⟨v, hv, h⟩ := Out.bind_safe h (fun _ e => ih.ev hc hρ e)
+    obtain ⟨b, rfl⟩ := hv.bool_inv
+    cases b with
+    | true => exact ih.ev ha hρ h
+    | false => exact ih.ev hb hρ h
   | _, _, _, .letIn (σ := σ) hs hi ht, _, _, hρ, h => by
     simp only [eval] at h
     obtain ⟨v, hv, h⟩ := Out.bind_safe (Q := fun v => ∀ τ', σ.Instance E τ' → VTyp E v τ') h
@@ -802,25 +803,6 @@ theorem applySucc (ih : Safe E n) {vf va : Val} {τ₁ τ₂ : Ty .ty} {r : Res 
     simp only [apply, delta, hargs, Option.some.injEq] at h
     subst h
     exact ⟨_, rfl, .int h₂⟩
-  | ite hs =>
-    obtain ⟨h₁, h₂⟩ := hs.arrow_inv
-    obtain ⟨b, rfl⟩ := (ha.sub h₁).bool_inv
-    simp only [apply, delta, Option.some.injEq] at h
-    subst h
-    exact ⟨_, rfl, .ite1 h₂⟩
-  | ite1 hs =>
-    obtain ⟨h₁, h₂⟩ := hs.arrow_inv
-    simp only [apply, Option.some.injEq] at h
-    subst h
-    exact ⟨_, rfl, .ite2 (ha.sub h₁) h₂⟩
-  | @ite2 _ _ _ b hv hs =>
-    obtain ⟨h₁, h₂⟩ := hs.arrow_inv
-    simp only [apply, Option.some.injEq] at h
-    subst h
-    refine ⟨_, rfl, ?_⟩
-    cases b
-    · exact (ha.sub h₁).sub h₂
-    · exact hv.sub h₂
 
 theorem bindSucc (ih : Safe E n) {Γ Γ' : Ctx} {ps : List (String × PKind × Option Term)}
     {P : List (Param (Ty .ty))} {ρ : Binds} {pos : List Val} {named : Binds} {r : Res Binds}
@@ -878,8 +860,7 @@ theorem Typ.value {Γ : Ctx} {ρ : Binds} {t : Term} {τ : Ty .ty} {n : Nat} {v 
 /-- The built-in values have the types of the built-ins. -/
 theorem builtins_typed : ETyp E builtinEnv builtins :=
   .mono (.bool Sub.refl) <| .mono (.bool Sub.refl) <| .mono (.not Sub.refl) <|
-    .mono (.succ Sub.refl) <| .mono (.add Sub.refl) <|
-    .cons (fun _ ⟨_, _, _, e⟩ => by subst e; exact .ite Sub.refl) .nil
+    .mono (.succ Sub.refl) <| .mono (.add Sub.refl) .nil
 
 /-- **Type safety**: a term that is well-typed from the built-ins does not
 go wrong, whatever the fuel. -/

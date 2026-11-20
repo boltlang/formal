@@ -142,6 +142,8 @@ theorem TypeTerm.inv₂ : TypeTerm Γ s t st s' → Inv₂ s → Inv₂ s'
   | .app _ h₁ h₂ hc, h => hc.inv₂ (h₂.inv₂ (h₁.inv₂ h.fresh))
   | .rcd h', h => h'.inv₂ h
   | .sel _ h' hc, h => hc.inv₂ (h'.inv₂ h.fresh)
+  | .ite _ hc h₁ ha h₂ hb h₃, h =>
+    h₃.inv₂ (hb.inv₂ (h₂.inv₂ (ha.inv₂ (h₁.inv₂ (hc.inv₂ h.fresh)))))
   | .selOr _ h' hc hd hc', h => hc'.inv₂ (hd.inv₂ (hc.inv₂ (h'.inv₂ h.fresh)))
   | .ext _ h₁ h₂ _ hc, h => hc.inv₂ (h₂.inv₂ (h₁.inv₂ h)).fresh
   | .extNil h', h => h'.inv₂ h

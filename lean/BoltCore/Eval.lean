@@ -24,8 +24,8 @@ that a well-typed term never evaluates to `err`.
   leave out a parameter without a default, and to pass an argument that no
   parameter takes: too many by position, an unknown name, a name twice, or
   a positional-only parameter by name.
-* The built-ins are values (`Val.op`). `if` is an ordinary curried function
-  of three arguments, as in `lib/typer.ml`, so both branches are evaluated.
+* `if c then a else b` evaluates only the branch that `c` chooses.
+* The built-in functions are values (`Val.op`).
 -/
 
 namespace BoltCore
@@ -35,7 +35,6 @@ inductive Op where
   | not
   | succ
   | add
-  | ite
   deriving DecidableEq, Repr
 
 mutual
@@ -47,10 +46,6 @@ inductive Val where
   name if a `let rec` bound it. -/
   | clo : Binds → Option String → Term → Val
   | op : Op → Val
-  /-- `if b`. -/
-  | ite1 : Bool → Val
-  /-- `if b v`. -/
-  | ite2 : Bool → Val → Val
 
 /-- Bindings of names to values: the fields of a record, or an environment. -/
 inductive Binds where
@@ -131,7 +126,6 @@ def Term.isFun : Term → Bool
 
 /-- The built-ins applied to an argument. -/
 def delta : Op → Val → Res Val
-  | .ite, .bool b => .ok (.ite1 b)
   | .not, w =>
     match w.args with
     | some ([.bool b], .nil) => .ok (.bool !b)
@@ -144,7 +138,6 @@ def delta : Op → Val → Res Val
     match w.args with
     | some ([.int i, .int j], .nil) => .ok (.int (i + j))
     | _ => .err
-  | _, _ => .err
 
 /-- The argument a parameter of kind `k` takes by position, and the
 remaining ones. -/
@@ -202,6 +195,12 @@ def eval : Nat → Binds → Term → Out Val
       match v with
       | .rcd vs => some (.ok (.rcd (ws.append vs)))
       | _ => some .err
+  | n + 1, ρ, .ite c a b =>
+    (eval n ρ c).bind fun v =>
+      match v with
+      | .bool true => eval n ρ a
+      | .bool false => eval n ρ b
+      | _ => some .err
   | n + 1, ρ, .letIn false x s t => (eval n ρ s).bind fun v => eval n (.cons x v ρ) t
   | n + 1, ρ, .letIn true x s t =>
     if s.isFun then eval n (.cons x (.clo ρ (some x) s) ρ) t else some .err
@@ -225,8 +224,6 @@ def apply : Nat → Val → Val → Out Val
       | none => some .err
     | _ => some .err
   | _ + 1, .op o, w => some (delta o w)
-  | _ + 1, .ite1 b, w => some (.ok (.ite2 b w))
-  | _ + 1, .ite2 b v, w => some (.ok (if b then v else w))
   | _ + 1, _, _ => some .err
 
 /-- Bind the parameters of a `fn`, in order, to the arguments passed by
@@ -251,7 +248,7 @@ end
 /-- The built-ins of `Typing.lean`, as values. -/
 def builtinEnv : Binds :=
   .cons "true" (.bool true) (.cons "false" (.bool false) (.cons "not" (.op .not)
-    (.cons "succ" (.op .succ) (.cons "add" (.op .add) (.cons "if" (.op .ite) .nil)))))
+    (.cons "succ" (.op .succ) (.cons "add" (.op .add) .nil))))
 
 /-! ## Examples
 
@@ -286,6 +283,11 @@ example : eval 30 builtinEnv (.call addXY [.lit 1] [("z", .lit 2)]) = some .err 
 example : eval 30 builtinEnv (.app (.lit 1) (.lit 2)) = some .err := rfl
 example : eval 30 builtinEnv (.sel (.rcd []) "x") = some .err := rfl
 example : eval 30 builtinEnv (.selOr (.rcd []) "x" (.lit 2)) = some (.ok (.int 2)) := rfl
+
+/-- Only the chosen branch of an `if` is evaluated: the other one would go
+wrong here. -/
+example : eval 30 builtinEnv (.ite (.var "true") (.lit 1) (.app (.lit 1) (.lit 2))) =
+    some (.ok (.int 1)) := rfl
 
 /-- A `let rec` that calls itself forever runs out of fuel. -/
 example : eval 30 builtinEnv

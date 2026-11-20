@@ -631,6 +631,8 @@ theorem TypeTerm.inv : TypeTerm Γ s t st s' → Inv s → Inv s'
   | .app _ h₁ h₂ hc, hi => (hc.sound (h₂.inv (h₁.inv hi.fresh))).1
   | .rcd h, hi => h.inv hi
   | .sel _ h hc, hi => (hc.sound (h.inv hi.fresh)).1
+  | .ite _ hc h₁ ha h₂ hb h₃, hi =>
+    (h₃.sound (hb.inv (h₂.sound (ha.inv (h₁.sound (hc.inv hi.fresh)).1)).1)).1
   | .selOr _ h hc hd hc', hi => (hc'.sound (hd.inv (hc.sound (h.inv hi.fresh)).1)).1
   | .ext _ h₁ h₂ _ hc, hi => (hc.sound (h₂.inv (h₁.inv hi)).fresh).1
   | .extNil h, hi => h.inv hi

@@ -302,6 +302,17 @@ theorem TypeTerm.nac : TypeTerm Γ s t st s' → CtxNAC Γ → Inv₂ s → LogN
   | .sel _ h' hc, hΓ, i, h =>
     have r := h'.nac hΓ i.fresh h
     ⟨hc.nac (h'.inv₂ i.fresh) r.2.1 ⟨⟨trivial, trivial⟩, trivial⟩ r.1, trivial, trivial⟩
+  | .ite _ hc h₁ ha h₂ hb h₃, hΓ, i, h =>
+    have rc := hc.nac hΓ i.fresh h
+    have i₁ := hc.inv₂ i.fresh
+    have n₁ := h₁.nac i₁ rc.2.1 trivial rc.1
+    have i₂ := h₁.inv₂ i₁
+    have ra := ha.nac hΓ i₂ n₁
+    have i₃ := ha.inv₂ i₂
+    have n₂ := h₂.nac i₃ ra.2.1 trivial ra.1
+    have i₄ := h₂.inv₂ i₃
+    have rb := hb.nac hΓ i₄ n₂
+    ⟨h₃.nac (hb.inv₂ i₄) rb.2.1 trivial rb.1, trivial, trivial⟩
   | .selOr _ h' hc hd hc', hΓ, i, h =>
     have r := h'.nac hΓ i.fresh h
     have i₁ := h'.inv₂ i.fresh

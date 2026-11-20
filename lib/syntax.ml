@@ -12,6 +12,8 @@ type term =
   | Ext of term * (string * term) list
       (** [t with {a = s; b = u}]: extend or update fields *)
   | Let of bool * string * term * term  (** [let rec? x = s in t] *)
+  | If of term * term * term
+      (** [if c then a else b]: only the chosen branch is evaluated *)
   | Fn of param list * term
       (** [fn (x₁ [= d₁], …, xₙ [= dₙ]) -> t]: a function of a parameter
           list (issue #2). A default is evaluated at each call, in the scope
@@ -47,6 +49,7 @@ let rec show = function
       Printf.sprintf "(fn %s -> %s)"
         (Types.show_params (List.map (fun p -> (p.kind, param p)) ps))
         (show t)
+  | If (c, a, b) -> Printf.sprintf "(if %s then %s else %s)" (show c) (show a) (show b)
   | Let (r, x, s, t) ->
       Printf.sprintf "(let %s%s = %s in %s)"
         (if r then "rec " else "")

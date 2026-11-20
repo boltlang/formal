@@ -94,8 +94,12 @@ Theorem 1 (soundness) through Lemma 2 (soundness of constraining).
 - **Small things.** `level` is recomputed on every call instead of cached
   in a `lazy val`. The constraint cache is a hash table on structural
   equality, with variables compared by identity, as Scala's case-class
-  equality does. The built-ins are the reference implementation's: `true`,
-  `false`, `not`, `succ`, `add` and `if : ∀α. bool → α → α → α`.
+  equality does. The built-ins are the reference implementation's `true`,
+  `false`, `not`, `succ` and `add`. `if c then a else b` is a term of its
+  own and not the function `if : ∀α. bool → α → α → α` of the reference
+  implementation, so that only the chosen branch is evaluated; it is typed
+  as that function would be: the condition is a `bool`, and both branches
+  flow into a fresh result variable.
 
 As in §4.1, simplification relies on MLsub's lattice equations: for
 example, `(a -> b) ∧ (c -> d)` becomes `a ∨ c -> b ∧ d`, and a union of

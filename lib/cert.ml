@@ -140,6 +140,8 @@ let rec ann = function
   | ALetRec (x, gen, t, r, b) ->
       Printf.sprintf "{\"letrec\": [%s, %s, %s, %s, %s]}" (json_string x) (gen_ids gen) (ty t)
         (ann r) (ann b)
+  | AIf (c, a, b, t) ->
+      Printf.sprintf "{\"if\": [%s, %s, %s, %s]}" (ann c) (ann a) (ann b) (ty t)
   | AFn (ps, body) ->
       let param (x, k, t, d) =
         match d with
@@ -175,5 +177,5 @@ let to_json (c : t) (term : ann) : string =
         (fun (v : var_state) ->
           Printf.sprintf "[%d, %s]" v.id (list json_string (SSet.elements v.kind)))
         kinds;
-      Printf.sprintf ",\n \"if\": %d,\n \"term\": %s}\n" !if_var (ann term);
+      Printf.sprintf ",\n \"term\": %s}\n" (ann term);
     ]

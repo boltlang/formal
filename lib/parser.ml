@@ -166,7 +166,7 @@ let parse_program (src : string) : item list =
         let a = expr () in
         expect ELSE;
         let b = expr () in
-        App (App (App (Var "if", c), a), b)
+        If (c, a, b)
     | _ -> (
         let t = post () in
         match (peek (), t) with

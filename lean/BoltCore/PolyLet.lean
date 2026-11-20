@@ -591,6 +591,11 @@ inductive PTyp (c : Certificate) : PCtx → Term → SType → Prop where
       PTyp c Γ (.letIn false x r b) st
   | letRec : r.IsFun → PTyp c ((x, .mono stx) :: Γ) r inf → inf ≠ .abs → c.Accepts inf stx →
       GenOK c Γ gen → PTyp c ((x, .poly gen stx) :: Γ) b st → PTyp c Γ (.letIn true x r b) st
+  /-- A conditional: the condition is accepted below `bool`, and each
+  branch below the result. -/
+  | ite : PTyp c Γ cnd stc → stc ≠ .abs → c.Accepts stc (.prim "bool") →
+      PTyp c Γ a sta → sta ≠ .abs → c.Accepts sta st →
+      PTyp c Γ b stb → stb ≠ .abs → c.Accepts stb st → PTyp c Γ (.ite cnd a b) st
   /-- A function of a parameter list: its domain is the signature. -/
   | fn : Param.WF P.toList → PParams c Γ ps P Γ' → PTyp c Γ' t st →
       PTyp c Γ (.fn ps t) (.arrow (.sig P) st)
@@ -743,6 +748,10 @@ theorem PTyp.sound (hv : c.Valid) {A : List Nat} {I : SInterp} (hg : GenHyp c.st
       h₁.sound hv hg'
     rw [PCtx.toCtx_withGen hok.ctx] at ih
     exact .sub ih ((hv.holdsG hg' hc).1 ha)
+  | .ite hc hca hcc ha haa hac hb hba hbc =>
+    .ite (.sub (hc.sound hv hg) ((hv.holdsG hg hcc).1 hca))
+      (.sub (ha.sound hv hg) ((hv.holdsG hg hac).1 haa))
+      (.sub (hb.sound hv hg) ((hv.holdsG hg hbc).1 hba))
   | .fn (P := P) hw hp h => by
     have hw' : Param.WF (P.toParamsI I) := by rw [SParams.toParamsI_eq]; exact hw.map _
     exact .fn hw' (hp.sound hv hg) (h.sound hv hg)

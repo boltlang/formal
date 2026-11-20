@@ -58,16 +58,16 @@ are fine. Like HM, this also rejects joining a value with a structure
 containing it, although subtyping could type that without recursion.
 
   $ boltcore -e 'let rec f(x) = f in f'
-  - : type error: recursive type: α2 reaches itself through a type constructor (via bound ((x: α3) -> α2))
+  - : type error: recursive type: α1 reaches itself through a type constructor (via bound ((x: α2) -> α1))
   [1]
   $ boltcore -e 'fn (x) -> x(x)'
-  - : type error: recursive type: α2 reaches itself through a type constructor (via bound ({*: [α2]} -> α3))
+  - : type error: recursive type: α1 reaches itself through a type constructor (via bound ({*: [α1]} -> α2))
   [1]
   $ boltcore -e 'let rec len(l) = if l.isNil then 0 else succ(len(l.tail)) in len'
-  - : type error: recursive type: α11 reaches itself through a type constructor (via bound α3)
+  - : type error: recursive type: α7 reaches itself through a type constructor (via bound α2)
   [1]
   $ boltcore -e 'fn (x) -> if true then x else {a = x}'
-  - : type error: recursive type: α6 reaches itself through a type constructor (via bound {a: α2})
+  - : type error: recursive type: α2 reaches itself through a type constructor (via bound {a: α1})
   [1]
   $ boltcore -e 'let rec loop(x) = loop(x) in loop'
   - : (x: ⊤) -> ⊥
@@ -131,7 +131,7 @@ and `let rec` cannot build one, since it only binds functions).
 Type errors
 
   $ boltcore -e '1(2)'
-  - : type error: cannot constrain int <: ({*: [int]} -> α2)
+  - : type error: cannot constrain int <: ({*: [int]} -> α1)
   [1]
   $ boltcore -e 'succ(true)'
   - : type error: cannot constrain bool <: int
@@ -149,7 +149,7 @@ Type errors
   - : type error: missing field: a in {b: int}
   [1]
   $ boltcore --rectypes -e 'let rec f(x) = f(x.a) in f({a = {a = 1}})'
-  - : type error: cannot constrain int <: {a: α9, ..}
+  - : type error: cannot constrain int <: {a: α8, ..}
   [1]
 
 Parse errors
@@ -207,7 +207,7 @@ Raw (coalesced but unsimplified) output, Sec. 3.3, versus simplified output
   $ boltcore --rectypes -e 'let rec f(x) = {L = x; R = f(x)} in f'
   - : (x: 'a) -> ({L: 'a, R: 'b} as 'b)
   $ boltcore --raw -e 'fn (x) -> {L = add(x, 1); R = if true then 0 else x}'
-  - : (x: 'a ∧ 'b ∧ 'c ∧ int) -> {L: 'd ∨ int, R: 'c ∨ int}
+  - : (x: 'a ∧ 'b ∧ int) -> {L: 'c ∨ int, R: 'b ∨ int}
   $ boltcore -e 'fn (x) -> {L = add(x, 1); R = if true then 0 else x}'
   - : (x: int) -> {L: int, R: int}
 
@@ -245,7 +245,7 @@ Extensible records (rows, after Marques et al. 2024)
   $ boltcore -e 'let rec f(r) = f(r with {n = succ(r.n)}) in f'
   - : (r: {n: int, ..}) -> ⊥
   $ boltcore -e 'fn (r) -> fn (s) -> if true then r with {y = 1} else s with {z = 2}'
-  - : (r: {y: Abs | 'a}) -> (s: {z: Abs | 'b}) -> {y: int | 'a} ∨ {z: int | 'b}
+  - : (r: {y: Abs | 'a}) -> (s: {z: Abs | 'b}) -> {z: int | 'b} ∨ {y: int | 'a}
   $ boltcore -e '{x = 1} with {y = 2}.z'
   - : type error: missing field: z in {x: int}
   [1]
@@ -312,7 +312,7 @@ With let-polymorphism, extrusion and rows
   $ boltcore --self-check -e 'fn (r) -> r with {y = 1}.y ?? 2'
   - : (r: {..}) -> int
   $ boltcore --self-check -e 'fn (b) -> fn (r) -> if b then r with {x = 1} else {}'
-  - : (b: bool) -> (r: {x: Abs | 'a}) -> {x: int | 'a} ∨ {}
+  - : (b: bool) -> (r: {x: Abs | 'a}) -> {} ∨ {x: int | 'a}
   $ boltcore --self-check -e 'let rec f(r) = f(r with {n = r.n ?? 0}) in f'
   - : (r: {n?: ⊤, ..}) -> ⊥
 
@@ -336,7 +336,7 @@ becomes the neutral element (here ⊤ in an intersection) instead of an
 unguarded recursive type like `('g ∧ 'h as 'g)`
 
   $ boltcore --raw -e 'let rec count(r) = if r.done then r else count(r with {n = succ(r.n)}) in count'
-  - : 'a ∨ ((r: 'b ∧ {n: Abs | 'c ∧ {done: 'd ∧ bool | 'e}} ∧ {n: 'f ∧ int, ..} ∧ 'g ∧ 'h ∧ 'i ∧ ⊤ ∧ {done: 'd ∧ bool, ..}) -> 'h ∨ {n: 'j ∨ int | 'c})
+  - : 'a ∨ ((r: 'b ∧ {n: Abs | 'c ∧ {done: 'd ∧ bool | 'e}} ∧ {n: 'f ∧ int, ..} ∧ 'g ∧ 'h ∧ ⊤ ∧ {done: 'd ∧ bool, ..}) -> 'g ∨ {n: 'i ∨ int | 'c})
 
 Kinds: the row variable of `r with {y = …}` lacks y; `r with {}` is just r
 

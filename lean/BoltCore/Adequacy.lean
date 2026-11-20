@@ -79,6 +79,24 @@ theorem TypeTerm.skeleton {c : Certificate} {Δ : PCtx} (r : PRel Γ Δ) :
     have r' := h.nac hΓ i.fresh n
     exact .sel (h.skeleton r hΓ i.fresh n (fun p hp => hlog p (hc.log_grows p hp))) r'.2.2.ne_abs
       (hc.logged.accepts hlog) trivial
+  | .ite _ hc h₁ ha h₂ hb h₃, hΓ, i, n, hlog => by
+    have rc := hc.nac hΓ i.fresh n
+    have i₁ := hc.inv₂ i.fresh
+    have n₁ := h₁.nac i₁ rc.2.1 trivial rc.1
+    have i₂ := h₁.inv₂ i₁
+    have ra := ha.nac hΓ i₂ n₁
+    have i₃ := ha.inv₂ i₂
+    have n₂ := h₂.nac i₃ ra.2.1 trivial ra.1
+    have i₄ := h₂.inv₂ i₃
+    have rb := hb.nac hΓ i₄ n₂
+    have hlog₅ : ∀ p, p ∈ _ → p ∈ c.log := fun p hp => hlog p (h₃.log_grows p hp)
+    have hlog₄ : ∀ p, p ∈ _ → p ∈ c.log := fun p hp => hlog₅ p (hb.log_grows p hp)
+    have hlog₃ : ∀ p, p ∈ _ → p ∈ c.log := fun p hp => hlog₄ p (h₂.log_grows p hp)
+    have hlog₂ : ∀ p, p ∈ _ → p ∈ c.log := fun p hp => hlog₃ p (ha.log_grows p hp)
+    have hlog₁ : ∀ p, p ∈ _ → p ∈ c.log := fun p hp => hlog₂ p (h₁.log_grows p hp)
+    exact .ite (hc.skeleton r hΓ i.fresh n hlog₁) rc.2.2.ne_abs (h₁.logged.accepts hlog₂)
+      (ha.skeleton r hΓ i₂ n₁ hlog₃) ra.2.2.ne_abs (h₂.logged.accepts hlog₄)
+      (hb.skeleton r hΓ i₄ n₂ hlog₅) rb.2.2.ne_abs (h₃.logged.accepts hlog)
   | .selOr _ h hc hd hc', hΓ, i, n, hlog => by
     have r' := h.nac hΓ i.fresh n
     have i₁ := h.inv₂ i.fresh

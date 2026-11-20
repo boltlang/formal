@@ -15,33 +15,28 @@ namespace BoltCore.Alg
 
 open State
 
-/-- The built-in values of the model, which has no `if`. -/
-def builtinEnvMono : Binds :=
-  .cons "true" (.bool true) (.cons "false" (.bool false) (.cons "not" (.op .not)
-    (.cons "succ" (.op .succ) (.cons "add" (.op .add) .nil))))
-
-theorem builtinsMono_typed {E : Defs} : ETyp E builtinEnvMono builtins.toCtx :=
+/-- The built-in values have the types the model gives the built-ins. -/
+theorem builtinsAlg_typed {E : Defs} : ETyp E builtinEnv builtins.toCtx :=
   .mono (.bool Sub.refl) <| .mono (.bool Sub.refl) <| .mono (.not Sub.refl) <|
     .mono (.succ Sub.refl) <| .mono (.add Sub.refl) .nil
 
 /-- **Inference is safe**: a term the algorithm types does not go wrong. -/
 theorem infer_safe {K : Nat → List String} {t : Term} {st : SType} {s' : State}
     (h : TypeTerm builtins (State.initK K) t st s') (n : Nat) :
-    eval n builtinEnvMono t ≠ some .err :=
-  (theorem1 h).safe builtinsMono_typed n
+    eval n builtinEnv t ≠ some .err :=
+  (theorem1 h).safe builtinsAlg_typed n
 
 /-- The built-in values have the types the checker gives the built-ins. -/
-theorem pbuiltins_typed (c : Certificate) (k : Nat) :
-    ETyp (defsOf c.state) builtinEnv ((pbuiltins k).toCtx c.bounds .gv) :=
+theorem pbuiltins_typed (c : Certificate) :
+    ETyp (defsOf c.state) builtinEnv (pbuiltins.toCtx c.bounds .gv) :=
   .mono (.bool Sub.refl) <| .mono (.bool Sub.refl) <| .mono (.not Sub.refl) <|
-    .mono (.succ Sub.refl) <| .mono (.add Sub.refl) <|
-    .cons (fun _ ⟨_, _, _, e⟩ => by subst e; exact .ite Sub.refl) .nil
+    .mono (.succ Sub.refl) <| .mono (.add Sub.refl) .nil
 
 /-- **Certified programs are safe**: if the certificate checks and the
 annotated term checks against it, the term does not go wrong. -/
-theorem check_safe {c : Certificate} {k : Nat} {a : Ann} {st : SType} (hc : c.check = true)
-    (h : infer c (pbuiltins k) a = some st) (n : Nat) :
+theorem check_safe {c : Certificate} {a : Ann} {st : SType} (hc : c.check = true)
+    (h : infer c pbuiltins a = some st) (n : Nat) :
     eval n builtinEnv a.erase ≠ some .err :=
-  (check_sound hc h).safe (pbuiltins_typed c k) n
+  (check_sound hc h).safe (pbuiltins_typed c) n
 
 end BoltCore.Alg

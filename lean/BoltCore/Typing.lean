@@ -175,6 +175,8 @@ inductive Typ (E : Defs) : Ctx → Term → Ty .ty → Prop where
       Typ E ((x, σ) :: Γ) t τ → Typ E Γ (.letIn false x s t) τ
   | letRec : s.IsFun → (∀ τ', σ.Instance E τ' → Typ E ((x, .mono τ') :: Γ) s τ') →
       σ.Instance E τ₀ → Typ E ((x, σ) :: Γ) t τ → Typ E Γ (.letIn true x s t) τ
+  /-- A conditional: both branches have the type of the result. -/
+  | ite : Typ E Γ c (.prim "bool") → Typ E Γ a τ → Typ E Γ b τ → Typ E Γ (.ite c a b) τ
   /-- A function of a parameter list: its domain is the union of the
   argument records it accepts. -/
   | fn : Param.WF P → TypParams E Γ ps P Γ' → Typ E Γ' t τ →
@@ -211,8 +213,7 @@ def builtins : Ctx :=
   [ ("true", .mono bool), ("false", .mono bool),
     ("not", .mono (.arrow (builtinSig [bool]) bool)),
     ("succ", .mono (.arrow (builtinSig [int]) int)),
-    ("add", .mono (.arrow (builtinSig [int, int]) int)),
-    ("if", .poly [0] [] (.arrow bool (.arrow (.fvar 0) (.arrow (.fvar 0) (.fvar 0))))) ]
+    ("add", .mono (.arrow (builtinSig [int, int]) int)) ]
 
 /-! ## Examples -/
 
@@ -251,10 +252,8 @@ theorem Subst.one_dom {x y : Nat} {τ : Ty .ty} {s : Srt} (h : ((Subst.one x τ)
     · simp [hy] at h
   all_goals simp at h
 
-theorem typ_if : Typ E builtins
-    (.app (.app (.app (.var "if") (.var "true")) (.lit 1)) (.lit 2)) int :=
-  .app (.app (.app (.var rfl ⟨Subst.one 0 int, fun _ _ h => by simp [Subst.one_dom h],
-    (fun _ h => nomatch h), rfl⟩) (.var_mono rfl)) .lit) .lit
+theorem typ_if : Typ E builtins (.ite (.var "true") (.lit 1) (.lit 2)) int :=
+  .ite (.var_mono rfl) .lit .lit
 
 /-- The record extension example of Marques et al.:
 `((fun r -> r with {y = 2}) {x = 1}).x : int`, with the function used at the
@@ -429,7 +428,8 @@ theorem Typ.sel_inv {t : Term} {l : String} : ∀ {Γ : Ctx} {u : Term} {τ : Ty
   | _, _, _, .lit, e | _, _, _, .var _ _, e | _, _, _, .lam _, e | _, _, _, .app _ _, e
   | _, _, _, .rcd _, e | _, _, _, .ext _ _, e | _, _, _, .extNil _, e
   | _, _, _, .selOr _ _, e | _, _, _, .fn _ _ _, e
-  | _, _, _, .letIn _ _ _, e | _, _, _, .letRec _ _ _ _, e => nomatch e
+  | _, _, _, .letIn _ _ _, e | _, _, _, .letRec _ _ _ _, e | _, _, _, .ite _ _ _, e =>
+    nomatch e
 
 theorem Typ.lam_inv {x : String} {t : Term} : ∀ {Γ : Ctx} {u : Term} {τ : Ty .ty},
     Typ E Γ u τ → u = .lam x t →
@@ -439,7 +439,8 @@ theorem Typ.lam_inv {x : String} {t : Term} : ∀ {Γ : Ctx} {u : Term} {τ : Ty
   | _, _, _, .lit, e | _, _, _, .var _ _, e | _, _, _, .app _ _, e
   | _, _, _, .rcd _, e | _, _, _, .sel _, e | _, _, _, .ext _ _, e | _, _, _, .extNil _, e
   | _, _, _, .selOr _ _, e | _, _, _, .fn _ _ _, e
-  | _, _, _, .letIn _ _ _, e | _, _, _, .letRec _ _ _ _, e => nomatch e
+  | _, _, _, .letIn _ _ _, e | _, _, _, .letRec _ _ _ _, e | _, _, _, .ite _ _ _, e =>
+    nomatch e
 
 theorem Typ.fn_inv {ps : List (String × PKind × Option Term)} {t : Term} :
     ∀ {Γ : Ctx} {u : Term} {τ : Ty .ty}, Typ E Γ u τ → u = .fn ps t →
@@ -451,7 +452,8 @@ theorem Typ.fn_inv {ps : List (String × PKind × Option Term)} {t : Term} :
   | _, _, _, .lit, e | _, _, _, .var _ _, e | _, _, _, .app _ _, e | _, _, _, .lam _, e
   | _, _, _, .rcd _, e | _, _, _, .sel _, e | _, _, _, .ext _ _, e | _, _, _, .extNil _, e
   | _, _, _, .selOr _ _, e
-  | _, _, _, .letIn _ _ _, e | _, _, _, .letRec _ _ _ _, e => nomatch e
+  | _, _, _, .letIn _ _ _, e | _, _, _, .letRec _ _ _ _, e | _, _, _, .ite _ _ _, e =>
+    nomatch e
 
 theorem Typ.rcd_inv {fs : List (String × Term)} : ∀ {Γ : Ctx} {u : Term} {τ : Ty .ty},
     Typ E Γ u τ → u = .rcd fs → ∃ F, TypFields E Γ fs F ∧ Sub E (Ty.record F) τ
@@ -460,7 +462,8 @@ theorem Typ.rcd_inv {fs : List (String × Term)} : ∀ {Γ : Ctx} {u : Term} {τ
   | _, _, _, .lit, e | _, _, _, .var _ _, e | _, _, _, .lam _, e | _, _, _, .app _ _, e
   | _, _, _, .sel _, e | _, _, _, .ext _ _, e | _, _, _, .extNil _, e
   | _, _, _, .selOr _ _, e | _, _, _, .fn _ _ _, e
-  | _, _, _, .letIn _ _ _, e | _, _, _, .letRec _ _ _ _, e => nomatch e
+  | _, _, _, .letIn _ _ _, e | _, _, _, .letRec _ _ _ _, e | _, _, _, .ite _ _ _, e =>
+    nomatch e
 
 theorem TypFields.labels {Γ : Ctx} {l : String} :
     ∀ {fs : List (String × Term)} {F : List (String × Ty .ty)}, TypFields E Γ fs F →

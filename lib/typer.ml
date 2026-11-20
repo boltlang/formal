@@ -530,6 +530,7 @@ type ann =
   | AExt of ann * (string * ann) list * simple_type
   | ALet of string * var_state list * ann * ann
   | ALetRec of string * var_state list * simple_type * ann * ann
+  | AIf of ann * ann * ann * simple_type  (** the type of the result *)
   | AFn of (string * pkind * simple_type * ann option) list * ann
       (** each parameter's kind, type and annotated default *)
 
@@ -638,6 +639,16 @@ let rec type_term_ann (ctx : ctx) (lvl : int) (trm : term) : simple_type * ann =
       in
       ( Function (sg, body_ty),
         AFn (List.map (fun ((p : param), ty, d) -> (p.name, p.kind, ty, d)) params, body_ann) )
+  | If (c, a, b) ->
+      (* the condition is a boolean, and both branches flow into the result *)
+      let res = fresh_var lvl in
+      let c_ty, c_ann = type_term_ann ctx lvl c in
+      constrain c_ty (Primitive "bool");
+      let a_ty, a_ann = type_term_ann ctx lvl a in
+      constrain a_ty res;
+      let b_ty, b_ann = type_term_ann ctx lvl b in
+      constrain b_ty res;
+      (res, AIf (c_ann, a_ann, b_ann, res))
   | Let (isrec, name, rhs, body) ->
       let sch, la = type_let_rhs_ann ctx lvl isrec name rhs in
       let ty, body_ann = type_term_ann (StringMap.add name sch ctx) lvl body in
@@ -684,26 +695,14 @@ let type_let_rhs ctx lvl isrec name rhs = fst (type_let_rhs_ann ctx lvl isrec na
 let bool_t = Primitive "bool"
 let int_t = Primitive "int"
 
-(** The variable of [if]'s scheme, in the last [builtins ()]. *)
-let if_var = ref 0
-
-(** Initial context, as in the reference implementation. [if c then a else b]
-    is parsed as [if c a b] with [if : ∀α. bool -> α -> α -> α]. *)
+(** Initial context. [if c then a else b] is a term of its own ({!Syntax.If}),
+    not a function: only the chosen branch is evaluated. *)
 let builtins () : ctx =
-  let fn a b = Function (a, b) in
   (* positional-only parameters, under names source code cannot write *)
   let call ts r =
     Function
       ( Sig (List.mapi (fun i t -> { sname = "#" ^ string_of_int i; skind = PosOnly; sty = t; sopt = false }) ts),
         r )
-  in
-  let if_ty =
-    let vs = fresh_state 1 in
-    if_var := vs.id;
-    let v = Variable vs in
-    let sch = Poly (0, fn bool_t (fn v (fn v v))) in
-    gens := (sch, [ vs ]) :: !gens;
-    sch
   in
   StringMap.of_seq
     (List.to_seq
@@ -713,5 +712,4 @@ let builtins () : ctx =
          ("not", Simple (call [ bool_t ] bool_t));
          ("succ", Simple (call [ int_t ] int_t));
          ("add", Simple (call [ int_t; int_t ] int_t));
-         ("if", if_ty);
        ])

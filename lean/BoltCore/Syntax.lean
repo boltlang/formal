@@ -21,6 +21,9 @@ inductive Term where
   /-- `t with {l = e; ...}`: extend or update fields. -/
   | ext : Term → List (String × Term) → Term
   | letIn : (isRec : Bool) → String → Term → Term → Term
+  /-- `if c then a else b`. It is a term and not a function, so that only
+  the chosen branch is evaluated. -/
+  | ite : Term → Term → Term → Term
   /-- `fn (x₁ [= d₁], …, xₙ [= dₙ]) -> t`: a function of a parameter list
   (issue #2). Each parameter has a name, a kind and an optional default,
   which is evaluated at each call, in the scope of the parameters before

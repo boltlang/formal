@@ -467,6 +467,13 @@ inductive TypeTerm : SCtx → State → Term → SType → State → Prop where
       ConstrainTop s₁ inf (.var s.next) s₂ →
       TypeTerm ((x, .var s.next) :: Γ) s₂ b stb s₃ →
       TypeTerm Γ s (.letIn true x r b) stb s₃
+  /-- `if c then a else b`: the condition is a boolean, and both branches
+  flow into the result variable, allocated first. -/
+  | ite : s.kind s.next = [] → TypeTerm Γ s.fresh c stc s₁ →
+      ConstrainTop s₁ stc (.prim "bool") s₂ →
+      TypeTerm Γ s₂ a sta s₃ → ConstrainTop s₃ sta (.var s.next) s₄ →
+      TypeTerm Γ s₄ b stb s₅ → ConstrainTop s₅ stb (.var s.next) s₆ →
+      TypeTerm Γ s (.ite c a b) (.var s.next) s₆
   /-- `fn (…) -> t`: the parameters give the signature and the context of
   the body. The parameter list is well-formed (`Param.WF`), which the
   parser guarantees (`lib/parser.ml`); the typer does not check it. -/
@@ -498,8 +505,7 @@ def builtinSig : Nat → List SType → SParams
   | _, [] => .nil
   | i, τ :: τs => .cons s!"#{i}" .posOnly false τ (builtinSig (i + 1) τs)
 
-/-- The monomorphic built-ins (`if` is polymorphic and needs schemes, which
-come with let-polymorphism). They take parameter lists. -/
+/-- The built-ins. The functions take parameter lists. -/
 def builtins : SCtx :=
   [ ("true", .prim "bool"), ("false", .prim "bool"),
     ("not", .arrow (.sig (builtinSig 0 [.prim "bool"])) (.prim "bool")),
