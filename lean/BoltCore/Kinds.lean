@@ -59,11 +59,17 @@ def WK (K : Nat → List String) : SType → Prop
   | .arrow a b => WK K a ∧ KEmpty K a ∧ WK K b ∧ KEmpty K b
   | .record fs t => FWK K fs ∧ WK K t ∧ RecOK K (.record fs t)
   | .opt t => WK K t ∧ KEmpty K t
+  | .sig P => PWK K P
   | _ => True
 
 def FWK (K : Nat → List String) : SFields → Prop
   | .nil => True
   | .cons _ f fs => WK K f ∧ KEmpty K f ∧ FWK K fs
+
+/-- The types of a signature's parameters are well-kinded whole types. -/
+def PWK (K : Nat → List String) : SParams → Prop
+  | .nil => True
+  | .cons _ _ _ τ P => WK K τ ∧ KEmpty K τ ∧ PWK K P
 end
 
 variable {K : Nat → List String}
@@ -144,7 +150,58 @@ theorem WK.rowView : ∀ t : SType, WK K t → FWK K (rowView t).1 ∧ WK K (row
     have := WK.rowView t ht
     exact ⟨hf.append this.1, this.2⟩
   | .var _, _ | .prim _, _ | .abs, _ | .missing, _ | .nil, _ => ⟨trivial, trivial⟩
-  | .arrow _ _, h | .opt _, h => ⟨trivial, h⟩
+  | .arrow _ _, h | .opt _, h | .sig _, h => ⟨trivial, h⟩
+
+/-! ## Argument records
+
+The argument records of a signature are closed: they are well-kinded
+whole types when the parameters' types are. -/
+
+theorem rowView_closed (fs : SFields) : (rowView (.record fs .nil)).2 = .nil := by
+  simp [rowView]
+
+/-- A closed record of well-kinded fields is a well-kinded whole type. -/
+theorem WK.closed {fs : SFields} (h : FWK K fs) :
+    WK K (.record fs .nil) ∧ KEmpty K (.record fs .nil) :=
+  ⟨⟨h, trivial, fun ρ hρ => by rw [rowView_closed] at hρ; exact nomatch hρ⟩,
+    fun ρ hρ => by rw [rowView_closed] at hρ; exact nomatch hρ⟩
+
+theorem PWK.mem : ∀ {P : SParams}, PWK K P → ∀ p ∈ P.toList, WK K p.ty ∧ KEmpty K p.ty
+  | .nil, _, _, h => nomatch h
+  | .cons _ _ _ _ _, ⟨h₁, h₂, h₃⟩, p, hp => by
+    rcases List.mem_cons.mp hp with rfl | hp
+    · exact ⟨h₁, h₂⟩
+    · exact h₃.mem p hp
+
+theorem WK.list : ∀ {τs : List SType}, (∀ τ ∈ τs, WK K τ ∧ KEmpty K τ) →
+    WK K (SType.list τs) ∧ KEmpty K (SType.list τs)
+  | [], _ => WK.closed trivial
+  | τ :: _, h =>
+    have hτ := h τ (List.mem_cons_self ..)
+    have ih := WK.list fun σ hσ => h σ (List.mem_cons_of_mem _ hσ)
+    WK.closed ⟨hτ.1, hτ.2, ih.1, ih.2, trivial⟩
+
+theorem FWK.ofParams : ∀ {ps : List (Param SType)}, (∀ p ∈ ps, WK K p.ty ∧ KEmpty K p.ty) →
+    FWK K (SFields.ofParams ps)
+  | [], _ => trivial
+  | p :: _, h => by
+    have hp := h p (List.mem_cons_self ..)
+    refine ⟨?_, ?_, FWK.ofParams fun q hq => h q (List.mem_cons_of_mem _ hq)⟩
+    · cases ho : p.opt <;> simp only [Bool.false_eq_true, ite_true, ite_false]
+      · exact hp.1
+      · exact hp
+    · cases ho : p.opt <;> simp only [Bool.false_eq_true, ite_true, ite_false]
+      · exact hp.2
+      · exact .of_nonvar fun _ h => nomatch h
+
+/-- The argument records of a well-kinded signature are well-kinded whole
+types. -/
+theorem PWK.domain {P : SParams} (h : PWK K P) (k : Nat) :
+    WK K (P.domain k) ∧ KEmpty K (P.domain k) :=
+  have hl := WK.list (K := K) (τs := Param.pos k P.toList) fun _ hτ => by
+    obtain ⟨p, hp, rfl⟩ := Param.mem_pos hτ
+    exact h.mem p hp
+  WK.closed ⟨hl.1, hl.2, FWK.ofParams fun p hp => h.mem p (Param.mem_named hp)⟩
 
 theorem FWK.lookup {l : String} {f : SType} : ∀ {fs : SFields}, FWK K fs → fs.lookup l = some f →
     WK K f ∧ KEmpty K f
@@ -399,6 +456,15 @@ theorem Constrain.kinds : Constrain s a b s' → Inv₂ s → KInv K s →
       obtain ⟨x, hx, rfl⟩ := hp
       have := k.log _ (i.inLog.1 v x hx)
       exact ⟨ha, this.2.1, hab.trans_var this.2.2⟩
+  | .recordSig (k := k) _ _ _ _ _ h', i, kk, ha, hb, hab =>
+    h'.kinds i.remember (kk.remember ha hb hab) ha (PWK.domain hb k).1
+      (.of_nonvarR fun w hw => by simp [SParams.domain, rowView_closed] at hw)
+  | .sigL _ _ h', i, kk, ha, hb, hab =>
+    h'.kinds i.remember (kk.remember ha hb hab) fun p hp => by
+      obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hp
+      obtain ⟨k, _, rfl⟩ := List.mem_map.mp hd
+      exact ⟨(PWK.domain ha k).1, hb, .of_nonvarL fun w hw => by
+        simp [SParams.domain, rowView_closed] at hw⟩
 
 theorem ConstrainEach.kinds : ConstrainEach s ps s' → Inv₂ s → KInv K s →
     (∀ p ∈ ps, WK K p.1 ∧ WK K p.2 ∧ KOK K p.1 p.2) → KInv K s'
@@ -559,6 +625,11 @@ theorem TypeTerm.kinds : TypeTerm Γ s t st s' → CtxK K Γ → Inv₂ s → KI
     have r₁ := h₁.kinds hΓ' i.fresh ⟨k.kind, k.log, k.exps⟩
     have i₁ := h₁.inv₂ i.fresh
     exact h₂.kinds hΓ' (hc.inv₂ i₁) (hc.kinds i₁ r₁.1 r₁.2.1 trivial (.of_empty r₁.2.2 hv))
+  | .fn hp h, hΓ, i, k => by
+    have rp := hp.kinds hΓ i k
+    have r := h.kinds rp.2.2 (hp.inv₂ i) rp.1
+    exact ⟨r.1, ⟨rp.2.1, .of_nonvar (fun _ h => nomatch h), r.2.1, r.2.2⟩,
+      .of_nonvar (fun _ h => nomatch h)⟩
 
 theorem TypeFields.kinds : TypeFields Γ s fs F s' → CtxK K Γ → Inv₂ s → KInv K s →
     KInv K s' ∧ FWK K F
@@ -567,6 +638,22 @@ theorem TypeFields.kinds : TypeFields Γ s fs F s' → CtxK K Γ → Inv₂ s �
     have r₁ := h₁.kinds hΓ i k
     have r₂ := h₂.kinds hΓ (h₁.inv₂ i) r₁.1
     exact ⟨r₂.1, r₁.2.1, r₁.2.2, r₂.2⟩
+
+/-- Parameters: the signature is well-kinded, and so is the body's context. -/
+theorem TypeParams.kinds : TypeParams Γ s ps P Γ' s' → CtxK K Γ → Inv₂ s → KInv K s →
+    KInv K s' ∧ PWK K P ∧ CtxK K Γ'
+  | .nil, hΓ, _, k => ⟨k, trivial, hΓ⟩
+  | .req (x := x) hn h, hΓ, i, k => by
+    have hv := KEmpty.var_nil (k.kind ▸ hn)
+    have r := h.kinds (hΓ.cons (x := x) (st := .var _) trivial hv) i.fresh ⟨k.kind, k.log, k.exps⟩
+    exact ⟨r.1, ⟨trivial, hv, r.2.1⟩, r.2.2⟩
+  | .dflt (x := x) hn hd hc h, hΓ, i, k => by
+    have hv := KEmpty.var_nil (k.kind ▸ hn)
+    have rd := hd.kinds hΓ i.fresh ⟨k.kind, k.log, k.exps⟩
+    have i₁ := hd.inv₂ i.fresh
+    have k₂ := hc.kinds i₁ rd.1 rd.2.1 trivial (.of_empty rd.2.2 hv)
+    have r := h.kinds (hΓ.cons (x := x) (st := .var _) trivial hv) (hc.inv₂ i₁) k₂
+    exact ⟨r.1, ⟨trivial, hv, r.2.1⟩, r.2.2⟩
 end
 
 theorem KInv.init : KInv K (State.initK K) :=
@@ -577,7 +664,7 @@ theorem builtins_K : CtxK K builtins := by
   have hm := SCtx.lookup_mem h
   simp only [builtins, List.mem_cons, Prod.mk.injEq, List.not_mem_nil, or_false] at hm
   rcases hm with ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, rfl⟩ <;>
-    simp [WK, KEmpty, rowView]
+    simp [WK, PWK, builtinSig, KEmpty, rowView]
 
 /-! ## Ranking tails by kinds -/
 
@@ -621,7 +708,7 @@ theorem clo_kinds {s : State} (k : KInv K s) (i : BoundsInLog s) {v : Nat} {u : 
       and_true] at hk
     cases u with
     | var w => exact absurd rfl (hnv w)
-    | prim _ | arrow _ _ | abs | missing | opt _ | nil => simp [rowView] at hρ
+    | prim _ | arrow _ _ | abs | missing | opt _ | nil | sig _ => simp [rowView] at hρ
     | record fs t =>
       have hr := hw.2.2 ρ hρ
       match hfs : (rowView (.record fs t)).1, hr with
@@ -650,7 +737,7 @@ theorem lower_kinds {s : State} (k : KInv K s) (i : BoundsInLog s) {v ρ : Nat} 
     and_true] at hk
   cases x with
   | var w => exact absurd rfl (hnv w)
-  | prim _ | arrow _ _ | abs | missing | opt _ | nil => simp [rowView] at hρ
+  | prim _ | arrow _ _ | abs | missing | opt _ | nil | sig _ => simp [rowView] at hρ
   | record fs t =>
     have hr := hw.2.2 ρ hρ
     match hfs : (rowView (.record fs t)).1, hr with

@@ -92,6 +92,35 @@ let gens : (type_scheme * var_state list) list ref = ref []
 
 let gen_of sch = try List.assq sch !gens with Not_found -> []
 
+(** What relates a signature to its extruded copy, for certificates.
+    [extrude] records the pair of signatures and the pairs of parameter
+    types. A step of the checker also needs what [constrain] would go
+    through: each argument record of the lower signature below the upper
+    signature and below its record for the same number of positional
+    arguments, and their lists of positional arguments, suffix by suffix. *)
+let note_sig pol ps ps' =
+  if !recording then begin
+    let lo, hi = if pol then (ps, ps') else (ps', ps) in
+    let rec lists a b =
+      match (a, b) with
+      | Record ([ ("hd", _); ("tl", ta) ], Nil), Record ([ ("hd", _); ("tl", tb) ], Nil) ->
+          note a b;
+          lists ta tb
+      | _ -> ()
+    in
+    List.iter
+      (fun (k, d) ->
+        match sig_domain hi k with
+        | None -> ()
+        | Some d' -> (
+            note d (Sig hi);
+            note d d';
+            match (d, d') with
+            | Record ((_, l) :: _, _), Record ((_, l') :: _, _) -> lists l l'
+            | _ -> ()))
+      (sig_domains lo)
+  end
+
 (** {1 Extrusion (Fig. 7)}
 
     Copy [ty] so that the result has level at most [lvl], creating
@@ -123,7 +152,9 @@ and extrude1 ty pol lvl c =
     | Opt t -> Opt (extrude t pol lvl c)
     | Sig ps ->
         (* parameters are fields of the argument records: same polarity *)
-        Sig (List.map (fun p -> { p with sty = extrude p.sty pol lvl c }) ps)
+        let ps' = List.map (fun p -> { p with sty = extrude p.sty pol lvl c }) ps in
+        note_sig pol ps ps';
+        Sig ps'
     | Abs | Missing | Nil -> ty
     | Variable vs -> (
         match PolarTbl.find_opt c (vs.id, pol) with
@@ -499,9 +530,8 @@ type ann =
   | AExt of ann * (string * ann) list * simple_type
   | ALet of string * var_state list * ann * ann
   | ALetRec of string * var_state list * simple_type * ann * ann
-  | AFn of (string * simple_type * ann option) list * ann
-      (** each parameter's type and annotated default; not yet in the Lean
-          development *)
+  | AFn of (string * pkind * simple_type * ann option) list * ann
+      (** each parameter's kind, type and annotated default *)
 
 (** A [let]'s right-hand side: its generalized variables, the type of the
     name in its own body (for [let rec]), and the annotated term. *)
@@ -607,7 +637,7 @@ let rec type_term_ann (ctx : ctx) (lvl : int) (trm : term) : simple_type * ann =
              params)
       in
       ( Function (sg, body_ty),
-        AFn (List.map (fun ((p : param), ty, d) -> (p.name, ty, d)) params, body_ann) )
+        AFn (List.map (fun ((p : param), ty, d) -> (p.name, p.kind, ty, d)) params, body_ann) )
   | Let (isrec, name, rhs, body) ->
       let sch, la = type_let_rhs_ann ctx lvl isrec name rhs in
       let ty, body_ann = type_term_ann (StringMap.add name sch ctx) lvl body in

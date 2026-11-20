@@ -38,15 +38,15 @@ one unsorted syntax of simple types, translated into the sorts by position.
 | File | Contents |
 |---|---|
 | `BoltCore/Syntax.lean` | term syntax (mirrors `lib/syntax.ml`) |
-| `BoltCore/Types.lean` | types, rows and fields as one family indexed by a sort; `Abs` is `⊤` at the field and row sorts; the field `missing` and the empty row `nil`, with `opt τ = pre τ ∪ missing`; no structural recursive types |
+| `BoltCore/Types.lean` | types, rows and fields as one family indexed by a sort; `Abs` is `⊤` at the field and row sorts; the field `missing` and the empty row `nil`, with `opt τ = pre τ ∪ missing`; parameter lists, whose domain `Ty.sig` is the union of the argument records they accept; no structural recursive types |
 | `BoltCore/Sub.lean` | guarded coinductive subtyping, rows compared field by field (`Step.fields`), `Abs ≰ pre τ` (`not_abs_le_pre`); reflexivity, transitivity (cut elimination by sort, for any relation), coinduction up to transitivity, ranked (non-recursive) definitions, the paper's §5.1.3 example with graph variables, row examples |
 | `BoltCore/Rows.lean` | row algebra; exactness of the row rewrites in `lib/simplify.ml` and `lib/subsume.ml` |
 | `BoltCore/Lattice.lean` | the MLsub lattice equations: what the minimal rules cannot derive (`not_fun_merge`, `not_pre_union`), and the sequent-style plan |
-| `BoltCore/Typing.lean` | declarative typing (constrained schemes `∀ᾱ. D ⇒ σ`, with constraints at any sort, for built-ins and let-polymorphism; record extension; selection of present fields `pre τ` only; selection with a default of optional fields; closed record literals) with examples; selecting a missing field is untypable (`not_typ_sel_missing`) |
-| `BoltCore/Algorithm.lean` | model of `lib/typer.ml` (no levels): state, `Constrain`/`TypeTerm` as big-step relations; ranked bounds (`StructRanked`) rule out structural recursive types |
+| `BoltCore/Typing.lean` | declarative typing (constrained schemes `∀ᾱ. D ⇒ σ`, with constraints at any sort, for built-ins and let-polymorphism; record extension; selection of present fields `pre τ` only; selection with a default of optional fields; closed record literals; functions of a parameter list, `fn`) with examples; selecting a missing field is untypable (`not_typ_sel_missing`), and so is passing an argument twice (`not_twice_le_sig`) |
+| `BoltCore/Algorithm.lean` | model of `lib/typer.ml` (no levels): state, `Constrain`/`TypeTerm` as big-step relations; signatures `sig P` with their two constraint rules, and `fn`; ranked bounds (`StructRanked`) rule out structural recursive types |
 | `BoltCore/Soundness.lean` | soundness of constraining on the bound graph: justification and consistency invariants, preserved by `constrain` and `typeTerm` |
 | `BoltCore/Solution.lean` | the solution of the inferred constraints (unifying coalescing via graph variables), simple types translated by position (`toTy`, `toRow`, `toField`), and its invariants |
-| `BoltCore/Sorts.lean` | `Abs` is never a function parameter or result (`NAC`), preserved by `constrain` and `typeTerm` |
+| `BoltCore/Sorts.lean` | `Abs` is never a function parameter or result, and the parameters of a signature are types (`NAC`), preserved by `constrain` and `typeTerm` |
 | `BoltCore/SolutionRows.lean` | the solution theorem at the type and row sorts, rows and extrusion-shaped justifications included (assuming acyclic row-variable tails), proved under a generalization (`solution_gen`: generalized variables read, at the type and row sorts, as an instance of their bounds); the plain theorem (`solution_ty`, `solution_row`) is the case where nothing is generalized |
 | `BoltCore/Theorem1.lean` | soundness of type inference (`soundness`), assuming acyclic row-variable tails; generalized over renamings of type variables (`soundR`), for instantiation |
 | `BoltCore/Kinds.lean` | kinds for row variables: the algorithm keeps rows well-kinded, so tails are acyclic; **Theorem 1** with no assumptions (`theorem1`) |
@@ -147,6 +147,17 @@ preservation are not proved. Examples: `typ_twice`, `typ_if`, `typ_ext`
 (the extension example of Marques et al.), `typ_letPoly`,
 `typ_letConstrained`.
 
+Parameter lists (issue #2). `fn (x₁ [= d₁], …) -> t` has the type
+`Ty.sig P → σ`, where `Ty.sig P` is the union of the closed argument
+records `Dₖ`, one per number `k` of arguments passed by position
+(`Ty.argRow`); it is a definition, not a constructor. A default is typed
+in the scope of the parameters before it (`TypParams`). A call is an
+application to an argument record (`Term.call`) and has no rule of its
+own; the built-ins take positional-only parameters. Examples: `typ_fn`,
+`sig_xy` (the three records of `fn (x, y = 0) -> …`), `typ_call` (`f(1)`),
+and `not_twice_le_sig`: the argument record of `f(1, x = 2)` is below none
+of the three.
+
 ## The algorithm and its soundness
 
 - `Algorithm.lean` models `lib/typer.ml` without levels. Bounds live in an
@@ -161,6 +172,11 @@ preservation are not proved. Examples: `typ_twice`, `typ_if`, `typ_ext`
   allowed. The state has a ghost `log` of every accepted constraint.
   Sanity checks: `fun x -> x`; `1 2` is rejected; in `(fun x -> x) 42`
   propagation gives the result variable the lower bound `int`.
+  Simple types have no unions, so the domain of a `fn` is a signature
+  `sig P`, with the two rules of `lib/typer.ml`: an argument record below a
+  signature is constrained against the argument record `Dₖ` for its number
+  of positional arguments (`Constrain.recordSig`), and a signature below a
+  record or a signature has every `Dₖ` below it (`Constrain.sigL`).
 - `Soundness.lean`, the graph level of the paper's Lemma 2. Two invariants
   hold of every state the algorithm reaches. *Justified*: every logged
   constraint is justified by one decomposition step (`GStep`), so the log
@@ -179,13 +195,18 @@ preservation are not proved. Examples: `typ_twice`, `typ_if`, `typ_ext`
   sort, as the intersection of the non-variable upper bounds reachable from
   `v` through variable bounds (`Clo`, an inductive predicate, so cycles need
   no special treatment), translated at that sort. Variables need no sort.
+  A signature is translated to `Ty.sig` of its translated parameters: as a
+  type the union of its argument records, as a row the union of their rows.
 - `SolutionRows.lean`: every accepted constraint `a ≤ b` holds of the
   solution at the row sort, and at the type sort when `a` is not `Abs`
   (`solution_ty`, `solution_row`). Proving a row pair follows the
   algorithm's record case: common fields, labels supplied by row expansion,
   extra fields flowing into the right tail. A row below the empty row is
   proved separately (`fieldToNil`), by induction on the left row, since the
-  right side does not shrink. The coinduction is up to
+  right side does not shrink. A record below a signature is below one of
+  its argument records, which is closed, so that step needs no induction
+  on the right side (`stepFieldClosedG`); a signature on the left is the
+  same statement for each of its argument records. The coinduction is up to
   transitivity, because a constraint justified through an extruded bound
   only holds through a chain of accepted constraints.
 - `Theorem1.lean`: soundness of inference, assuming chains of row-variable

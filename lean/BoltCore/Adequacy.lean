@@ -111,6 +111,10 @@ theorem TypeTerm.skeleton {c : Certificate} {Δ : PCtx} (r : PRel Γ Δ) :
       r₁.2.2.ne_abs (hc.logged.accepts hlog₂) (GenOK.nil c Δ)
       (h₂.skeleton r.poly (hΓ.cons trivial trivial) (hc.inv₂ i₁)
         (hc.nac i₁ r₁.2.1 trivial r₁.1) hlog)
+  | .fn hp h, hΓ, i, n, hlog => by
+    have rp := hp.nac hΓ i n
+    obtain ⟨Δ', hP, r'⟩ := hp.skeleton r hΓ i n (fun p hp' => hlog p (h.log_grows p hp'))
+    exact .fn hP (h.skeleton r' rp.2.2 (hp.inv₂ i) rp.1 hlog)
 
 theorem TypeFields.skeleton {c : Certificate} {Δ : PCtx} (r : PRel Γ Δ) :
     TypeFields Γ s fs F s' → CtxNAC Γ → Inv₂ s → LogNAC s →
@@ -120,6 +124,24 @@ theorem TypeFields.skeleton {c : Certificate} {Δ : PCtx} (r : PRel Γ Δ) :
     have r₁ := h₁.nac hΓ i n
     .cons (h₁.skeleton r hΓ i n (fun p hp => hlog p (h₂.log_grows p hp))) r₁.2.2
       (h₂.skeleton r hΓ (h₁.inv₂ i) r₁.1 hlog)
+
+/-- Parameters: their skeleton, and the context of the body. -/
+theorem TypeParams.skeleton {c : Certificate} {Δ : PCtx} (r : PRel Γ Δ) :
+    TypeParams Γ s ps P Γ' s' → CtxNAC Γ → Inv₂ s → LogNAC s →
+    (∀ p, p ∈ s'.log → p ∈ c.log) → ∃ Δ', PParams c Δ ps P Δ' ∧ PRel Γ' Δ'
+  | .nil, _, _, _, _ => ⟨Δ, .nil, r⟩
+  | .req _ h, hΓ, i, n, hlog => by
+    obtain ⟨Δ', hP, r'⟩ := h.skeleton r.mono (hΓ.cons trivial trivial) i.fresh n hlog
+    exact ⟨Δ', .req hP, r'⟩
+  | .dflt _ hd hc h, hΓ, i, n, hlog => by
+    have rd := hd.nac hΓ i.fresh n
+    have i₁ := hd.inv₂ i.fresh
+    have hlog₂ : ∀ p, p ∈ _ → p ∈ c.log := fun p hp => hlog p (h.log_grows p hp)
+    have hlog₁ : ∀ p, p ∈ _ → p ∈ c.log := fun p hp => hlog₂ p (hc.log_grows p hp)
+    obtain ⟨Δ', hP, r'⟩ := h.skeleton r.mono (hΓ.cons trivial trivial) (hc.inv₂ i₁)
+      (hc.nac i₁ rd.2.1 trivial rd.1) hlog
+    exact ⟨Δ', .dflt (hd.skeleton r hΓ i.fresh n hlog₁) rd.2.2.ne_abs
+      (hc.logged.accepts hlog₂) hP, r'⟩
 end
 
 /-- The built-ins as a skeleton context. -/

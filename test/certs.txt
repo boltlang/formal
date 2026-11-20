@@ -21,3 +21,9 @@ fn (f) -> let a(x) = f(x) in let b(x) = a(x) in let c(x) = b(x) in c
 let compose(f) = fn (g) -> fn (x) -> f(g(x)) in compose(succ)(succ)
 fn (a) -> fn (b) -> let f(x) = if x then a else b in f
 fn (r) -> let get(s) = s.x in let upd(s) = s with {x = get(r)} in upd
+# Signatures under extrusion (a function passed inside a generalized let),
+# with every kind of parameter and with defaults.
+fn (k) -> let h = k(fn (x) -> x) in h
+fn (k) -> let h = k(fn (x, y = 1, /, z = 2, *, w) -> add(x, y)) in h
+fn (k) -> let h(v) = k(fn (x, y = v) -> x) in {a = h(1); b = h(true)}
+let twice(f) = fn (x) -> f(f(x)) in twice(fn (a, b = 0) -> add(a, b))(1)

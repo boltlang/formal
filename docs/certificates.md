@@ -30,6 +30,16 @@ The JSON format is documented in `lean/Main.lean`. A program becomes one
 term: each item is a `let` around the rest, and items with type errors are
 left out.
 
+Parameter lists need nothing new in the format beyond the signature type
+and the `fn` term, which carries the type of each parameter. What
+`constrain` goes through for a signature is in the log already: the
+argument record chosen for a call, and each argument record of a signature
+compared with another type. An extruded signature is never constrained
+against its original, so `Typer.note_sig` records what a step of the
+checker needs for the pair: each argument record of the lower signature
+below the upper signature and below its record for the same number of
+positional arguments, and their lists of positional arguments.
+
 ## What is proved
 
 In `lean/BoltCore/Check.lean`:

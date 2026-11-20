@@ -10,7 +10,9 @@ every `x`), so `Abs ≤ {…}` must stay false at the level of types, and the
 type-level part of the solution proof must never meet `Abs` on the left.
 
 `NAC` ("no `Abs` component") says that every function type inside a simple
-type has non-`Abs` parameter and result. We prove that every constraint the
+type has non-`Abs` parameter and result, and that the parameters of a
+signature are types (`IsPre`), so that an argument record of the signature
+translates to the argument record of the translated parameters. We prove that every constraint the
 algorithm accepts is `NAC`, and that the types it infers for terms are
 `NAC` and are types (`IsPre`: not `Abs`, `Missing` or `Opt τ`).
 -/
@@ -24,11 +26,16 @@ def SType.NAC : SType → Prop
   | .arrow a b => a ≠ .abs ∧ b ≠ .abs ∧ a.NAC ∧ b.NAC
   | .record fs t => fs.NAC ∧ t.NAC
   | .opt t => t.NAC
+  | .sig P => P.NAC
   | _ => True
 
 def SFields.NAC : SFields → Prop
   | .nil => True
   | .cons _ f fs => f.NAC ∧ fs.NAC
+
+def SParams.NAC : SParams → Prop
+  | .nil => True
+  | .cons _ _ _ τ P => τ.IsPre ∧ τ.NAC ∧ P.NAC
 end
 
 /-- Every accepted constraint is `NAC`. -/
@@ -44,7 +51,41 @@ theorem rowView_NAC : ∀ x : SType, x.NAC → (rowView x).1.NAC ∧ (rowView x)
     simp only [rowView]
     exact ⟨hfs.append this.1, this.2⟩
   | .var _, _ | .prim _, _ | .abs, _ | .missing, _ | .nil, _ => ⟨trivial, trivial⟩
-  | .arrow _ _, h | .opt _, h => ⟨trivial, h⟩
+  | .arrow _ _, h | .opt _, h | .sig _, h => ⟨trivial, h⟩
+
+/-! ## Argument records -/
+
+theorem SParams.NAC.mem : ∀ {P : SParams}, P.NAC → ∀ p ∈ P.toList, p.ty.IsPre ∧ p.ty.NAC
+  | .nil, _, _, h => nomatch h
+  | .cons _ _ _ _ _, ⟨h₁, h₂, h₃⟩, p, hp => by
+    rcases List.mem_cons.mp hp with rfl | hp
+    · exact ⟨h₁, h₂⟩
+    · exact h₃.mem p hp
+
+theorem SType.list_NAC : ∀ {τs : List SType}, (∀ τ ∈ τs, τ.NAC) → (SType.list τs).NAC
+  | [], _ => ⟨trivial, trivial⟩
+  | τ :: _, h =>
+    ⟨⟨h τ (List.mem_cons_self ..),
+      SType.list_NAC fun σ hσ => h σ (List.mem_cons_of_mem _ hσ), trivial⟩, trivial⟩
+
+theorem SFields.ofParams_NAC : ∀ {ps : List (Param SType)}, (∀ p ∈ ps, p.ty.NAC) →
+    (SFields.ofParams ps).NAC
+  | [], _ => trivial
+  | p :: _, h => by
+    refine ⟨?_, SFields.ofParams_NAC fun q hq => h q (List.mem_cons_of_mem _ hq)⟩
+    have := h p (List.mem_cons_self ..)
+    cases ho : p.opt <;> simpa [SType.NAC] using this
+
+/-- The argument records of a `NAC` signature are `NAC`. -/
+theorem SParams.NAC.domain {P : SParams} (h : P.NAC) (k : Nat) : (P.domain k).NAC :=
+  ⟨⟨SType.list_NAC fun _ hτ => by
+      obtain ⟨p, hp, rfl⟩ := Param.mem_pos hτ
+      exact (h.mem p hp).2,
+    SFields.ofParams_NAC fun p hp => (h.mem p (Param.mem_named hp)).2⟩, trivial⟩
+
+theorem SParams.NAC.domains {P : SParams} (h : P.NAC) : ∀ d ∈ P.domains, d.NAC := fun d hd => by
+  obtain ⟨k, _, rfl⟩ := List.mem_map.mp hd
+  exact h.domain k
 
 theorem SFields.NAC.lookup : ∀ {fs : SFields}, fs.NAC → fs.lookup l = some f → f.NAC
   | .nil, _, h => by simp [SFields.lookup] at h
@@ -183,6 +224,14 @@ theorem Constrain.nac : Constrain s a b s' → Inv₂ s → a.NAC → b.NAC → 
         obtain ⟨x, hx, rfl⟩ := hp
         exact ⟨ha, h.upper i hx⟩)
       (h.remember ha trivial)
+  | .recordSig (k := k) _ _ _ _ _ h', i, ha, hb, h =>
+    h'.nac i.remember ha (SParams.NAC.domain hb k) (h.remember ha hb)
+  | .sigL _ _ h', i, ha, hb, h =>
+    h'.nac i.remember
+      (fun p hp => by
+        obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hp
+        exact ⟨SParams.NAC.domains ha d hd, hb⟩)
+      (h.remember ha hb)
 
 theorem ConstrainEach.nac : ConstrainEach s ps s' → Inv₂ s →
     (∀ p, p ∈ ps → p.1.NAC ∧ p.2.NAC) → LogNAC s → LogNAC s'
@@ -275,6 +324,10 @@ theorem TypeTerm.nac : TypeTerm Γ s t st s' → CtxNAC Γ → Inv₂ s → LogN
     have r₁ := h₁.nac hΓ' i.fresh h
     have i₁ := h₁.inv₂ i.fresh
     h₂.nac hΓ' (hc.inv₂ i₁) (hc.nac i₁ r₁.2.1 trivial r₁.1)
+  | .fn hp h', hΓ, i, h =>
+    have rp := hp.nac hΓ i h
+    have r := h'.nac rp.2.2 (hp.inv₂ i) rp.1
+    ⟨r.1, ⟨(fun h => nomatch h), r.2.2.ne_abs, rp.2.1, r.2.1⟩, trivial⟩
 
 theorem TypeFields.nac : TypeFields Γ s fs F s' → CtxNAC Γ → Inv₂ s → LogNAC s →
     LogNAC s' ∧ F.NAC
@@ -283,6 +336,19 @@ theorem TypeFields.nac : TypeFields Γ s fs F s' → CtxNAC Γ → Inv₂ s → 
     have r₁ := h₁.nac hΓ i h
     have r₂ := h₂.nac hΓ (h₁.inv₂ i) r₁.1
     ⟨r₂.1, r₁.2.1, r₂.2⟩
+
+/-- Parameters: the signature is `NAC`, and so is the context of the body. -/
+theorem TypeParams.nac : TypeParams Γ s ps P Γ' s' → CtxNAC Γ → Inv₂ s → LogNAC s →
+    LogNAC s' ∧ P.NAC ∧ CtxNAC Γ'
+  | .nil, hΓ, _, h => ⟨h, trivial, hΓ⟩
+  | .req _ h', hΓ, i, h =>
+    have r := h'.nac (hΓ.cons trivial trivial) i.fresh h
+    ⟨r.1, ⟨trivial, trivial, r.2.1⟩, r.2.2⟩
+  | .dflt _ hd hc h', hΓ, i, h =>
+    have rd := hd.nac hΓ i.fresh h
+    have i₁ := hd.inv₂ i.fresh
+    have r := h'.nac (hΓ.cons trivial trivial) (hc.inv₂ i₁) (hc.nac i₁ rd.2.1 trivial rd.1)
+    ⟨r.1, ⟨trivial, trivial, r.2.1⟩, r.2.2⟩
 end
 
 theorem LogNAC.init {K : Nat → List String} : LogNAC (State.initK K) := fun _ h => nomatch h
@@ -301,6 +367,6 @@ theorem builtins_NAC : CtxNAC builtins := by
   have hm := SCtx.lookup_mem h
   simp only [builtins, List.mem_cons, Prod.mk.injEq, List.not_mem_nil, or_false] at hm
   rcases hm with ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, rfl⟩ <;>
-    exact ⟨by simp [SType.NAC], trivial⟩
+    exact ⟨by simp [SType.NAC, SParams.NAC, builtinSig, SType.IsPre], trivial⟩
 
 end BoltCore.Alg

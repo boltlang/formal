@@ -47,10 +47,16 @@ theorem TypeTerm.log_grows : TypeTerm Γ s t st s' → ∀ p, p ∈ s.log → p 
   | .extNil h => h.log_grows
   | .letIn h₁ h₂ => fun p hp => h₂.log_grows p (h₁.log_grows p hp)
   | .letRec _ _ h₁ hc h₂ => fun p hp => h₂.log_grows p (hc.log_grows p (h₁.log_grows p hp))
+  | .fn hp h => fun p hp' => h.log_grows p (hp.log_grows p hp')
 
 theorem TypeFields.log_grows : TypeFields Γ s fs F s' → ∀ p, p ∈ s.log → p ∈ s'.log
   | .nil => fun _ h => h
   | .cons h₁ h₂ => fun p hp => h₂.log_grows p (h₁.log_grows p hp)
+
+theorem TypeParams.log_grows : TypeParams Γ s ps P Γ' s' → ∀ p, p ∈ s.log → p ∈ s'.log
+  | .nil => fun _ h => h
+  | .req _ h => h.log_grows
+  | .dflt _ hd hc h => fun p hp => h.log_grows p (hc.log_grows p (hd.log_grows p hp))
 end
 
 theorem ConstrainTop.kind_eq {s s' : State} (h : ConstrainTop s a b s') : s'.kind = s.kind := by
@@ -71,10 +77,16 @@ theorem TypeTerm.kind_eq : TypeTerm Γ s t st s' → s'.kind = s.kind
   | .extNil h => h.kind_eq
   | .letIn h₁ h₂ => h₂.kind_eq.trans h₁.kind_eq
   | .letRec _ _ h₁ hc h₂ => (h₂.kind_eq.trans hc.kind_eq).trans h₁.kind_eq
+  | .fn hp h => h.kind_eq.trans hp.kind_eq
 
 theorem TypeFields.kind_eq : TypeFields Γ s fs F s' → s'.kind = s.kind
   | .nil => rfl
   | .cons h₁ h₂ => h₂.kind_eq.trans h₁.kind_eq
+
+theorem TypeParams.kind_eq : TypeParams Γ s ps P Γ' s' → s'.kind = s.kind
+  | .nil => rfl
+  | .req _ h => h.kind_eq
+  | .dflt _ hd hc h => (h.kind_eq.trans hc.kind_eq).trans hd.kind_eq
 end
 
 /-! ## The theorem -/
@@ -109,10 +121,15 @@ def SType.rename (f : Nat → Nat) : SType → SType
   | .missing => .missing
   | .opt t => .opt (t.rename f)
   | .nil => .nil
+  | .sig P => .sig (P.rename f)
 
 def SFields.rename (f : Nat → Nat) : SFields → SFields
   | .nil => .nil
   | .cons n g fs => .cons n (g.rename f) (fs.rename f)
+
+def SParams.rename (f : Nat → Nat) : SParams → SParams
+  | .nil => .nil
+  | .cons n k o τ P => .cons n k o (τ.rename f) (P.rename f)
 end
 
 mutual
@@ -121,10 +138,15 @@ theorem SType.rename_id : ∀ a : SType, a.rename id = a
   | .opt t => by simp only [SType.rename, SType.rename_id t]
   | .arrow a b => by simp only [SType.rename, SType.rename_id a, SType.rename_id b]
   | .record fs t => by simp only [SType.rename, SFields.rename_id fs, SType.rename_id t]
+  | .sig P => by simp only [SType.rename, SParams.rename_id P]
 
 theorem SFields.rename_id : ∀ fs : SFields, fs.rename id = fs
   | .nil => rfl
   | .cons _ g fs => by simp only [SFields.rename, SType.rename_id g, SFields.rename_id fs]
+
+theorem SParams.rename_id : ∀ P : SParams, P.rename id = P
+  | .nil => rfl
+  | .cons _ _ _ τ P => by simp only [SParams.rename, SType.rename_id τ, SParams.rename_id P]
 end
 
 theorem SFields.rename_absOf (f : Nat → Nat) : ∀ F : SFields, F.absOf.rename f = (F.rename f).absOf
@@ -133,11 +155,11 @@ theorem SFields.rename_absOf (f : Nat → Nat) : ∀ F : SFields, F.absOf.rename
 
 theorem SType.rename_ne_abs {f : Nat → Nat} : ∀ {a : SType}, a ≠ .abs → a.rename f ≠ .abs
   | .var _, _ | .prim _, _ | .arrow _ _, _ | .record _ _, _
-  | .missing, _ | .opt _, _ | .nil, _ => fun h => nomatch h
+  | .missing, _ | .opt _, _ | .nil, _ | .sig _, _ => fun h => nomatch h
   | .abs, h => absurd rfl h
 
 theorem SType.IsPre.rename {f : Nat → Nat} : ∀ {a : SType}, a.IsPre → (a.rename f).IsPre
-  | .var _, _ | .prim _, _ | .arrow _ _, _ | .record _ _, _ | .nil, _ => trivial
+  | .var _, _ | .prim _, _ | .arrow _ _, _ | .record _ _, _ | .nil, _ | .sig _, _ => trivial
   | .abs, h | .missing, h | .opt _, h => absurd h id
 
 /-! ## Fields of inferred records -/
@@ -275,6 +297,10 @@ theorem TypeTerm.soundR {E : Defs} {f : Nat → Nat} {sf : State} (H : RenSound 
         (H.sub hc.logged hlog₂ r₁.2.2.ne_abs))
       (h₂.soundR H (hΓ.cons trivial trivial) (hc.inv₂ i₁)
         (hc.nac i₁ r₁.2.1 trivial r₁.1) hlog)
+  | .fn hp h, hΓ, i, n, hlog => by
+    have rp := hp.nac hΓ i n
+    exact .fn (hp.soundR H hΓ i n (fun p hp' => hlog p (h.log_grows p hp')))
+      (h.soundR H rp.2.2 (hp.inv₂ i) rp.1 hlog)
 
 /-- Fields: their typing, and that every field is present. -/
 theorem TypeFields.soundR {E : Defs} {f : Nat → Nat} {sf : State} (H : RenSound E f sf) :
@@ -286,6 +312,22 @@ theorem TypeFields.soundR {E : Defs} {f : Nat → Nat} {sf : State} (H : RenSoun
     have r₁ := h₁.nac hΓ i n
     have ih := h₂.soundR H hΓ (h₁.inv₂ i) r₁.1 hlog
     ⟨.cons (h₁.soundR H hΓ i n (fun p hp => hlog p (h₂.log_grows p hp))) ih.1, r₁.2.2, ih.2⟩
+
+/-- Parameters: each default has its parameter's type, and the body's
+context is the translated one. -/
+theorem TypeParams.soundR {E : Defs} {f : Nat → Nat} {sf : State} (H : RenSound E f sf) :
+    TypeParams Γ s ps P Γ' s' → CtxNAC Γ → Inv₂ s → LogNAC s →
+    (∀ p, p ∈ s'.log → p ∈ sf.log) →
+    TypParams E (Γ.toCtxR f) ps ((P.rename f).toParamsI .gv) (Γ'.toCtxR f)
+  | .nil, _, _, _, _ => .nil
+  | .req _ h, hΓ, i, n, hlog => .req (h.soundR H (hΓ.cons trivial trivial) i.fresh n hlog)
+  | .dflt _ hd hc h, hΓ, i, n, hlog => by
+    have rd := hd.nac hΓ i.fresh n
+    have i₁ := hd.inv₂ i.fresh
+    have hlog₂ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog p (h.log_grows p hp)
+    have hlog₁ : ∀ p, p ∈ _ → p ∈ sf.log := fun p hp => hlog₂ p (hc.log_grows p hp)
+    exact .dflt (.sub (hd.soundR H hΓ i.fresh n hlog₁) (H.sub hc.logged hlog₂ rd.2.2.ne_abs))
+      (h.soundR H (hΓ.cons trivial trivial) (hc.inv₂ i₁) (hc.nac i₁ rd.2.1 trivial rd.1) hlog)
 end
 
 /-- **Theorem 1** (soundness of inference): if the algorithm types `t` with

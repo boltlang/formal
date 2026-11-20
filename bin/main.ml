@@ -47,15 +47,9 @@ let infer items =
   match !cert_file with
   | None -> infer_program items
   | Some file ->
-      match certificate items with
-      | results, json ->
-          Out_channel.with_open_text file (fun oc -> output_string oc json);
-          results
-      | exception Cert.Unsupported what ->
-          (* the types are still checked and printed; only the file is left out *)
-          Typer.recording := false;
-          prerr_endline ("no certificate: the Lean checker does not support " ^ what ^ " yet");
-          infer_program items
+      let results, json = certificate items in
+      Out_channel.with_open_text file (fun oc -> output_string oc json);
+      results
 
 let run ~simplify ~expect ~self_check src =
   match Parser.parse_program src with

@@ -198,12 +198,19 @@ theorem WK.congr : ∀ {t : SType}, Agree K K' t → WK K t → WK K' t
   | .record fs t, ht, ⟨wf, wt, hr⟩ =>
     ⟨FWK.congr (fun v hv => ht v (by simp [SType.vars, hv])) wf,
       wt.congr (fun v hv => ht v (by simp [SType.vars, hv])), hr.congr ht⟩
+  | .sig _, ht, h => PWK.congr (fun v hv => ht v (by simp [SType.vars, hv])) h
 
 theorem FWK.congr : ∀ {fs : SFields}, (∀ v ∈ fs.vars, K v = K' v) → FWK K fs → FWK K' fs
   | .nil, _, _ => trivial
   | .cons _ f fs, ht, ⟨wf, ef, wr⟩ =>
     have hf : Agree K K' f := fun v hv => ht v (by simp [SFields.vars, hv])
     ⟨wf.congr hf, ef.congr hf, FWK.congr (fun v hv => ht v (by simp [SFields.vars, hv])) wr⟩
+
+theorem PWK.congr : ∀ {P : SParams}, (∀ v ∈ P.vars, K v = K' v) → PWK K P → PWK K' P
+  | .nil, _, _ => trivial
+  | .cons _ _ _ τ _, ht, ⟨wτ, eτ, wr⟩ =>
+    have hτ : Agree K K' τ := fun v hv => ht v (by simp [SParams.vars, hv])
+    ⟨wτ.congr hτ, eτ.congr hτ, PWK.congr (fun v hv => ht v (by simp [SParams.vars, hv])) wr⟩
 end
 
 end Congr

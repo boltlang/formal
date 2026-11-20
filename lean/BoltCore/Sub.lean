@@ -520,4 +520,47 @@ theorem not_top_le_nil : ¬ Sub E (.rcd .top) (.rcd .nil) := by
 
 end Rows
 
+/-! ## Unions of lists
+
+The domain of a parameter list is a union of argument records (`Ty.sig`):
+a type is below it when it is below one of them, and it is below a type
+when each of them is. -/
+
+theorem Step.unionsR {R : Rel} {s : Srt} {x a : Ty s} :
+    ∀ {l : List (Ty s)}, a ∈ l → Step E R x a → Step E R x (Ty.unions l)
+  | [], h, _ => nomatch h
+  | [b], h, hs => by
+    rcases List.mem_cons.mp h with rfl | h
+    · exact hs
+    · exact nomatch h
+  | b :: c :: l, h, hs => by
+    rcases List.mem_cons.mp h with rfl | h
+    · exact .unionR₁ hs
+    · exact .unionR₂ (Step.unionsR h hs)
+
+theorem Step.unionsL {R : Rel} {s : Srt} {y : Ty s} :
+    ∀ {l : List (Ty s)}, (∀ a ∈ l, Step E R a y) → Step E R (Ty.unions l) y
+  | [], _ => .bot
+  | [a], h => h a (List.mem_cons_self ..)
+  | a :: _ :: _, h =>
+    .unionL (h a (List.mem_cons_self ..)) (Step.unionsL fun c hc => h c (List.mem_cons_of_mem _ hc))
+
+theorem Sub.unionsR {s : Srt} {x a : Ty s} {l : List (Ty s)} (ha : a ∈ l) (h : Sub E x a) :
+    Sub E x (Ty.unions l) :=
+  Sub.of_step (Step.unionsR ha h.step)
+
+theorem Sub.unionsL {s : Srt} {y : Ty s} {l : List (Ty s)} (h : ∀ a ∈ l, Sub E a y) :
+    Sub E (Ty.unions l) y :=
+  Sub.of_step (Step.unionsL fun a ha => (h a ha).step)
+
+/-- The field of a union of rows is the union of the fields. -/
+theorem Ty.field_unions (l : String) : ∀ rows : List (Ty .row),
+    (Ty.unions rows).field l = Ty.unions (rows.map (·.field l))
+  | [] => rfl
+  | [_] => rfl
+  | a :: b :: rows => by
+    have ih := Ty.field_unions l (b :: rows)
+    simp only [Ty.unions, Ty.field, List.map_cons] at ih ⊢
+    rw [ih]
+
 end BoltCore

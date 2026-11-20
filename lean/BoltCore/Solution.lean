@@ -27,6 +27,10 @@ the position it is used in (`docs/design/sorts.md`):
 * `toField` as a field: `Abs` is `⊤`, `Missing` is `missing`, `Opt τ` is
   `opt τ = pre τ ∪ missing`, and any other type `τ` is `pre τ`.
 
+A signature is the union of its argument records, `Ty.sig` of its
+translated parameters: as a type the union of the records, and as a row
+the union of their rows.
+
 A variable becomes the graph variable of the same number at the sort of its
 position, and every graph variable is defined at every sort, by its
 reachable upper bounds translated at that sort (`defsOf`).
@@ -102,6 +106,7 @@ theorem Constrain.inv₂ : Constrain s a b s' → Inv₂ s → Inv₂ s'
   | .record _ _ _ h₁ h₂ h₃, h => h₃.inv₂ (h₂.inv₂ (h₁.inv₂ h.remember))
   | .varL _ _ h', h => h'.inv₂ h.remember.addUpper
   | .varR _ hnv h', h => h'.inv₂ (h.remember.addLower hnv)
+  | .recordSig _ _ _ _ _ h', h | .sigL _ _ h', h => h'.inv₂ h.remember
 
 theorem ConstrainEach.inv₂ : ConstrainEach s ps s' → Inv₂ s → Inv₂ s'
   | .nil, h => h
@@ -142,10 +147,16 @@ theorem TypeTerm.inv₂ : TypeTerm Γ s t st s' → Inv₂ s → Inv₂ s'
   | .extNil h', h => h'.inv₂ h
   | .letIn h₁ h₂, h => h₂.inv₂ (h₁.inv₂ h)
   | .letRec _ _ h₁ hc h₂, h => h₂.inv₂ (hc.inv₂ (h₁.inv₂ h.fresh))
+  | .fn hp h', h => h'.inv₂ (hp.inv₂ h)
 
 theorem TypeFields.inv₂ : TypeFields Γ s fs F s' → Inv₂ s → Inv₂ s'
   | .nil, h => h
   | .cons h₁ h₂, h => h₂.inv₂ (h₁.inv₂ h)
+
+theorem TypeParams.inv₂ : TypeParams Γ s ps P Γ' s' → Inv₂ s → Inv₂ s'
+  | .nil, h => h
+  | .req _ h', h => h'.inv₂ h.fresh
+  | .dflt _ hd hc h', h => h'.inv₂ (hc.inv₂ (hd.inv₂ h.fresh))
 end
 
 theorem Inv₂.init {K : Nat → List String} : Inv₂ (State.initK K) :=
@@ -186,6 +197,7 @@ def SType.toTyI (I : SInterp) : SType → Ty .ty
   | .nil => .rcd .nil
   | .opt t => t.toTyI I
   | .abs | .missing => .top
+  | .sig P => Ty.sig (P.toParamsI I)
 
 /-- A simple type as a row. Primitive and function types have no fields. -/
 def SType.toRowI (I : SInterp) : SType → Ty .row
@@ -193,6 +205,7 @@ def SType.toRowI (I : SInterp) : SType → Ty .row
   | .record fs t => fs.toRowOnI I (t.toRowI I)
   | .nil => .nil
   | .prim _ | .arrow _ _ | .abs | .missing | .opt _ => .top
+  | .sig P => Ty.unions (Ty.sigRows (P.toParamsI I))
 
 /-- Fields in front of a row. -/
 def SFields.toRowOnI (I : SInterp) : SFields → Ty .row → Ty .row
@@ -203,7 +216,18 @@ def SFields.toRowOnI (I : SInterp) : SFields → Ty .row → Ty .row
       | .missing => .missing
       | .opt τ => Ty.opt (τ.toTyI I)
       | f => .pre (f.toTyI I)) (fs.toRowOnI I ρ)
+
+/-- The parameters of a signature, with their types translated. -/
+def SParams.toParamsI (I : SInterp) : SParams → List (Param (Ty .ty))
+  | .nil => []
+  | .cons n k o τ P => ⟨n, k, o, τ.toTyI I⟩ :: P.toParamsI I
 end
+
+theorem SParams.toParamsI_eq (I : SInterp) : ∀ P : SParams,
+    P.toParamsI I = P.toList.map (Param.map (·.toTyI I))
+  | .nil => rfl
+  | .cons _ _ _ _ P => by
+    simp only [SParams.toParamsI, SParams.toList, List.map_cons, SParams.toParamsI_eq I P]; rfl
 
 /-- A simple type as a field. -/
 def SType.toFieldI (I : SInterp) : SType → Ty .field

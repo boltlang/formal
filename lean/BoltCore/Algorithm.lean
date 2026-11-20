@@ -20,6 +20,15 @@ Each `Constrain` rule only applies where the OCaml `match` would reach it
 variable on the left; a variable on the left before one on the right), so
 the relation is as deterministic as the code.
 
+Parameter lists (issue #2): a signature `sig P` is a simple type, the
+domain of a function with a parameter list. It stands for the union of the
+closed argument records `Dₖ` (`SParams.domain`), which simple types cannot
+write. An argument record below a signature is constrained against the
+`Dₖ` for its number of positional arguments (`Constrain.recordSig`, the
+OCaml `call`, without its checks for better error messages, which reject
+nothing the field constraints accept); a signature below a record or a
+signature has every `Dₖ` below it (`Constrain.sigL`).
+
 Deviations from the OCaml code, to revisit: the memo table for row
 expansion is keyed by the label list as given rather than as a sorted set.
 The labels in a `with` are distinct: the parser (`lib/parser.ml`) rejects a
@@ -46,10 +55,20 @@ inductive SType where
   | opt : SType → SType
   /-- The empty row (in tail position): every label is missing. -/
   | nil
+  /-- A parameter list, as the domain of a function only: it stands for the
+  union of the closed argument records `Dₖ` (`SParams.domain`). -/
+  | sig : SParams → SType
 
 inductive SFields where
   | nil
   | cons : String → SType → SFields → SFields
+
+/-- The parameters of a signature, in order (positional-only, then
+either-way, then keyword-only): name, kind, whether it has a default, and
+type. -/
+inductive SParams where
+  | nil
+  | cons : String → PKind → Bool → SType → SParams → SParams
 end
 
 /-- A present field: a type, as opposed to `Abs`, `Missing` and `Opt τ`. -/
@@ -59,7 +78,8 @@ def SType.IsPre : SType → Prop
 
 theorem SType.IsPre.ne_abs : {f : SType} → f.IsPre → f ≠ .abs
   | .abs, h => absurd h id
-  | .var _, _ | .prim _, _ | .arrow _ _, _ | .record _ _, _ | .nil, _ => fun h => nomatch h
+  | .var _, _ | .prim _, _ | .arrow _ _, _ | .record _ _, _ | .nil, _ | .sig _, _ =>
+    fun h => nomatch h
   | .missing, h | .opt _, h => absurd h id
 
 namespace SFields
@@ -132,6 +152,51 @@ def restRow (fs : SFields) (t : SType) : SType :=
   match fs with
   | .nil => t
   | _ => .record fs t
+
+/-! ## Signatures
+
+The argument records of a parameter list, as simple types. The split of
+the parameters into those passed by position and those passed by name is
+the one of the declarative system (`Param.pos`, `Param.named`). -/
+
+/-- The parameters as a list. -/
+def SParams.toList : SParams → List (Param SType)
+  | .nil => []
+  | .cons n k o τ P => ⟨n, k, o, τ⟩ :: P.toList
+
+/-- The type of a list: nested closed records (`list_type`). -/
+def SType.list : List SType → SType
+  | [] => .record .nil .nil
+  | τ :: τs => .record (.cons "hd" τ (.cons "tl" (SType.list τs) .nil)) .nil
+
+/-- A field for each parameter, optional if it has a default. -/
+def SFields.ofParams : List (Param SType) → SFields
+  | [] => .nil
+  | p :: ps => .cons p.name (if p.opt then .opt p.ty else p.ty) (SFields.ofParams ps)
+
+/-- `Dₖ`, the argument record for `k` arguments passed by position
+(`sig_domain`): `{*: [τ₁, …, τₖ], Eₖ, Q}`. -/
+def SParams.domain (P : SParams) (k : Nat) : SType :=
+  .record (.cons "*" (SType.list (Param.pos k P.toList))
+    (SFields.ofParams (Param.named k P.toList))) .nil
+
+/-- Every `Dₖ`, for `m ≤ k ≤ p` (`sig_domains`). -/
+def SParams.domains (P : SParams) : List SType := (Param.counts P.toList).map P.domain
+
+/-- The number of elements of a list type, if its spine is known
+(`list_elems`): each cell is a closed record of a `hd` and a `tl`. -/
+def SType.listLen : SType → Option Nat
+  | .record .nil .nil => some 0
+  | .record (.cons n₁ f₁ (.cons n₂ f₂ .nil)) .nil =>
+    if n₁ = "hd" ∧ n₂ = "tl" then f₂.listLen.map (· + 1)
+    else if n₁ = "tl" ∧ n₂ = "hd" then f₁.listLen.map (· + 1)
+    else none
+  | _ => none
+
+/-- A record or a signature: what a signature can be below. -/
+def SType.IsRecSig : SType → Prop
+  | .record _ _ | .sig _ => True
+  | _ => False
 
 /-! ## State -/
 
@@ -209,10 +274,15 @@ def SType.vars : SType → List Nat
   | .opt t => t.vars
   | .arrow a b => a.vars ++ b.vars
   | .record fs t => fs.vars ++ t.vars
+  | .sig P => P.vars
 
 def SFields.vars : SFields → List Nat
   | .nil => []
   | .cons _ f fs => f.vars ++ fs.vars
+
+def SParams.vars : SParams → List Nat
+  | .nil => []
+  | .cons _ _ _ τ P => τ.vars ++ P.vars
 end
 
 /-- The bounds of each variable are ranked by `r`. -/
@@ -265,6 +335,18 @@ inductive Constrain : State → SType → SType → State → Prop where
       ConstrainEach ((s.remember a (.var v)).addLower v a)
         ((s.bounds v).upper.map (a, ·)) s₁ →
       Constrain s a (.var v) s₁
+  /-- An argument record below a signature: the number `k` of positional
+  arguments, the length of its `*` list, picks `Dₖ`; then it is an ordinary
+  record constraint. -/
+  | recordSig : s.New (.record fa ta) (.sig P) → rowView (.record fa ta) = (fs₀, t₀) →
+      fs₀.lookup "*" = some pos → pos.listLen = some k → k ∈ Param.counts P.toList →
+      Constrain (s.remember (.record fa ta) (.sig P)) (.record fa ta) (P.domain k) s₁ →
+      Constrain s (.record fa ta) (.sig P) s₁
+  /-- A signature is the union of its argument records: each is below the
+  right side. -/
+  | sigL : s.New (.sig P) b → b.IsRecSig →
+      ConstrainEach (s.remember (.sig P) b) (P.domains.map (·, b)) s₁ →
+      Constrain s (.sig P) b s₁
 
 /-- Sequential constraining of a list of pairs. -/
 inductive ConstrainEach : State → List (SType × SType) → State → Prop where
@@ -385,20 +467,43 @@ inductive TypeTerm : SCtx → State → Term → SType → State → Prop where
       ConstrainTop s₁ inf (.var s.next) s₂ →
       TypeTerm ((x, .var s.next) :: Γ) s₂ b stb s₃ →
       TypeTerm Γ s (.letIn true x r b) stb s₃
+  /-- `fn (…) -> t`: the parameters give the signature and the context of
+  the body. -/
+  | fn : TypeParams Γ s ps P Γ' s₁ → TypeTerm Γ' s₁ t st s₂ →
+      TypeTerm Γ s (.fn ps t) (.arrow (.sig P) st) s₂
 
 inductive TypeFields : SCtx → State → List (String × Term) → SFields → State → Prop where
   | nil : TypeFields Γ s [] .nil s
   | cons : TypeTerm Γ s t st s₁ → TypeFields Γ s₁ fs F s₂ →
       TypeFields Γ s ((l, t) :: fs) (.cons l st F) s₂
+
+/-- The parameters of a `fn`: each gets a fresh variable; a default is
+typed in the scope of the parameters before it and flows into its
+parameter's type, as an argument would. -/
+inductive TypeParams :
+    SCtx → State → List (String × PKind × Option Term) → SParams → SCtx → State → Prop where
+  | nil : TypeParams Γ s [] .nil Γ s
+  | req : s.kind s.next = [] → TypeParams ((x, .var s.next) :: Γ) s.fresh ps P Γ' s₁ →
+      TypeParams Γ s ((x, k, none) :: ps) (.cons x k false (.var s.next) P) Γ' s₁
+  | dflt : s.kind s.next = [] → TypeTerm Γ s.fresh d std s₁ →
+      ConstrainTop s₁ std (.var s.next) s₂ →
+      TypeParams ((x, .var s.next) :: Γ) s₂ ps P Γ' s₃ →
+      TypeParams Γ s ((x, k, some d) :: ps) (.cons x k true (.var s.next) P) Γ' s₃
 end
 
+/-- The signature of a built-in: positional-only parameters, under names
+source code cannot write, numbered from `i`. -/
+def builtinSig : Nat → List SType → SParams
+  | _, [] => .nil
+  | i, τ :: τs => .cons s!"#{i}" .posOnly false τ (builtinSig (i + 1) τs)
+
 /-- The monomorphic built-ins (`if` is polymorphic and needs schemes, which
-come with let-polymorphism). -/
+come with let-polymorphism). They take parameter lists. -/
 def builtins : SCtx :=
   [ ("true", .prim "bool"), ("false", .prim "bool"),
-    ("not", .arrow (.prim "bool") (.prim "bool")),
-    ("succ", .arrow (.prim "int") (.prim "int")),
-    ("add", .arrow (.prim "int") (.arrow (.prim "int") (.prim "int"))) ]
+    ("not", .arrow (.sig (builtinSig 0 [.prim "bool"])) (.prim "bool")),
+    ("succ", .arrow (.sig (builtinSig 0 [.prim "int"])) (.prim "int")),
+    ("add", .arrow (.sig (builtinSig 0 [.prim "int", .prim "int"])) (.prim "int")) ]
 
 /-! ## Sanity checks -/
 

@@ -18,6 +18,10 @@ minimal subtyping relation of `Sub.lean`. With sorts:
   the shape of the rule, with no `τ ≤ ⊤` premise. Selection with a default,
   `t.l ?? d : τ`, needs `t : {l : opt τ}` and `d : τ`.
 * **Record literals are closed**: the row of `{l = e; …}` ends in `nil`.
+* **Parameter lists** (issue #2): `fn (x₁ [= d₁], …) -> t` has the domain
+  `Ty.sig`, the union of the argument records it accepts. Each default is
+  typed in the scope of the parameters before it (`TypParams`). A call is
+  an application to an argument record and needs no rule.
 
 **Schemes are constrained**, as in HM(X): `∀ᾱ. D ⇒ σ`, where `D` is a list
 of subtyping constraints on the quantified variables. An instance
@@ -63,6 +67,45 @@ theorem Ty.substM_none : {s : Srt} → (t : Ty s) → t.substM Subst.empty = t
     simp only [Ty.substM, Ty.substM_none a, Ty.substM_none b]
   | _, .rcd ρ | _, .pre ρ | _, .proj _ ρ => by simp only [Ty.substM, Ty.substM_none ρ]
   | _, .cons _ θ ρ => by simp only [Ty.substM, Ty.substM_none θ, Ty.substM_none ρ]
+
+/-! ### Substitution in signatures -/
+
+theorem Ty.substM_unions (m : Subst) {s : Srt} : ∀ l : List (Ty s),
+    (Ty.unions l).substM m = Ty.unions (l.map (·.substM m))
+  | [] => rfl
+  | [_] => rfl
+  | a :: b :: l => by
+    have ih := Ty.substM_unions m (b :: l)
+    simp only [Ty.unions, Ty.substM, List.map_cons] at ih ⊢
+    rw [ih]
+
+theorem Ty.substM_list (m : Subst) : ∀ τs : List (Ty .ty),
+    (Ty.list τs).substM m = Ty.list (τs.map (·.substM m))
+  | [] => rfl
+  | τ :: τs => by simp only [Ty.list, Ty.substM, List.map_cons, Ty.substM_list m τs]
+
+theorem Ty.substM_ofParams (m : Subst) : ∀ ps : List (Param (Ty .ty)),
+    (Ty.ofParams ps).substM m = Ty.ofParams (ps.map (Param.map (·.substM m)))
+  | [] => rfl
+  | p :: ps => by
+    simp only [Ty.ofParams, Ty.substM, List.map_cons, Ty.substM_ofParams m ps]
+    congr 1
+    cases h : p.opt <;> simp [Param.field, Param.map, h, Ty.substM]
+
+theorem Ty.substM_argRow (m : Subst) (ps : List (Param (Ty .ty))) (k : Nat) :
+    (Ty.argRow ps k).substM m = Ty.argRow (ps.map (Param.map (·.substM m))) k := by
+  simp only [Ty.argRow, Ty.substM, Ty.substM_list, Ty.substM_ofParams, Param.pos_map,
+    Param.named_map]
+
+theorem Ty.substM_sigRows (m : Subst) (ps : List (Param (Ty .ty))) :
+    (Ty.sigRows ps).map (·.substM m) = Ty.sigRows (ps.map (Param.map (·.substM m))) := by
+  simp only [Ty.sigRows, List.map_map, Param.counts_map]
+  exact List.map_congr_left fun k _ => Ty.substM_argRow m ps k
+
+theorem Ty.substM_sig (m : Subst) (ps : List (Param (Ty .ty))) :
+    (Ty.sig ps).substM m = Ty.sig (ps.map (Param.map (·.substM m))) := by
+  simp only [Ty.sig, Ty.substM_unions, ← Ty.substM_sigRows, List.map_map]
+  rfl
 
 /-! ## Schemes and contexts -/
 
@@ -131,11 +174,25 @@ inductive Typ (E : Defs) : Ctx → Term → Ty .ty → Prop where
       Typ E ((x, σ) :: Γ) t τ → Typ E Γ (.letIn false x s t) τ
   | letRec : s.IsFun → (∀ τ', σ.Instance E τ' → Typ E ((x, .mono τ') :: Γ) s τ') →
       σ.Instance E τ₀ → Typ E ((x, σ) :: Γ) t τ → Typ E Γ (.letIn true x s t) τ
+  /-- A function of a parameter list: its domain is the union of the
+  argument records it accepts. -/
+  | fn : TypParams E Γ ps P Γ' → Typ E Γ' t τ → Typ E Γ (.fn ps t) (.arrow (Ty.sig P) τ)
   | sub : Typ E Γ t τ → Sub E τ τ' → Typ E Γ t τ'
 
 inductive TypFields (E : Defs) : Ctx → List (String × Term) → List (String × Ty .ty) → Prop where
   | nil : TypFields E Γ [] []
   | cons : Typ E Γ t τ → TypFields E Γ fs F → TypFields E Γ ((l, t) :: fs) ((l, τ) :: F)
+
+/-- The parameters of a `fn`, with their types, and the context they give
+its body. A default has its parameter's type, in the scope of the
+parameters before it. -/
+inductive TypParams (E : Defs) :
+    Ctx → List (String × PKind × Option Term) → List (Param (Ty .ty)) → Ctx → Prop where
+  | nil : TypParams E Γ [] [] Γ
+  | req : TypParams E ((x, .mono τ) :: Γ) ps P Γ' →
+      TypParams E Γ ((x, k, none) :: ps) (⟨x, k, false, τ⟩ :: P) Γ'
+  | dflt : Typ E Γ d τ → TypParams E ((x, .mono τ) :: Γ) ps P Γ' →
+      TypParams E Γ ((x, k, some d) :: ps) (⟨x, k, true, τ⟩ :: P) Γ'
 end
 
 /-! ## Built-ins -/
@@ -143,11 +200,16 @@ end
 def bool : Ty .ty := .prim "bool"
 def int : Ty .ty := .prim "int"
 
+/-- The signature of a built-in: positional-only parameters, under names
+source code cannot write. -/
+def builtinSig (τs : List (Ty .ty)) : Ty .ty :=
+  Ty.sig (τs.zipIdx.map fun p => ⟨s!"#{p.2}", .posOnly, false, p.1⟩)
+
 def builtins : Ctx :=
   [ ("true", .mono bool), ("false", .mono bool),
-    ("not", .mono (.arrow bool bool)),
-    ("succ", .mono (.arrow int int)),
-    ("add", .mono (.arrow int (.arrow int int))),
+    ("not", .mono (.arrow (builtinSig [bool]) bool)),
+    ("succ", .mono (.arrow (builtinSig [int]) int)),
+    ("add", .mono (.arrow (builtinSig [int, int]) int)),
     ("if", .poly [0] [] (.arrow bool (.arrow (.fvar 0) (.arrow (.fvar 0) (.fvar 0))))) ]
 
 /-! ## Examples -/
@@ -245,10 +307,15 @@ theorem typ_letPoly :
   subst h
   exact .lam (.var_mono rfl)
 
-/-- A constrained scheme: `inc : ∀α. α ≤ int ⇒ α → int`, used at `int`. -/
+/-- The domain of a built-in with one parameter is one argument record. -/
+theorem builtinSig_one (τ : Ty .ty) :
+    builtinSig [τ] = Ty.record [("*", Ty.record [("hd", τ), ("tl", Ty.record [])])] := rfl
+
+/-- A constrained scheme: `inc : ∀α. α ≤ int ⇒ α → int`, used at `int`. The
+body calls a built-in, `succ(x)`. -/
 theorem typ_letConstrained :
     Typ E builtins
-      (.letIn false "inc" (.lam "x" (.app (.var "succ") (.var "x")))
+      (.letIn false "inc" (.lam "x" (.call (.var "succ") [.var "x"] []))
         (.app (.var "inc") (.lit 1)))
       int := by
   let σ : Scheme := .poly [0] [⟨.fvar 0, int⟩] (.arrow (.fvar 0) int)
@@ -262,7 +329,88 @@ theorem typ_letConstrained :
   subst h
   have hc : SatAfter E m ⟨Ty.fvar 0, int⟩ := hcs _ (List.mem_singleton.mpr rfl)
   simp only [SatAfter, Ty.substM] at hc ⊢
-  exact .lam (.app (.var_mono rfl) (.sub (.var_mono rfl) hc))
+  refine .lam (.app (.var_mono rfl) ?_)
+  rw [builtinSig_one]
+  exact .rcd (.cons (.rcd (.cons (.sub (.var_mono rfl) hc) (.cons (.rcd .nil) .nil))) .nil)
+
+/-- `fn (x, y = 0) -> x` takes `x` by position or by name, and `y` too or
+not at all: its domain is the union of three argument records,
+`{*: [], x: int, y?: int} ∪ {*: [int], y?: int} ∪ {*: [int, int]}`. -/
+theorem typ_fn :
+    Typ E builtins (.fn [("x", .either, none), ("y", .either, some (.lit 0))] (.var "x"))
+      (.arrow (Ty.sig [⟨"x", .either, false, int⟩, ⟨"y", .either, true, int⟩]) int) :=
+  .fn (.req (.dflt .lit .nil)) (.var_mono rfl)
+
+/-- The parameters of `fn (x, y = 0) -> …`. -/
+def xy : List (Param (Ty .ty)) := [⟨"x", .either, false, int⟩, ⟨"y", .either, true, int⟩]
+
+theorem sig_xy :
+    Ty.sig xy =
+      .union (.rcd (.cons "*" (.pre (Ty.list []))
+          (.cons "x" (.pre int) (.cons "y" (Ty.opt int) .nil))))
+        (.union (.rcd (.cons "*" (.pre (Ty.list [int])) (.cons "y" (Ty.opt int) .nil)))
+          (.rcd (.cons "*" (.pre (Ty.list [int, int])) .nil))) := rfl
+
+/-- The argument record of `f(1)`: `{*: [int]}`. -/
+def args1 : Ty .ty := Ty.record [("*", Ty.record [("hd", int), ("tl", Ty.record [])])]
+
+/-- `f(1)` is accepted, with `y` left out: its argument record is the
+second of the three. -/
+theorem args1_le_sig : Sub E args1 (Ty.sig xy) := by
+  rw [sig_xy]
+  refine Sub.of_step (.unionR₂ (.unionR₁ (.rcd (Sub.row fun l => ?_))))
+  by_cases hs : l = "*"
+  · subst hs; exact Sub.refl
+  · by_cases hy : l = "y"
+    · subst hy
+      simp only [Ty.record, Ty.ofFields, Ty.field, show ¬ "*" = "y" by decide, ite_true,
+        ite_false]
+      exact missing_le_opt
+    · simp only [Ty.record, Ty.ofFields, Ty.field, Ne.symm hs, Ne.symm hy, ite_false]
+      exact Sub.refl
+
+/-- `(fn (x, y = 0) -> x)(1) : int`. -/
+theorem typ_call :
+    Typ E builtins
+      (.call (.fn [("x", .either, none), ("y", .either, some (.lit 0))] (.var "x")) [.lit 1] [])
+      int :=
+  .app typ_fn (.sub (.rcd (.cons (.rcd (.cons .lit (.cons (.rcd .nil) .nil))) .nil)) args1_le_sig)
+
+/-- `f(1, x = 2)` is rejected, since `x` is passed twice: its argument
+record `{*: [int], x: int}` is below none of the three. The first has an
+empty list, and the others have no field `x`. -/
+theorem not_twice_le_sig :
+    ¬ Sub E (Ty.record [("*", Ty.record [("hd", int), ("tl", Ty.record [])]), ("x", int)])
+      (Ty.sig xy) := by
+  rw [sig_xy]
+  intro h
+  have noX : ∀ {ρ : Ty .row}, ρ.field "x" = .missing →
+      ¬ Sub E (Ty.record [("*", Ty.record [("hd", int), ("tl", Ty.record [])]), ("x", int)])
+        (.rcd ρ) := fun hρ h => by
+    cases h.step with
+    | rcd hr =>
+      have := hr.fields "x"
+      rw [hρ] at this
+      simp only [Ty.record, Ty.ofFields, Ty.field, show ¬ "*" = "x" by decide, ite_true,
+        ite_false] at this
+      exact not_pre_le_missing this
+  cases h.step with
+  | unionR₁ h₀ =>
+    cases h₀ with
+    | rcd hr =>
+      have := hr.fields "*"
+      simp only [Ty.record, Ty.ofFields, Ty.field, Ty.list, ite_true] at this
+      cases this.step with
+      | pre hp =>
+        cases hp with
+        | rcd hr' =>
+          have := hr'.fields "hd"
+          simp only [Ty.field, ite_true] at this
+          exact not_pre_le_missing this
+  | unionR₂ h₁ =>
+    cases h₁ with
+    | unionR₁ h₁ => exact noX (by simp [Ty.field]) (Sub.of_step h₁)
+    | unionR₂ h₂ => exact noX (by simp [Ty.field]) (Sub.of_step h₂)
 
 end Examples
 
@@ -278,7 +426,7 @@ theorem Typ.sel_inv {t : Term} {l : String} : ∀ {Γ : Ctx} {u : Term} {τ : Ty
   | _, _, _, .sub h hs, e => let ⟨τ', h₁, h₂⟩ := Typ.sel_inv h e; ⟨τ', h₁, h₂.trans hs⟩
   | _, _, _, .lit, e | _, _, _, .var _ _, e | _, _, _, .lam _, e | _, _, _, .app _ _, e
   | _, _, _, .rcd _, e | _, _, _, .ext _ _, e | _, _, _, .extNil _, e
-  | _, _, _, .selOr _ _, e
+  | _, _, _, .selOr _ _, e | _, _, _, .fn _ _, e
   | _, _, _, .letIn _ _ _, e | _, _, _, .letRec _ _ _ _, e => nomatch e
 
 theorem Typ.rcd_inv {fs : List (String × Term)} : ∀ {Γ : Ctx} {u : Term} {τ : Ty .ty},
@@ -287,7 +435,7 @@ theorem Typ.rcd_inv {fs : List (String × Term)} : ∀ {Γ : Ctx} {u : Term} {τ
   | _, _, _, .sub h hs, e => let ⟨F, hF, hs'⟩ := Typ.rcd_inv h e; ⟨F, hF, hs'.trans hs⟩
   | _, _, _, .lit, e | _, _, _, .var _ _, e | _, _, _, .lam _, e | _, _, _, .app _ _, e
   | _, _, _, .sel _, e | _, _, _, .ext _ _, e | _, _, _, .extNil _, e
-  | _, _, _, .selOr _ _, e
+  | _, _, _, .selOr _ _, e | _, _, _, .fn _ _, e
   | _, _, _, .letIn _ _ _, e | _, _, _, .letRec _ _ _ _, e => nomatch e
 
 theorem TypFields.labels {Γ : Ctx} {l : String} :

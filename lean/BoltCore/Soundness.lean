@@ -102,6 +102,10 @@ inductive GStep (σ : Nat → Bounds) (R : SType → SType → Prop) : SType →
   /-- Through a lower bound: `a ≤ a'` and `a' ≤ v`, between non-variables. -/
   | viaR : a' ∈ (σ v).lower → (∀ w, a' ≠ .var w) → a' ≠ .abs → (∀ w, a ≠ .var w) →
       a ≠ .abs → R a a' → GStep σ R a (.var v)
+  /-- A record below a signature: it is below one of its argument records. -/
+  | recordSig : d ∈ P.domains → R (.record fa ta) d → GStep σ R (.record fa ta) (.sig P)
+  /-- A signature below a record or a signature: each argument record is. -/
+  | sigL : b.IsRecSig → (∀ d ∈ P.domains, R d b) → GStep σ R (.sig P) b
 
 /-! ## Growth of the state -/
 
@@ -184,6 +188,8 @@ theorem Constrain.grows : Constrain s a b s' → Grows s s'
   | .record _ _ _ h₁ h₂ h₃ => Grows.remember.trans (h₁.grows.trans (h₂.grows.trans h₃.grows))
   | .varL _ _ h => (Grows.remember.trans .addUpper).trans h.grows
   | .varR _ _ h => (Grows.remember.trans .addLower).trans h.grows
+  | .recordSig _ _ _ _ _ h => Grows.remember.trans h.grows
+  | .sigL _ _ h => Grows.remember.trans h.grows
 
 theorem ConstrainEach.grows : ConstrainEach s ps s' → Grows s s'
   | .nil => .refl
@@ -249,6 +255,8 @@ theorem GStep.mono (g : Grows s s') :
   | .varR h => .varR (g.lower _ _ h)
   | .viaL h h₁ h₂ h₃ h₄ => .viaL (g.upper _ _ h) h₁ h₂ h₃ (h₄.mono g)
   | .viaR h h₁ h₂ h₃ h₄ h₅ => .viaR (g.lower _ _ h) h₁ h₂ h₃ h₄ (h₅.mono g)
+  | .recordSig hd h => .recordSig hd (h.mono g)
+  | .sigL hb h => .sigL hb fun d hd => (h d hd).mono g
 
 /-! ## Every accepted constraint is logged -/
 
@@ -345,6 +353,12 @@ theorem Constrain.logged : Constrain s a b s' → CacheInLog s → CacheInLog s'
   | .varR _ _ h, hc =>
     have r := h.logged hc.remember.addLower
     ⟨r.1, (remember_logged.mono Grows.addLower).mono h.grows⟩
+  | .recordSig _ _ _ _ _ h, hc =>
+    have r := h.logged hc.remember
+    ⟨r.1, remember_logged.mono h.grows⟩
+  | .sigL _ _ h, hc =>
+    have r := h.logged hc.remember
+    ⟨r.1, remember_logged.mono h.grows⟩
 
 theorem ConstrainEach.logged :
     ConstrainEach s ps s' → CacheInLog s → CacheInLog s' ∧ ∀ p ∈ ps, Logged s' p.1 p.2
@@ -469,6 +483,13 @@ theorem Constrain.just : Constrain s a b s' → CacheInLog s → JustExcept s P 
     have j := h.just hc.remember.addLower
       ((hj.remember (a := a) (b := .var v)).grow .addLower fun _ hp => hp)
     j.close (.varR (h.grows.lower _ _ mem_lower_addLower))
+  | .recordSig (k := k) _ _ _ _ hk h, hc, hj =>
+    (h.just hc.remember hj.remember).close
+      (.recordSig (List.mem_map.mpr ⟨k, hk, rfl⟩) (h.logged hc.remember).2)
+  | .sigL _ hb h, hc, hj =>
+    have r := h.logged hc.remember
+    (h.just hc.remember hj.remember).close
+      (.sigL hb fun d hd => r.2 (d, _) (List.mem_map.mpr ⟨d, hd, rfl⟩))
 
 theorem ConstrainEach.just :
     ConstrainEach s ps s' → CacheInLog s → JustExcept s P → JustExcept s' P
@@ -545,6 +566,9 @@ theorem Constrain.consist :
     h₃.consist (h₂.logged r₁.1).1 (h₂.consist r₁.1 (h₁.consist hc.remember h.remember))
   | .varL _ _ h, hc, hs => h.consist hc.rememberUpper hs.remember.addUpper
   | .varR _ _ h, hc, hs => h.consist hc.remember.addLower hs.remember.addLower
+  | .recordSig _ _ _ _ _ h, hc, hs => h.consist hc.remember hs.remember
+  | .sigL _ _ h, hc, hs =>
+    h.consist hc.remember (hs.remember.weaken fun _ hp => List.mem_append_right _ hp)
 
 /-- Propagation: processing the pending pairs `ps` discharges them. -/
 theorem ConstrainEach.consist :
@@ -612,10 +636,16 @@ theorem TypeTerm.inv : TypeTerm Γ s t st s' → Inv s → Inv s'
   | .extNil h, hi => h.inv hi
   | .letIn h₁ h₂, hi => h₂.inv (h₁.inv hi)
   | .letRec _ _ h₁ hc h₂, hi => h₂.inv (hc.sound (h₁.inv hi.fresh)).1
+  | .fn hp h, hi => h.inv (hp.inv hi)
 
 theorem TypeFields.inv : TypeFields Γ s fs F s' → Inv s → Inv s'
   | .nil, h => h
   | .cons h₁ h₂, hi => h₂.inv (h₁.inv hi)
+
+theorem TypeParams.inv : TypeParams Γ s ps P Γ' s' → Inv s → Inv s'
+  | .nil, h => h
+  | .req _ h, hi => h.inv hi.fresh
+  | .dflt _ hd hc h, hi => h.inv (hc.sound (hd.inv hi.fresh)).1
 end
 
 theorem Inv.init {K : Nat → List String} : Inv (State.initK K) :=

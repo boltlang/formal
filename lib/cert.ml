@@ -23,10 +23,6 @@
 open Types
 open Typer
 
-(** Raised for programs the Lean development cannot check yet: parameter
-    lists ([fn], signatures, the built-ins that take them). *)
-exception Unsupported of string
-
 type t = {
   log : (simple_type * simple_type) list;
   vars : var_state list;  (** the variables of the log *)
@@ -102,6 +98,8 @@ let json_string s =
 
 let list f xs = "[" ^ String.concat ", " (List.map f xs) ^ "]"
 
+let pkind = function PosOnly -> "\"pos\"" | Either -> "\"either\"" | KwOnly -> "\"kw\""
+
 let rec ty = function
   | Variable vs -> Printf.sprintf "{\"var\": %d}" vs.id
   | Primitive n -> Printf.sprintf "{\"prim\": %s}" (json_string n)
@@ -114,7 +112,13 @@ let rec ty = function
   | Missing -> "\"missing\""
   | Nil -> "\"nil\""
   | Opt t -> Printf.sprintf "{\"opt\": %s}" (ty t)
-  | Sig _ -> raise (Unsupported "parameter lists")
+  | Sig ps ->
+      Printf.sprintf "{\"sig\": %s}"
+        (list
+           (fun p ->
+             Printf.sprintf "[%s, %s, %b, %s]" (json_string p.sname) (pkind p.skind) p.sopt
+               (ty p.sty))
+           ps)
 
 let gen_ids (gen : var_state list) = list (fun (v : var_state) -> string_of_int v.id) gen
 
@@ -136,7 +140,13 @@ let rec ann = function
   | ALetRec (x, gen, t, r, b) ->
       Printf.sprintf "{\"letrec\": [%s, %s, %s, %s, %s]}" (json_string x) (gen_ids gen) (ty t)
         (ann r) (ann b)
-  | AFn _ -> raise (Unsupported "parameter lists")
+  | AFn (ps, body) ->
+      let param (x, k, t, d) =
+        match d with
+        | None -> Printf.sprintf "[%s, %s, %s]" (json_string x) (pkind k) (ty t)
+        | Some d -> Printf.sprintf "[%s, %s, %s, %s]" (json_string x) (pkind k) (ty t) (ann d)
+      in
+      Printf.sprintf "{\"fn\": [%s, %s]}" (list param ps) (ann body)
 
 and fields fs = list (fun (n, a) -> Printf.sprintf "[%s, %s]" (json_string n) (ann a)) fs
 

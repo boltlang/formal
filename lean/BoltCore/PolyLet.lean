@@ -69,6 +69,52 @@ theorem Ty.substM_fresh {m : Subst} :
     rw [Ty.substM_fresh θ fun n hn => h n (by simp [Ty.fvars, hn]),
       Ty.substM_fresh ρ fun n hn => h n (by simp [Ty.fvars, hn])]
 
+/-! ## Graph variables of signatures -/
+
+theorem Ty.gvars_unions {m : Nat} {s : Srt} : ∀ {l : List (Ty s)}, m ∈ (Ty.unions l).gvars →
+    ∃ a ∈ l, m ∈ a.gvars
+  | [], h => nomatch h
+  | [a], h => ⟨a, List.mem_cons_self .., h⟩
+  | a :: b :: l, h => by
+    simp only [Ty.unions, Ty.gvars, List.mem_append] at h
+    rcases h with h | h
+    · exact ⟨a, List.mem_cons_self .., h⟩
+    · obtain ⟨c, hc, hm⟩ := Ty.gvars_unions h
+      exact ⟨c, List.mem_cons_of_mem _ hc, hm⟩
+
+theorem Ty.gvars_list {m : Nat} : ∀ {τs : List (Ty .ty)}, m ∈ (Ty.list τs).gvars →
+    ∃ τ ∈ τs, m ∈ τ.gvars
+  | [], h => nomatch h
+  | τ :: τs, h => by
+    simp only [Ty.list, Ty.gvars, List.mem_append, List.append_nil] at h
+    rcases h with h | h
+    · exact ⟨τ, List.mem_cons_self .., h⟩
+    · obtain ⟨σ, hσ, hm⟩ := Ty.gvars_list h
+      exact ⟨σ, List.mem_cons_of_mem _ hσ, hm⟩
+
+theorem Ty.gvars_ofParams {m : Nat} : ∀ {ps : List (Param (Ty .ty))},
+    m ∈ (Ty.ofParams ps).gvars → ∃ p ∈ ps, m ∈ p.ty.gvars
+  | [], h => nomatch h
+  | p :: ps, h => by
+    simp only [Ty.ofParams, Ty.gvars, List.mem_append] at h
+    rcases h with h | h
+    · refine ⟨p, List.mem_cons_self .., ?_⟩
+      cases ho : p.opt <;> simpa [Param.field, ho, Ty.gvars] using h
+    · obtain ⟨q, hq, hm⟩ := Ty.gvars_ofParams h
+      exact ⟨q, List.mem_cons_of_mem _ hq, hm⟩
+
+/-- The graph variables of a signature are those of its parameters' types. -/
+theorem Ty.gvars_sigRows {m : Nat} {ps : List (Param (Ty .ty))} {ρ : Ty .row}
+    (hρ : ρ ∈ Ty.sigRows ps) (h : m ∈ ρ.gvars) : ∃ p ∈ ps, m ∈ p.ty.gvars := by
+  obtain ⟨k, _, rfl⟩ := List.mem_map.mp hρ
+  simp only [Ty.argRow, Ty.gvars, List.mem_append] at h
+  rcases h with h | h
+  · obtain ⟨τ, hτ, hm⟩ := Ty.gvars_list h
+    obtain ⟨p, hp, rfl⟩ := Param.mem_pos hτ
+    exact ⟨p, hp, hm⟩
+  · obtain ⟨p, hp, hm⟩ := Ty.gvars_ofParams h
+    exact ⟨p, Param.mem_named hp, hm⟩
+
 end BoltCore
 
 namespace BoltCore.Alg
@@ -172,6 +218,9 @@ theorem SType.interp_congr {I J : SInterp} :
     have ht := SType.interp_congr t fun v hv => h v (by simp [SType.vars, hv])
     have hf := SFields.interp_congr fs (fun v hv => h v (by simp [SType.vars, hv])) ht.2
     exact ⟨by simp only [SType.toTyI, hf], by simp only [SType.toRowI, hf]⟩
+  | .sig P, h => by
+    have hP := SParams.interp_congr P fun v hv => h v (by simp [SType.vars, hv])
+    exact ⟨by simp only [SType.toTyI, hP], by simp only [SType.toRowI, hP]⟩
 
 theorem SFields.interp_congr {I J : SInterp} :
     ∀ fs : SFields, (∀ v ∈ fs.vars, ∀ srt, I srt v = J srt v) →
@@ -188,6 +237,14 @@ theorem SFields.interp_congr {I J : SInterp} :
       | opt _ => exact congrArg Ty.opt hf.1
       | _ => exact congrArg Ty.pre hf.1
     rw [hfld]
+
+theorem SParams.interp_congr {I J : SInterp} :
+    ∀ P : SParams, (∀ v ∈ P.vars, ∀ srt, I srt v = J srt v) → P.toParamsI I = P.toParamsI J
+  | .nil, _ => rfl
+  | .cons _ _ _ τ P, h => by
+    have hτ := SType.interp_congr τ fun v hv => h v (by simp [SParams.vars, hv])
+    have hP := SParams.interp_congr P fun v hv => h v (by simp [SParams.vars, hv])
+    simp only [SParams.toParamsI, hτ.1, hP]
 end
 
 mutual
@@ -205,6 +262,10 @@ theorem SType.interp_substM (I : SInterp) (m : Subst) : ∀ t : SType,
     have hf := SFields.interp_substM I m fs (t.toRowI I)
     exact ⟨by simp only [SType.toTyI, Ty.substM, hf, ht.2],
       by simp only [SType.toRowI, hf, ht.2]⟩
+  | .sig P => by
+    have hP := SParams.interp_substM I m P
+    exact ⟨by simp only [SType.toTyI, Ty.substM_sig, hP],
+      by simp only [SType.toRowI, Ty.substM_unions, Ty.substM_sigRows, hP]⟩
 
 theorem SFields.interp_substM (I : SInterp) (m : Subst) : ∀ (fs : SFields) (ρ : Ty .row),
     (fs.toRowOnI I ρ).substM m = fs.toRowOnI (I.substM m) (ρ.substM m)
@@ -220,6 +281,13 @@ theorem SFields.interp_substM (I : SInterp) (m : Subst) : ∀ (fs : SFields) (ρ
       | opt _ => exact congrArg Ty.opt hf.1
       | _ => exact congrArg Ty.pre hf.1
     rw [hfld]
+
+theorem SParams.interp_substM (I : SInterp) (m : Subst) : ∀ P : SParams,
+    (P.toParamsI I).map (Param.map (·.substM m)) = P.toParamsI (I.substM m)
+  | .nil => rfl
+  | .cons _ _ _ τ P => by
+    simp only [SParams.toParamsI, List.map_cons, Param.map, (SType.interp_substM I m τ).1,
+      SParams.interp_substM I m P]
 end
 
 mutual
@@ -236,6 +304,9 @@ theorem SType.rename_interp (ρ : Nat → Nat) (I : SInterp) : ∀ t : SType,
     have ht := SType.rename_interp ρ I t
     have hf := SFields.rename_interp ρ I fs ht.2
     exact ⟨by simp only [SType.rename, SType.toTyI, hf], by simp only [SType.rename, SType.toRowI, hf]⟩
+  | .sig P => by
+    have hP := SParams.rename_interp ρ I P
+    exact ⟨by simp only [SType.rename, SType.toTyI, hP], by simp only [SType.rename, SType.toRowI, hP]⟩
 
 theorem SFields.rename_interp (ρ : Nat → Nat) (I : SInterp) : ∀ (fs : SFields) {r r' : Ty .row},
     r = r' → (fs.rename ρ).toRowOnI I r = fs.toRowOnI (fun srt v => I srt (ρ v)) r'
@@ -251,6 +322,13 @@ theorem SFields.rename_interp (ρ : Nat → Nat) (I : SInterp) : ∀ (fs : SFiel
       | opt _ => exact congrArg Ty.opt hf.1
       | _ => exact congrArg Ty.pre hf.1
     rw [hfld]
+
+theorem SParams.rename_interp (ρ : Nat → Nat) (I : SInterp) : ∀ P : SParams,
+    (P.rename ρ).toParamsI I = P.toParamsI (fun srt v => I srt (ρ v))
+  | .nil => rfl
+  | .cons _ _ _ τ P => by
+    simp only [SParams.rename, SParams.toParamsI, (SType.rename_interp ρ I τ).1,
+      SParams.rename_interp ρ I P]
 end
 
 /-! ## Schemes of generalized variables -/
@@ -513,12 +591,25 @@ inductive PTyp (c : Certificate) : PCtx → Term → SType → Prop where
       PTyp c Γ (.letIn false x r b) st
   | letRec : r.IsFun → PTyp c ((x, .mono stx) :: Γ) r inf → inf ≠ .abs → c.Accepts inf stx →
       GenOK c Γ gen → PTyp c ((x, .poly gen stx) :: Γ) b st → PTyp c Γ (.letIn true x r b) st
+  /-- A function of a parameter list: its domain is the signature. -/
+  | fn : PParams c Γ ps P Γ' → PTyp c Γ' t st → PTyp c Γ (.fn ps t) (.arrow (.sig P) st)
 
 /-- Fields of a record literal; they are present (their types are types). -/
 inductive PFields (c : Certificate) : PCtx → List (String × Term) → SFields → Prop where
   | nil : PFields c Γ [] .nil
   | cons : PTyp c Γ t st → st.IsPre → PFields c Γ fs F →
       PFields c Γ ((l, t) :: fs) (.cons l st F)
+
+/-- The parameters of a `fn`, with their types and the context of the body;
+the type of a default is accepted below its parameter's. -/
+inductive PParams (c : Certificate) :
+    PCtx → List (String × PKind × Option Term) → SParams → PCtx → Prop where
+  | nil : PParams c Γ [] .nil Γ
+  | req : PParams c ((x, .mono st) :: Γ) ps P Γ' →
+      PParams c Γ ((x, k, none) :: ps) (.cons x k false st P) Γ'
+  | dflt : PTyp c Γ d std → std ≠ .abs → c.Accepts std st →
+      PParams c ((x, .mono st) :: Γ) ps P Γ' →
+      PParams c Γ ((x, k, some d) :: ps) (.cons x k true st P) Γ'
 end
 
 theorem PFields.pres {c : Certificate} : PFields c Γ fs F → F.Pres
@@ -651,11 +742,20 @@ theorem PTyp.sound (hv : c.Valid) {A : List Nat} {I : SInterp} (hg : GenHyp c.st
       h₁.sound hv hg'
     rw [PCtx.toCtx_withGen hok.ctx] at ih
     exact .sub ih ((hv.holdsG hg' hc).1 ha)
+  | .fn hp h => .fn (hp.sound hv hg) (h.sound hv hg)
 
 theorem PFields.sound (hv : c.Valid) {A : List Nat} {I : SInterp} (hg : GenHyp c.state A I) :
     PFields c Γ fs F → TypFields (defsOf c.state) (Γ.toCtx c.bounds I) fs (F.toListI I)
   | .nil => .nil
   | .cons h₁ _ h₂ => .cons (h₁.sound hv hg) (h₂.sound hv hg)
+
+theorem PParams.sound (hv : c.Valid) {A : List Nat} {I : SInterp} (hg : GenHyp c.state A I) :
+    PParams c Γ ps P Γ' →
+      TypParams (defsOf c.state) (Γ.toCtx c.bounds I) ps (P.toParamsI I) (Γ'.toCtx c.bounds I)
+  | .nil => .nil
+  | .req h => .req (h.sound hv hg)
+  | .dflt hd ha hc h =>
+    .dflt (.sub (hd.sound hv hg) ((hv.holdsG hg hc).1 ha)) (h.sound hv hg)
 end
 
 /-- **Theorem 1 with let-polymorphism, for certificates**: a polymorphic
@@ -690,6 +790,17 @@ theorem SType.toTy_gvars : ∀ a : SType, (∀ m ∈ a.toTy.gvars, m ∈ a.vars)
       · exact .inl h
       · exact .inr (ht m h)
     ⟨fun m hm => h m (by simpa [SType.toTy, SType.toTyI, SInterp.gv, Ty.gvars] using hm), h⟩
+  | .sig P =>
+    have hP := SParams.toParams_gvars P
+    ⟨fun m hm => by
+        obtain ⟨a, ha, hma⟩ := Ty.gvars_unions hm
+        obtain ⟨ρ, hρ, rfl⟩ := List.mem_map.mp ha
+        obtain ⟨p, hp, hmp⟩ := Ty.gvars_sigRows hρ hma
+        exact hP p hp m hmp,
+      fun m hm => by
+        obtain ⟨ρ, hρ, hmρ⟩ := Ty.gvars_unions hm
+        obtain ⟨p, hp, hmp⟩ := Ty.gvars_sigRows hρ hmρ
+        exact hP p hp m hmp⟩
 
 theorem SFields.toRowOn_gvars : ∀ (fs : SFields) (ρ : Ty .row), ∀ m ∈ (fs.toRowOn ρ).gvars,
     m ∈ fs.vars ∨ m ∈ ρ.gvars
@@ -711,6 +822,16 @@ theorem SFields.toRowOn_gvars : ∀ (fs : SFields) (ρ : Ty .row), ∀ m ∈ (fs
     · rcases SFields.toRowOn_gvars fs ρ m h with h | h
       · exact .inl (.inr h)
       · exact .inr h
+
+theorem SParams.toParams_gvars : ∀ P : SParams, ∀ p ∈ P.toParamsI .gv, ∀ m ∈ p.ty.gvars,
+    m ∈ P.vars
+  | .nil, _, h, _, _ => nomatch h
+  | .cons _ _ _ τ P, p, hp, m, hm => by
+    simp only [SParams.toParamsI, List.mem_cons] at hp
+    simp only [SParams.vars, List.mem_append]
+    rcases hp with rfl | hp
+    · exact .inl ((SType.toTy_gvars τ).1 m hm)
+    · exact .inr (SParams.toParams_gvars P p hp m hm)
 end
 
 theorem SType.toAt_gvars (a : SType) : ∀ srt : Srt, ∀ m ∈ (a.toAt srt).gvars, m ∈ a.vars

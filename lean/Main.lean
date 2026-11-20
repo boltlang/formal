@@ -17,6 +17,8 @@ Format (variables are numbers, labels and names are strings):
 type  ::= {"var": n} | {"prim": s} | {"fun": [type, type]}
         | {"rec": [[[s, type], ...], type]} | "abs"
         | "missing" | {"opt": type} | "nil"
+        | {"sig": [[s, kind, bool, type], ...]}
+kind  ::= "pos" | "either" | "kw"
 ann   ::= {"lit": n} | {"var": x} | {"inst": [x, [[n, n], ...]]}
         | {"lam": [x, type, ann]} | {"app": [ann, ann, type]}
         | {"rcd": [[s, ann], ...]} | {"sel": [ann, s, type]}
@@ -24,6 +26,8 @@ ann   ::= {"lit": n} | {"var": x} | {"inst": [x, [[n, n], ...]]}
         | {"ext": [ann, [[s, ann], ...], type]}
         | {"let": [x, [n, ...], ann, ann]}
         | {"letrec": [x, [n, ...], type, ann, ann]}
+        | {"fn": [[param, ...], ann]}
+param ::= [x, kind, type] | [x, kind, type, ann]
 cert  ::= {"log": [[type, type], ...], "bounds": [[n, [type, ...], [type, ...]], ...],
            "kinds": [[n, [s, ...]], ...], "if": n, "term": ann}
 ```
@@ -31,6 +35,10 @@ cert  ::= {"log": [[type, type], ...], "bounds": [[n, [type, ...], [type, ...]],
 `bounds` lists a variable's lower, then upper bounds. `"abs"` is the top
 field and the top row, `"missing"` and `{"opt": τ}` are fields, and `"nil"`
 is the empty row: a closed record `{x: τ}` is `{"rec": [[["x", τ]], "nil"]}`.
+A signature lists its parameters in order, each with its name, its kind
+(positional-only, either-way or keyword-only), whether it has a default,
+and its type. A `fn` gives each parameter its type, and its default if it
+has one.
 -/
 
 open Lean BoltCore BoltCore.Alg
@@ -55,6 +63,13 @@ def jTag (j : Json) : Except String (String × Json) := do
     | _ => throw s!"expected a one-field object: {j.compress}"
   | _ => throw s!"expected an object: {j.compress}"
 
+def parseKind (j : Json) : Except String PKind := do
+  match ← j.getStr? with
+  | "pos" => pure .posOnly
+  | "either" => pure .either
+  | "kw" => pure .kwOnly
+  | s => throw s!"unknown parameter kind: {s}"
+
 mutual
 partial def parseTy (j : Json) : Except String SType := do
   if j == Json.str "abs" then return .abs
@@ -67,6 +82,7 @@ partial def parseTy (j : Json) : Except String SType := do
   | "opt" => return .opt (← parseTy v)
   | "fun" => let (a, b) ← jPair v; return .arrow (← parseTy a) (← parseTy b)
   | "rec" => let (fs, t) ← jPair v; return .record (← parseTyFields (← jArr fs)) (← parseTy t)
+  | "sig" => return .sig (← parseTyParams (← jArr v))
   | _ => throw s!"unknown type: {j.compress}"
 
 partial def parseTyFields : List Json → Except String SFields
@@ -74,6 +90,15 @@ partial def parseTyFields : List Json → Except String SFields
   | f :: fs => do
     let (l, t) ← jPair f
     return .cons (← l.getStr?) (← parseTy t) (← parseTyFields fs)
+
+partial def parseTyParams : List Json → Except String SParams
+  | [] => pure .nil
+  | p :: ps => do
+    match ← jArr p with
+    | [n, k, o, t] =>
+      return .cons (← n.getStr?) (← parseKind k) (← o.getBool?) (← parseTy t)
+        (← parseTyParams ps)
+    | _ => throw s!"bad parameter: {p.compress}"
 end
 
 def parseRenaming (j : Json) : Except String (List (Nat × Nat)) := do
@@ -98,6 +123,7 @@ partial def parseAnn (j : Json) : Except String Ann := do
   | "letrec", [x, gen, stx, r, b] =>
     return .letRec (← x.getStr?) (← (← jArr gen).mapM jNat) (← parseTy stx) (← parseAnn r)
       (← parseAnn b)
+  | "fn", [ps, t] => return .fn (← parseAnnParams (← jArr ps)) (← parseAnn t)
   | _, _ => throw s!"unknown term: {j.compress}"
 
 partial def parseAnnFields : List Json → Except String AFields
@@ -105,6 +131,17 @@ partial def parseAnnFields : List Json → Except String AFields
   | f :: fs => do
     let (l, t) ← jPair f
     return .cons (← l.getStr?) (← parseAnn t) (← parseAnnFields fs)
+
+partial def parseAnnParams : List Json → Except String AParams
+  | [] => pure .nil
+  | p :: ps => do
+    match ← jArr p with
+    | [x, k, st] =>
+      return .req (← x.getStr?) (← parseKind k) (← parseTy st) (← parseAnnParams ps)
+    | [x, k, st, d] =>
+      return .dflt (← x.getStr?) (← parseKind k) (← parseTy st) (← parseAnn d)
+        (← parseAnnParams ps)
+    | _ => throw s!"bad parameter: {p.compress}"
 end
 
 structure Input where
@@ -163,11 +200,25 @@ partial def showTy : SType → String
   | .missing => "Missing"
   | .opt t => s!"{showTy t}?"
   | .nil => "{}"
+  | .sig P => "(" ++ showParams P ++ ")"
 
 partial def showFields : SFields → String
   | .nil => ""
   | .cons l f .nil => s!"{l}: {showTy f}"
   | .cons l f fs => s!"{l}: {showTy f}, {showFields fs}"
+
+/-- Parameters, marked by kind: `/x` is positional-only, `*x` keyword-only. -/
+partial def showParams : SParams → String
+  | .nil => ""
+  | .cons n k o τ P =>
+    let mark := match k with
+      | .posOnly => "/"
+      | .either => ""
+      | .kwOnly => "*"
+    let p := s!"{mark}{n}{if o then "?" else ""}: {showTy τ}"
+    match P with
+    | .nil => p
+    | _ => s!"{p}, {showParams P}"
 end
 
 def showPair (p : SType × SType) : String := s!"{showTy p.1} ≤ {showTy p.2}"
@@ -213,6 +264,11 @@ partial def whereFails (c : Certificate) (Γ : PCtx) : Ann → Option String
         if c.genB Γ gen then whereFails c ((x, .poly gen stx) :: Γ) b
         else some s!"let rec {x}: cannot generalize {gen} (or its type is not accepted)"
       | none => here a
+  | a@(.fn ps t) =>
+    (params Γ ps).orElse fun _ =>
+      match inferParams c Γ ps with
+      | some (_, Γ') => (whereFails c Γ' t).orElse fun _ => here a
+      | none => here a
   | a => here a
 where
   here (a : Ann) : Option String :=
@@ -221,6 +277,11 @@ where
   fields : AFields → Option String
     | .nil => none
     | .cons _ t fs => (whereFails c Γ t).orElse fun _ => fields fs
+  params : PCtx → AParams → Option String
+    | _, .nil => none
+    | Γ, .req x _ st ps => params ((x, .mono st) :: Γ) ps
+    | Γ, .dflt x _ st d ps =>
+      (whereFails c Γ d).orElse fun _ => params ((x, .mono st) :: Γ) ps
 
 /-! ## Main -/
 

@@ -64,8 +64,9 @@ Design decisions that differ from the papers:
   arguments. Signatures are their own type constructor, never merged with
   records, and argument records with different numbers of positional
   arguments are not merged either. See `examples/calls.sub`. The Lean
-  development does not have parameter lists yet, so programs that use
-  them, including any use of a built-in function, get no certificate.
+  development has parameter lists too: the domain of such a function is
+  the union of its argument records, and programs that use them are
+  certified like the others.
 - **Extensible records.** `r with {l = e}` adds field `l`, or overwrites
   it, possibly changing its type: `fn (r) -> r with {y = 1}` has type
   `(r: {y: Abs | 'a}) -> {y: int | 'a}`. Records are rows of fields over a tail.
