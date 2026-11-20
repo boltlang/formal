@@ -4,6 +4,8 @@ import BoltCore.Rows
 import BoltCore.Sub
 import BoltCore.Lattice
 import BoltCore.Typing
+import BoltCore.Eval
+import BoltCore.Safety
 import BoltCore.Algorithm
 import BoltCore.Soundness
 import BoltCore.Solution
@@ -16,3 +18,4 @@ import BoltCore.PolyLet
 import BoltCore.Adequacy
 import BoltCore.Examples
 import BoltCore.Check
+import BoltCore.SafeInfer

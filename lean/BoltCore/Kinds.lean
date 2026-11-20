@@ -625,7 +625,7 @@ theorem TypeTerm.kinds : TypeTerm Γ s t st s' → CtxK K Γ → Inv₂ s → KI
     have r₁ := h₁.kinds hΓ' i.fresh ⟨k.kind, k.log, k.exps⟩
     have i₁ := h₁.inv₂ i.fresh
     exact h₂.kinds hΓ' (hc.inv₂ i₁) (hc.kinds i₁ r₁.1 r₁.2.1 trivial (.of_empty r₁.2.2 hv))
-  | .fn hp h, hΓ, i, k => by
+  | .fn _ hp h, hΓ, i, k => by
     have rp := hp.kinds hΓ i k
     have r := h.kinds rp.2.2 (hp.inv₂ i) rp.1
     exact ⟨r.1, ⟨rp.2.1, .of_nonvar (fun _ h => nomatch h), r.2.1, r.2.2⟩,

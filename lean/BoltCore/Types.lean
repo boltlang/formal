@@ -215,6 +215,34 @@ theorem mem_named {q : Param α} : ∀ {k : Nat} {ps : List (Param α)}, q ∈ n
     · exact h
     · exact List.mem_cons_of_mem _ (mem_named h)
 
+/-- Where a parameter may stand: positional-only parameters without a
+default, then those with one, then the either-way parameters, then the
+keyword-only ones. -/
+def stage (p : Param α) : Nat :=
+  match p.kind with
+  | .posOnly => if p.opt then 1 else 0
+  | .either => 2
+  | .kwOnly => 3
+
+/-- A well-formed parameter list: the parameters are in order (`stage`),
+and their names are distinct and not the reserved label `*`. The parser
+only builds such lists. Without the order, a positional-only parameter
+without a default could be left out; with a repeated name, an argument
+record could not give both parameters a value. -/
+def WF (ps : List (Param α)) : Prop :=
+  ps.Pairwise (fun p q => p.stage ≤ q.stage) ∧ (ps.map (·.name)).Nodup ∧ "*" ∉ ps.map (·.name)
+
+instance (ps : List (Param α)) : Decidable (WF ps) := by
+  unfold WF; infer_instance
+
+theorem WF.map (f : α → β) {ps : List (Param α)} (h : WF ps) : WF (ps.map (map f)) := by
+  simp only [WF, List.pairwise_map, List.map_map]
+  exact h
+
+theorem WF.tail {p : Param α} {ps : List (Param α)} (h : WF (p :: ps)) : WF ps :=
+  ⟨(List.pairwise_cons.mp h.1).2, (List.nodup_cons.mp h.2.1).2,
+    fun hm => h.2.2 (List.mem_cons_of_mem _ hm)⟩
+
 end Param
 
 /-- The union of a list of types (`⊥` for none). -/

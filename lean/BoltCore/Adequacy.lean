@@ -111,10 +111,10 @@ theorem TypeTerm.skeleton {c : Certificate} {Δ : PCtx} (r : PRel Γ Δ) :
       r₁.2.2.ne_abs (hc.logged.accepts hlog₂) (GenOK.nil c Δ)
       (h₂.skeleton r.poly (hΓ.cons trivial trivial) (hc.inv₂ i₁)
         (hc.nac i₁ r₁.2.1 trivial r₁.1) hlog)
-  | .fn hp h, hΓ, i, n, hlog => by
+  | .fn hw hp h, hΓ, i, n, hlog => by
     have rp := hp.nac hΓ i n
     obtain ⟨Δ', hP, r'⟩ := hp.skeleton r hΓ i n (fun p hp' => hlog p (h.log_grows p hp'))
-    exact .fn hP (h.skeleton r' rp.2.2 (hp.inv₂ i) rp.1 hlog)
+    exact .fn hw hP (h.skeleton r' rp.2.2 (hp.inv₂ i) rp.1 hlog)
 
 theorem TypeFields.skeleton {c : Certificate} {Δ : PCtx} (r : PRel Γ Δ) :
     TypeFields Γ s fs F s' → CtxNAC Γ → Inv₂ s → LogNAC s →

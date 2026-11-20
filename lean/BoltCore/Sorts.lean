@@ -324,7 +324,7 @@ theorem TypeTerm.nac : TypeTerm Γ s t st s' → CtxNAC Γ → Inv₂ s → LogN
     have r₁ := h₁.nac hΓ' i.fresh h
     have i₁ := h₁.inv₂ i.fresh
     h₂.nac hΓ' (hc.inv₂ i₁) (hc.nac i₁ r₁.2.1 trivial r₁.1)
-  | .fn hp h', hΓ, i, h =>
+  | .fn _ hp h', hΓ, i, h =>
     have rp := hp.nac hΓ i h
     have r := h'.nac rp.2.2 (hp.inv₂ i) rp.1
     ⟨r.1, ⟨(fun h => nomatch h), r.2.2.ne_abs, rp.2.1, r.2.1⟩, trivial⟩

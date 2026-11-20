@@ -592,7 +592,8 @@ inductive PTyp (c : Certificate) : PCtx → Term → SType → Prop where
   | letRec : r.IsFun → PTyp c ((x, .mono stx) :: Γ) r inf → inf ≠ .abs → c.Accepts inf stx →
       GenOK c Γ gen → PTyp c ((x, .poly gen stx) :: Γ) b st → PTyp c Γ (.letIn true x r b) st
   /-- A function of a parameter list: its domain is the signature. -/
-  | fn : PParams c Γ ps P Γ' → PTyp c Γ' t st → PTyp c Γ (.fn ps t) (.arrow (.sig P) st)
+  | fn : Param.WF P.toList → PParams c Γ ps P Γ' → PTyp c Γ' t st →
+      PTyp c Γ (.fn ps t) (.arrow (.sig P) st)
 
 /-- Fields of a record literal; they are present (their types are types). -/
 inductive PFields (c : Certificate) : PCtx → List (String × Term) → SFields → Prop where
@@ -742,7 +743,9 @@ theorem PTyp.sound (hv : c.Valid) {A : List Nat} {I : SInterp} (hg : GenHyp c.st
       h₁.sound hv hg'
     rw [PCtx.toCtx_withGen hok.ctx] at ih
     exact .sub ih ((hv.holdsG hg' hc).1 ha)
-  | .fn hp h => .fn (hp.sound hv hg) (h.sound hv hg)
+  | .fn (P := P) hw hp h => by
+    have hw' : Param.WF (P.toParamsI I) := by rw [SParams.toParamsI_eq]; exact hw.map _
+    exact .fn hw' (hp.sound hv hg) (h.sound hv hg)
 
 theorem PFields.sound (hv : c.Valid) {A : List Nat} {I : SInterp} (hg : GenHyp c.state A I) :
     PFields c Γ fs F → TypFields (defsOf c.state) (Γ.toCtx c.bounds I) fs (F.toListI I)

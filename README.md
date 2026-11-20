@@ -149,11 +149,15 @@ type checker:
   schemes, and of the executable checker (`check_sound`);
 - the **exactness of the row rewrites** in the simplifier and subsumption;
 - that selecting a missing field has no type (`not_typ_sel_missing`), and
-  the field lattice of optional fields and closed records.
+  the field lattice of optional fields and closed records;
+- **type safety** (`type_safety`): a well-typed term never evaluates to an
+  error, in a call-by-value semantics given as an interpreter with fuel.
+  So a program whose certificate the checker accepts does not go wrong
+  (`check_safe`). Termination is not claimed.
 
 **Roadmap.** Done: declarative typing with let-polymorphism, the
 algorithm model, Theorem 1, certificates with generalization,
-instantiation and extrusion, and the executable checker. Next: adequacy of
+instantiation and extrusion, the executable checker, and type safety. Next: adequacy of
 certificates for let-polymorphism (levels in the model), the MLsub lattice
 equations and the simplifier's correctness, and the presentation of
 inferred types as closed `∀`-types. Details in
@@ -161,8 +165,9 @@ inferred types as closed `∀`-types. Details in
 
 ## Not yet implemented
 
-- Type safety: there is no operational semantics, so no progress or
-  preservation.
+- An evaluator in OCaml. The operational semantics exists only in Lean
+  (`lean/BoltCore/Eval.lean`), where type safety is proved; `boltcore` type
+  checks programs and does not run them.
 - Boolean-algebra types (negation, as in
   [MLstruct](docs/papers/mlstruct.md)), and rejecting uninhabited types
   such as `int ∧ bool`.

@@ -24,6 +24,13 @@ lake exe boltcore-check CERT.json   # check a certificate from `boltcore --cert`
   (`TypeTerm.certificate`, `Adequacy.lean`).
 - **The executable checker** (`check_sound`, `Check.lean`): Boolean checks
   that imply validity and the skeleton, run by `boltcore-check`.
+- **Type safety** (`type_safety`, `Safety.lean`): a term that is well-typed
+  in the declarative system never evaluates to an error, in a call-by-value
+  semantics given as an interpreter with fuel (`Eval.lean`), and a value it
+  evaluates to has its type. With the results above: a term the model
+  types, and a term whose certificate the checker accepts, do not go wrong
+  (`infer_safe`, `check_safe`, `SafeInfer.lean`). Termination is not
+  claimed.
 - **Rows** (`Rows.lean`): the row rewrites of the simplifier and of
   subsumption preserve the meaning of rows.
 
@@ -43,6 +50,8 @@ one unsorted syntax of simple types, translated into the sorts by position.
 | `BoltCore/Rows.lean` | row algebra; exactness of the row rewrites in `lib/simplify.ml` and `lib/subsume.ml` |
 | `BoltCore/Lattice.lean` | the MLsub lattice equations: what the minimal rules cannot derive (`not_fun_merge`, `not_pre_union`), and the sequent-style plan |
 | `BoltCore/Typing.lean` | declarative typing (constrained schemes `∀ᾱ. D ⇒ σ`, with constraints at any sort, for built-ins and let-polymorphism; record extension; selection of present fields `pre τ` only; selection with a default of optional fields; closed record literals; functions of a parameter list, `fn`) with examples; selecting a missing field is untypable (`not_typ_sel_missing`), and so is passing an argument twice (`not_twice_le_sig`) |
+| `BoltCore/Eval.lean` | operational semantics: values, closures and a call-by-value interpreter with fuel; the binding of arguments to the parameters of a `fn`; the built-ins as values; the calls of issue #2 as examples |
+| `BoltCore/Safety.lean` | type safety: typing of values (`VTyp`), canonical forms by inverting one layer of subtyping, argument records against parameter lists (`ArgsOK`), and safety by induction on the fuel (`safe`, `type_safety`) |
 | `BoltCore/Algorithm.lean` | model of `lib/typer.ml` (no levels): state, `Constrain`/`TypeTerm` as big-step relations; signatures `sig P` with their two constraint rules, and `fn`; ranked bounds (`StructRanked`) rule out structural recursive types |
 | `BoltCore/Soundness.lean` | soundness of constraining on the bound graph: justification and consistency invariants, preserved by `constrain` and `typeTerm` |
 | `BoltCore/Solution.lean` | the solution of the inferred constraints (unifying coalescing via graph variables), simple types translated by position (`toTy`, `toRow`, `toField`), and its invariants |
@@ -54,6 +63,7 @@ one unsorted syntax of simple types, translated into the sorts by position.
 | `BoltCore/PolyLet.lean` | typing skeletons with let-polymorphism: schemes from generalized variables and their bounds (`mkScheme`), checked generalization (`GenOK`) and instantiation (`InstOK`), soundness (`PTyp.sound_top`; uses classical logic), no recursive types (`Valid.nonrec`) |
 | `BoltCore/Adequacy.lean` | every accepted run of the model yields a valid certificate and a skeleton (`TypeTerm.certificate`); Theorem 1 through certificates (`theorem1_cert`) |
 | `BoltCore/Check.lean` | the executable checker: Boolean checks of validity (`Certificate.check`) and of polymorphic skeletons over annotated terms (`infer`), with `check_sound`: an accepted certificate types the term |
+| `BoltCore/SafeInfer.lean` | inferred and certified programs do not go wrong (`infer_safe`, `check_safe`) |
 | `BoltCore/Examples.lean` | example certificates with let-polymorphism, unconstrained and constrained, accepted by the executable checker (`decide`), which gives their validity, skeletons and typings |
 | `Main.lean` | `boltcore-check`: reads a JSON certificate, computes ranks, runs the checks, explains rejections (parsing and diagnostics are not verified) |
 
@@ -141,9 +151,8 @@ Selection `t.l : τ` requires a present field, `t : {l : pre τ}`, by the
 shape of the rule. Selection with a default, `t.l ?? d : τ`, requires
 `t : {l : opt τ}` and `d : τ`. A record literal's row ends in `nil`.
 Selecting a label that a record literal lacks has no type
-(`not_typ_sel_missing`: `{}.x`, `{a = 1}.b`), a first step towards type
-safety. There is no operational semantics yet, so progress and
-preservation are not proved. Examples: `typ_twice`, `typ_if`, `typ_ext`
+(`not_typ_sel_missing`: `{}.x`, `{a = 1}.b`); type safety is proved in
+`Safety.lean` (below). Examples: `typ_twice`, `typ_if`, `typ_ext`
 (the extension example of Marques et al.), `typ_letPoly`,
 `typ_letConstrained`.
 
@@ -153,10 +162,59 @@ records `Dₖ`, one per number `k` of arguments passed by position
 (`Ty.argRow`); it is a definition, not a constructor. A default is typed
 in the scope of the parameters before it (`TypParams`). A call is an
 application to an argument record (`Term.call`) and has no rule of its
-own; the built-ins take positional-only parameters. Examples: `typ_fn`,
+own; the built-ins take positional-only parameters. The rule asks for a
+well-formed parameter list (`Param.WF`): positional-only parameters
+without a default, then those with one, then either-way, then
+keyword-only parameters, with distinct names. The parser only builds such
+lists; type safety needs it, and the checker tests it. Examples: `typ_fn`,
 `sig_xy` (the three records of `fn (x, y = 0) -> …`), `typ_call` (`f(1)`),
 and `not_twice_le_sig`: the argument record of `f(1, x = 2)` is below none
 of the three.
+
+## Type safety (`Eval.lean`, `Safety.lean`, `SafeInfer.lean`)
+
+`eval n ρ t` evaluates `t` in the environment `ρ` with `n` steps of fuel:
+`none` if the fuel runs out, `some .err` if evaluation goes wrong (an
+unbound name, a number applied, a missing field selected, a wrong argument
+list), and `some (.ok v)` for a value. Functions are closures; a `let rec`
+binds its name to the closure itself each time it is applied. `t.l ?? d`
+evaluates `d` only when the field is missing. A `fn` is called with an
+argument record: the arguments passed by position go to the leading
+parameters that can take them, each other parameter takes the argument of
+its name or the value of its default, evaluated in the scope of the
+parameters before it, and every argument has to be taken. So `f(y = 2)`,
+`f(1, x = 2)`, `f(1, 2, 3)` and `f(1, z = 2)` are errors of the semantics
+for `f = fn (x, y = 10) -> …`, not only of the type checker. The built-ins
+are values; `if` is an ordinary curried function, as in `lib/typer.ml`, so
+both branches are evaluated.
+
+`type_safety`: if `t : τ` from the built-ins, then `eval n builtinEnv t` is
+never an error, for any `n`, and a value it gives has type `τ`
+(`type_safety_value`). The proof is by induction on the fuel, for
+evaluation, application and the binding of arguments together (`Safe`),
+following Siek's "three easy lemmas" for definitional interpreters; there
+is no substitution, so names being strings is not an issue.
+
+- Values are typed by `VTyp`. A closure has the types of its function in a
+  typed environment; a recursive closure the type its function has given
+  that its own name has it. An environment gives each name a value that
+  has every instance of the name's scheme, which is what the `let` rule
+  provides.
+- Every rule of `VTyp` ends in a subtyping step, so canonical forms are
+  inversions of one layer of `Sub`: a value of a function type is a
+  function, a value of a record type is a record whose fields fit the row
+  (`VTyp.rcd_inv`), and a value of a union of records is a value of one of
+  them (`Sub.unions_inv`), which is how a value of a signature is an
+  argument record for some number of positional arguments (`VTyp.args`).
+- `ArgsOK.cons` reads the binding of one parameter off the argument record
+  `Dₖ`: it takes an argument by position, or by name, or has a default.
+  This uses the order of the parameters and their distinct names
+  (`Param.WF`).
+- The definitions of graph variables are arbitrary: safety does not need
+  the solution to be free of recursive types.
+
+Not covered: termination, and a small-step semantics (the interpreter
+gives the result of an evaluation, not its steps).
 
 ## The algorithm and its soundness
 

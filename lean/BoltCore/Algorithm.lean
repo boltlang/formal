@@ -468,8 +468,9 @@ inductive TypeTerm : SCtx → State → Term → SType → State → Prop where
       TypeTerm ((x, .var s.next) :: Γ) s₂ b stb s₃ →
       TypeTerm Γ s (.letIn true x r b) stb s₃
   /-- `fn (…) -> t`: the parameters give the signature and the context of
-  the body. -/
-  | fn : TypeParams Γ s ps P Γ' s₁ → TypeTerm Γ' s₁ t st s₂ →
+  the body. The parameter list is well-formed (`Param.WF`), which the
+  parser guarantees (`lib/parser.ml`); the typer does not check it. -/
+  | fn : Param.WF P.toList → TypeParams Γ s ps P Γ' s₁ → TypeTerm Γ' s₁ t st s₂ →
       TypeTerm Γ s (.fn ps t) (.arrow (.sig P) st) s₂
 
 inductive TypeFields : SCtx → State → List (String × Term) → SFields → State → Prop where

@@ -21,7 +21,8 @@ minimal subtyping relation of `Sub.lean`. With sorts:
 * **Parameter lists** (issue #2): `fn (x₁ [= d₁], …) -> t` has the domain
   `Ty.sig`, the union of the argument records it accepts. Each default is
   typed in the scope of the parameters before it (`TypParams`). A call is
-  an application to an argument record and needs no rule.
+  an application to an argument record and needs no rule. The parameter
+  list is well-formed (`Param.WF`): in order, with distinct names.
 
 **Schemes are constrained**, as in HM(X): `∀ᾱ. D ⇒ σ`, where `D` is a list
 of subtyping constraints on the quantified variables. An instance
@@ -176,7 +177,8 @@ inductive Typ (E : Defs) : Ctx → Term → Ty .ty → Prop where
       σ.Instance E τ₀ → Typ E ((x, σ) :: Γ) t τ → Typ E Γ (.letIn true x s t) τ
   /-- A function of a parameter list: its domain is the union of the
   argument records it accepts. -/
-  | fn : TypParams E Γ ps P Γ' → Typ E Γ' t τ → Typ E Γ (.fn ps t) (.arrow (Ty.sig P) τ)
+  | fn : Param.WF P → TypParams E Γ ps P Γ' → Typ E Γ' t τ →
+      Typ E Γ (.fn ps t) (.arrow (Ty.sig P) τ)
   | sub : Typ E Γ t τ → Sub E τ τ' → Typ E Γ t τ'
 
 inductive TypFields (E : Defs) : Ctx → List (String × Term) → List (String × Ty .ty) → Prop where
@@ -339,7 +341,7 @@ not at all: its domain is the union of three argument records,
 theorem typ_fn :
     Typ E builtins (.fn [("x", .either, none), ("y", .either, some (.lit 0))] (.var "x"))
       (.arrow (Ty.sig [⟨"x", .either, false, int⟩, ⟨"y", .either, true, int⟩]) int) :=
-  .fn (.req (.dflt .lit .nil)) (.var_mono rfl)
+  .fn (by decide) (.req (.dflt .lit .nil)) (.var_mono rfl)
 
 /-- The parameters of `fn (x, y = 0) -> …`. -/
 def xy : List (Param (Ty .ty)) := [⟨"x", .either, false, int⟩, ⟨"y", .either, true, int⟩]
@@ -426,7 +428,29 @@ theorem Typ.sel_inv {t : Term} {l : String} : ∀ {Γ : Ctx} {u : Term} {τ : Ty
   | _, _, _, .sub h hs, e => let ⟨τ', h₁, h₂⟩ := Typ.sel_inv h e; ⟨τ', h₁, h₂.trans hs⟩
   | _, _, _, .lit, e | _, _, _, .var _ _, e | _, _, _, .lam _, e | _, _, _, .app _ _, e
   | _, _, _, .rcd _, e | _, _, _, .ext _ _, e | _, _, _, .extNil _, e
-  | _, _, _, .selOr _ _, e | _, _, _, .fn _ _, e
+  | _, _, _, .selOr _ _, e | _, _, _, .fn _ _ _, e
+  | _, _, _, .letIn _ _ _, e | _, _, _, .letRec _ _ _ _, e => nomatch e
+
+theorem Typ.lam_inv {x : String} {t : Term} : ∀ {Γ : Ctx} {u : Term} {τ : Ty .ty},
+    Typ E Γ u τ → u = .lam x t →
+    ∃ a b, Typ E ((x, .mono a) :: Γ) t b ∧ Sub E (.arrow a b) τ
+  | _, _, _, .lam h, e => by cases e; exact ⟨_, _, h, Sub.refl⟩
+  | _, _, _, .sub h hs, e => let ⟨a, b, h₁, h₂⟩ := Typ.lam_inv h e; ⟨a, b, h₁, h₂.trans hs⟩
+  | _, _, _, .lit, e | _, _, _, .var _ _, e | _, _, _, .app _ _, e
+  | _, _, _, .rcd _, e | _, _, _, .sel _, e | _, _, _, .ext _ _, e | _, _, _, .extNil _, e
+  | _, _, _, .selOr _ _, e | _, _, _, .fn _ _ _, e
+  | _, _, _, .letIn _ _ _, e | _, _, _, .letRec _ _ _ _, e => nomatch e
+
+theorem Typ.fn_inv {ps : List (String × PKind × Option Term)} {t : Term} :
+    ∀ {Γ : Ctx} {u : Term} {τ : Ty .ty}, Typ E Γ u τ → u = .fn ps t →
+    ∃ P Γ' σ, Param.WF P ∧ TypParams E Γ ps P Γ' ∧ Typ E Γ' t σ ∧ Sub E (.arrow (Ty.sig P) σ) τ
+  | _, _, _, .fn hw hp h, e => by cases e; exact ⟨_, _, _, hw, hp, h, Sub.refl⟩
+  | _, _, _, .sub h hs, e =>
+    let ⟨P, Γ', σ, hw, hp, h₁, h₂⟩ := Typ.fn_inv h e
+    ⟨P, Γ', σ, hw, hp, h₁, h₂.trans hs⟩
+  | _, _, _, .lit, e | _, _, _, .var _ _, e | _, _, _, .app _ _, e | _, _, _, .lam _, e
+  | _, _, _, .rcd _, e | _, _, _, .sel _, e | _, _, _, .ext _ _, e | _, _, _, .extNil _, e
+  | _, _, _, .selOr _ _, e
   | _, _, _, .letIn _ _ _, e | _, _, _, .letRec _ _ _ _, e => nomatch e
 
 theorem Typ.rcd_inv {fs : List (String × Term)} : ∀ {Γ : Ctx} {u : Term} {τ : Ty .ty},
@@ -435,7 +459,7 @@ theorem Typ.rcd_inv {fs : List (String × Term)} : ∀ {Γ : Ctx} {u : Term} {τ
   | _, _, _, .sub h hs, e => let ⟨F, hF, hs'⟩ := Typ.rcd_inv h e; ⟨F, hF, hs'.trans hs⟩
   | _, _, _, .lit, e | _, _, _, .var _ _, e | _, _, _, .lam _, e | _, _, _, .app _ _, e
   | _, _, _, .sel _, e | _, _, _, .ext _ _, e | _, _, _, .extNil _, e
-  | _, _, _, .selOr _ _, e | _, _, _, .fn _ _, e
+  | _, _, _, .selOr _ _, e | _, _, _, .fn _ _ _, e
   | _, _, _, .letIn _ _ _, e | _, _, _, .letRec _ _ _ _, e => nomatch e
 
 theorem TypFields.labels {Γ : Ctx} {l : String} :

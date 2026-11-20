@@ -55,6 +55,12 @@ In `lean/BoltCore/Check.lean`:
   separate sorts, see [design/sorts.md](design/sorts.md)), over the
   certificate's solution.
 
+With type safety (`lean/BoltCore/Safety.lean`), `check_safe`
+(`SafeInfer.lean`): a program whose certificate is accepted does not go
+wrong, in the operational semantics of `lean/BoltCore/Eval.lean`. The
+checker also tests that each parameter list is well-formed (in order, with
+distinct names), which the OCaml parser guarantees and type safety needs.
+
 Only this direction is proved: a rejection proves nothing. Not verified:
 the JSON parser, the ranks (computed by `boltcore-check` and checked by
 `rankedB`), the diagnostics, and that the annotated term is the program as

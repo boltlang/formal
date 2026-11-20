@@ -712,7 +712,7 @@ def infer (Γ : PCtx) : Ann → Option SType
     match inferParams Γ ps with
     | some (P, Γ') =>
       match infer Γ' t with
-      | some st => some (.arrow (.sig P) st)
+      | some st => if Param.WF P.toList then some (.arrow (.sig P) st) else none
       | none => none
     | none => none
 
@@ -835,7 +835,10 @@ theorem infer_sound : ∀ {Γ : PCtx} {a : Ann} {st : SType}, infer c Γ a = som
     split at h
     · next hp =>
       split at h
-      · next ht => cases h; exact .fn (inferParams_sound hp) (infer_sound ht)
+      · next ht =>
+        split at h
+        · next hw => cases h; exact .fn hw (inferParams_sound hp) (infer_sound ht)
+        · cases h
       · cases h
     · cases h
 

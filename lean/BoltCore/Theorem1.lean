@@ -47,7 +47,7 @@ theorem TypeTerm.log_grows : TypeTerm Γ s t st s' → ∀ p, p ∈ s.log → p 
   | .extNil h => h.log_grows
   | .letIn h₁ h₂ => fun p hp => h₂.log_grows p (h₁.log_grows p hp)
   | .letRec _ _ h₁ hc h₂ => fun p hp => h₂.log_grows p (hc.log_grows p (h₁.log_grows p hp))
-  | .fn hp h => fun p hp' => h.log_grows p (hp.log_grows p hp')
+  | .fn _ hp h => fun p hp' => h.log_grows p (hp.log_grows p hp')
 
 theorem TypeFields.log_grows : TypeFields Γ s fs F s' → ∀ p, p ∈ s.log → p ∈ s'.log
   | .nil => fun _ h => h
@@ -77,7 +77,7 @@ theorem TypeTerm.kind_eq : TypeTerm Γ s t st s' → s'.kind = s.kind
   | .extNil h => h.kind_eq
   | .letIn h₁ h₂ => h₂.kind_eq.trans h₁.kind_eq
   | .letRec _ _ h₁ hc h₂ => (h₂.kind_eq.trans hc.kind_eq).trans h₁.kind_eq
-  | .fn hp h => h.kind_eq.trans hp.kind_eq
+  | .fn _ hp h => h.kind_eq.trans hp.kind_eq
 
 theorem TypeFields.kind_eq : TypeFields Γ s fs F s' → s'.kind = s.kind
   | .nil => rfl
@@ -161,6 +161,12 @@ theorem SType.rename_ne_abs {f : Nat → Nat} : ∀ {a : SType}, a ≠ .abs → 
 theorem SType.IsPre.rename {f : Nat → Nat} : ∀ {a : SType}, a.IsPre → (a.rename f).IsPre
   | .var _, _ | .prim _, _ | .arrow _ _, _ | .record _ _, _ | .nil, _ | .sig _, _ => trivial
   | .abs, h | .missing, h | .opt _, h => absurd h id
+
+theorem SParams.toList_rename (f : Nat → Nat) : ∀ P : SParams,
+    (P.rename f).toList = P.toList.map (Param.map (·.rename f))
+  | .nil => rfl
+  | .cons _ _ _ _ P => by
+    simp only [SParams.rename, SParams.toList, List.map_cons, SParams.toList_rename f P]; rfl
 
 /-! ## Fields of inferred records -/
 
@@ -297,9 +303,12 @@ theorem TypeTerm.soundR {E : Defs} {f : Nat → Nat} {sf : State} (H : RenSound 
         (H.sub hc.logged hlog₂ r₁.2.2.ne_abs))
       (h₂.soundR H (hΓ.cons trivial trivial) (hc.inv₂ i₁)
         (hc.nac i₁ r₁.2.1 trivial r₁.1) hlog)
-  | .fn hp h, hΓ, i, n, hlog => by
+  | .fn (P := P) hw hp h, hΓ, i, n, hlog => by
     have rp := hp.nac hΓ i n
-    exact .fn (hp.soundR H hΓ i n (fun p hp' => hlog p (h.log_grows p hp')))
+    have hw' : Param.WF ((P.rename f).toParamsI .gv) := by
+      rw [SParams.toParamsI_eq, SParams.toList_rename]
+      exact (hw.map _).map _
+    exact .fn hw' (hp.soundR H hΓ i n (fun p hp' => hlog p (h.log_grows p hp')))
       (h.soundR H rp.2.2 (hp.inv₂ i) rp.1 hlog)
 
 /-- Fields: their typing, and that every field is present. -/
