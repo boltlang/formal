@@ -60,7 +60,7 @@ def rank (c : Certificate) (v : Nat) : Nat := (c.ranks.lookup v).getD 0
 
 /-- The certificate as an algorithm state (the counter, cache and
 expansion table play no role in validity). -/
-def state (c : Certificate) : State := ⟨c.bounds, 0, [], [], c.log, c.kind⟩
+def state (c : Certificate) : State := ⟨c.bounds, 0, [], [], c.log, c.kind, fun _ => 0⟩
 
 /-- The certificate accepts `a ≤ b`: it is reflexive or listed. -/
 def Accepts (c : Certificate) (a b : SType) : Prop := a = b ∨ (a, b) ∈ c.log
@@ -218,8 +218,8 @@ end Congr
 /-- Justification and consistency only depend on the bounds and the log. -/
 theorem Inv.congr {s s' : State} (hb : s'.bounds = s.bounds) (hl : s'.log = s.log) (h : Inv s) :
     Inv s' := by
-  obtain ⟨b, n, c, e, l, k⟩ := s
-  obtain ⟨b', n', c', e', l', k'⟩ := s'
+  obtain ⟨b, n, c, e, l, k, lv⟩ := s
+  obtain ⟨b', n', c', e', l', k', lv'⟩ := s'
   simp only at hb hl
   subst hb hl
   exact ⟨h.just, h.cons⟩

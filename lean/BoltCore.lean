@@ -7,6 +7,7 @@ import BoltCore.Typing
 import BoltCore.Eval
 import BoltCore.Safety
 import BoltCore.Algorithm
+import BoltCore.Extrusion
 import BoltCore.Soundness
 import BoltCore.Solution
 import BoltCore.Sorts

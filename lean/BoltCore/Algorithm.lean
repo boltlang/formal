@@ -198,6 +198,31 @@ def SType.IsRecSig : SType → Prop
   | .record _ _ | .sig _ => True
   | _ => False
 
+/-! ## Levels
+
+Each variable has a level, for let-polymorphism (Sec. 3.5): the right-hand
+side of a `let` is typed one level up, and the variables above the level of
+the `let` are generalized. The level of a type is the highest level of its
+variables (`Types.level`). -/
+
+mutual
+def SType.level (L : Nat → Nat) : SType → Nat
+  | .var v => L v
+  | .prim _ | .abs | .missing | .nil => 0
+  | .opt t => t.level L
+  | .arrow a b => max (a.level L) (b.level L)
+  | .record fs t => max (fs.level L) (t.level L)
+  | .sig P => P.level L
+
+def SFields.level (L : Nat → Nat) : SFields → Nat
+  | .nil => 0
+  | .cons _ f fs => max (f.level L) (fs.level L)
+
+def SParams.level (L : Nat → Nat) : SParams → Nat
+  | .nil => 0
+  | .cons _ _ _ τ P => max (τ.level L) (P.level L)
+end
+
 /-! ## State -/
 
 structure Bounds where
@@ -225,11 +250,16 @@ structure State where
   the right kind. Every run of the OCaml code is a run of the model, for
   the map of the kinds it ended up allocating. -/
   kind : Nat → List String
+  /-- The level of each variable. Like the kind, the OCaml code sets it
+  when allocating the variable and never changes it, and the model fixes
+  the whole map up front: the rules that allocate a variable at a level
+  require it to have that level. -/
+  level : Nat → Nat := fun _ => 0
 
 namespace State
 
 /-- The initial state, for the kinds `K` of the run. -/
-def initK (K : Nat → List String) : State := ⟨fun _ => {}, 0, [], [], [], K⟩
+def initK (K : Nat → List String) : State := ⟨fun _ => {}, 0, [], [], [], K, fun _ => 0⟩
 
 def init : State := initK fun _ => []
 
@@ -246,6 +276,20 @@ def addUpper (s : State) (v : Nat) (t : SType) : State :=
 def addLower (s : State) (v : Nat) (t : SType) : State :=
   { s with bounds := fun w => if w = v then { s.bounds w with lower := t :: (s.bounds w).lower }
                               else s.bounds w }
+
+/-- Give `v` the lower bounds `ts`, before those it has. -/
+def addLowers (s : State) (v : Nat) (ts : List SType) : State :=
+  { s with bounds := fun w => if w = v then { s.bounds w with lower := ts ++ (s.bounds w).lower }
+                              else s.bounds w }
+
+/-- Give `v` the upper bounds `ts`, before those it has. -/
+def addUppers (s : State) (v : Nat) (ts : List SType) : State :=
+  { s with bounds := fun w => if w = v then { s.bounds w with upper := ts ++ (s.bounds w).upper }
+                              else s.bounds w }
+
+/-- Log constraints that inference relies on without constraining (ghost:
+only the log changes). -/
+def logAll (s : State) (ps : List (SType × SType)) : State := { s with log := ps ++ s.log }
 
 /-- The pair still has to be solved: it is neither reflexive nor cached
 (the first check of `constrain`). -/
@@ -289,6 +333,122 @@ end
 def StructRanked (σ : Nat → Bounds) (r : Nat → Nat) : Prop :=
   ∀ v b, (b ∈ (σ v).upper ∨ b ∈ (σ v).lower) →
     (∀ w, b = .var w → r w ≤ r v) ∧ ((∀ w, b ≠ .var w) → ∀ w ∈ b.vars, r w < r v)
+
+/-! ## Extrusion (Fig. 7)
+
+`extrude ty pol lvl` copies `ty` so that the copy has level at most `lvl`.
+A type whose level is low enough is returned as it is. A variable whose
+level is too high gets a fresh copy at level `lvl`, of the same kind, once
+per polarity (the table `c`): for a positive occurrence the copy is above
+the variable, so it becomes one of its upper bounds and gets the extruded
+copies of its lower bounds; dually for a negative one. The parameter of a
+function has the opposite polarity, the fields of a record and the
+parameters of a signature the same.
+
+There is no rule for an optional field on its own, with a level that is
+too high: `Opt τ` is only a field, extruded as one (`ExtrudeFields.opt`).
+
+The ghost log gets what a certificate needs (`lib/typer.ml` records the
+first two, `lib/cert.ml` adds the others):
+
+* the pair of each copied type and its original, in the order of the
+  polarity (`polPair`);
+* for a signature, the argument records of the lower one below the upper
+  one and below its argument records, and their lists of positional
+  arguments, suffix by suffix (`sigPairs`, the OCaml `note_sig`);
+* each bound of a copy, as a constraint;
+* for a positive copy `w` of `v`, each lower bound of `v` below `w`, which
+  consistency at `v` asks for; dually for a negative copy. -/
+
+/-- The copies made by one extrusion: the copy of a variable at a
+polarity. -/
+abbrev Copies := List ((Nat × Bool) × Nat)
+
+/-- A copy and its original as a constraint: a positive copy is above the
+original, a negative one below. -/
+def polPair (pol : Bool) (t t' : SType) : SType × SType := if pol then (t, t') else (t', t)
+
+/-- The lists of two argument lists, suffix by suffix (down to the last
+cell). -/
+def listPairs : List SType → List SType → List (SType × SType)
+  | a :: as, b :: bs => (SType.list (a :: as), SType.list (b :: bs)) :: listPairs as bs
+  | _, _ => []
+
+/-- What relates a signature `lo` to a signature `hi` above it with the
+same parameters, of other types: each argument record of `lo` is below
+`hi`, and below the argument record of `hi` for the same number of
+positional arguments, and so are their lists of positional arguments
+(`note_sig`). -/
+def sigPairs (lo hi : SParams) : List (SType × SType) :=
+  (Param.counts lo.toList).flatMap fun k =>
+    (lo.domain k, .sig hi) :: (lo.domain k, hi.domain k) ::
+      listPairs (Param.pos k lo.toList) (Param.pos k hi.toList)
+
+mutual
+inductive Extrude : State → Copies → Bool → Nat → SType → SType → State → Copies → Prop where
+  /-- The level is low enough: nothing to copy. -/
+  | low : t.level s.level ≤ lvl → Extrude s c pol lvl t t s c
+  | arrow : lvl < (SType.arrow l r).level s.level →
+      Extrude s c (!pol) lvl l l' s₁ c₁ → Extrude s₁ c₁ pol lvl r r' s₂ c₂ →
+      Extrude s c pol lvl (.arrow l r) (.arrow l' r')
+        (s₂.logAll [polPair pol (.arrow l r) (.arrow l' r')]) c₂
+  | record : lvl < (SType.record fs t).level s.level →
+      ExtrudeFields s c pol lvl fs fs' s₁ c₁ → Extrude s₁ c₁ pol lvl t t' s₂ c₂ →
+      Extrude s c pol lvl (.record fs t) (.record fs' t')
+        (s₂.logAll [polPair pol (.record fs t) (.record fs' t')]) c₂
+  | sig : lvl < (SType.sig P).level s.level →
+      ExtrudeParams s c pol lvl P P' s₁ c₁ →
+      Extrude s c pol lvl (.sig P) (.sig P')
+        (s₁.logAll (polPair pol (.sig P) (.sig P') ::
+          (if pol then sigPairs P P' else sigPairs P' P))) c₁
+  /-- A variable that was copied at this polarity. -/
+  | varCopied : lvl < s.level v → c.lookup (v, pol) = some w →
+      Extrude s c pol lvl (.var v) (.var w) (s.logAll [polPair pol (.var v) (.var w)]) c
+  /-- A positive occurrence: the copy `s.next` is an upper bound of `v`,
+  installed before the lower bounds of `v` are extruded (they may reach
+  `v` again), and gets their copies as its lower bounds. -/
+  | varPos : lvl < s.level v → c.lookup (v, true) = none →
+      s.level s.next = lvl → s.kind s.next = s.kind v →
+      ExtrudeEach (s.fresh.addUpper v (.var s.next)) (((v, true), s.next) :: c) true lvl
+        (s.bounds v).lower ls s₁ c₁ →
+      Extrude s c true lvl (.var v) (.var s.next)
+        ((s₁.addLowers s.next ls).logAll ((.var v, .var s.next) ::
+          (ls.map (·, .var s.next) ++ (s.bounds v).lower.map (·, .var s.next)))) c₁
+  /-- A negative occurrence, dually. -/
+  | varNeg : lvl < s.level v → c.lookup (v, false) = none →
+      s.level s.next = lvl → s.kind s.next = s.kind v →
+      ExtrudeEach (s.fresh.addLower v (.var s.next)) (((v, false), s.next) :: c) false lvl
+        (s.bounds v).upper us s₁ c₁ →
+      Extrude s c false lvl (.var v) (.var s.next)
+        ((s₁.addUppers s.next us).logAll ((.var s.next, .var v) ::
+          (us.map (.var s.next, ·) ++ (s.bounds v).upper.map (.var s.next, ·)))) c₁
+
+/-- The fields of a record: an optional field is not a type, only the type
+in it is extruded. -/
+inductive ExtrudeFields :
+    State → Copies → Bool → Nat → SFields → SFields → State → Copies → Prop where
+  | nil : ExtrudeFields s c pol lvl .nil .nil s c
+  | opt : Extrude s c pol lvl t t' s₁ c₁ → ExtrudeFields s₁ c₁ pol lvl fs fs' s₂ c₂ →
+      ExtrudeFields s c pol lvl (.cons n (.opt t) fs) (.cons n (.opt t') fs') s₂ c₂
+  | cons : (∀ t, f ≠ .opt t) → Extrude s c pol lvl f f' s₁ c₁ →
+      ExtrudeFields s₁ c₁ pol lvl fs fs' s₂ c₂ →
+      ExtrudeFields s c pol lvl (.cons n f fs) (.cons n f' fs') s₂ c₂
+
+/-- The parameters of a signature: they are fields of its argument
+records, so they have its polarity. -/
+inductive ExtrudeParams :
+    State → Copies → Bool → Nat → SParams → SParams → State → Copies → Prop where
+  | nil : ExtrudeParams s c pol lvl .nil .nil s c
+  | cons : Extrude s c pol lvl τ τ' s₁ c₁ → ExtrudeParams s₁ c₁ pol lvl P P' s₂ c₂ →
+      ExtrudeParams s c pol lvl (.cons n k o τ P) (.cons n k o τ' P') s₂ c₂
+
+/-- The bounds of a copied variable, in order. -/
+inductive ExtrudeEach :
+    State → Copies → Bool → Nat → List SType → List SType → State → Copies → Prop where
+  | nil : ExtrudeEach s c pol lvl [] [] s c
+  | cons : Extrude s c pol lvl t t' s₁ c₁ → ExtrudeEach s₁ c₁ pol lvl ts ts' s₂ c₂ →
+      ExtrudeEach s c pol lvl (t :: ts) (t' :: ts') s₂ c₂
+end
 
 /-! ## Constraining (Fig. 9, with rows) -/
 
