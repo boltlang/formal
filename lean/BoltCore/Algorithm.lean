@@ -916,6 +916,21 @@ theorem typeTerm_app_id :
     | (intro h; cases h)
     | (refine ⟨fun h => ?_, fun h => ?_⟩ <;> simp_all [State.remember, State.addLower, State.addUpper, State.init, State.initK, State.fresh])
 
+/-- `let id = fun x -> x in id`: the parameter `α₀` is allocated at level
+1, so the `let` generalizes it, and the use of `id` instantiates it with
+the copy `α₁`, at level 0. The result is `α₁ → α₁`. -/
+theorem typeTerm_let_id :
+    ∃ s', TypeTerm pbuiltins 0 (State.initKL (fun _ => []) fun v => if v = 0 then 1 else 0)
+      (.letIn false "id" (.lam "x" (.var "x")) (.var "id")) (.arrow (.var 1) (.var 1)) s' := by
+  refine ⟨_, .letIn (.lam rfl rfl (.var rfl))
+    (.inst (gen := [0]) (st := .arrow (.var 0) (.var 0)) (ρ := fun v => if v = 0 then 1 else v)
+      rfl ⟨?_, ?_, ?_, ?_, ?_⟩)⟩
+  · intro v hv; simp at hv; simp [hv]
+  · intro α hα; simp at hα; subst hα; exact ⟨Nat.le_refl _, Nat.lt_succ_self _⟩
+  · intro α hα β hβ _; simp at hα hβ; rw [hα, hβ]
+  · intro α hα; simp at hα; subst hα; rfl
+  · intro α hα; simp at hα; subst hα; rfl
+
 end Examples
 
 end BoltCore.Alg

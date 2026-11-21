@@ -243,7 +243,9 @@ gives the result of an evaluation, not its steps).
   there are no structural recursive types; cycles of variable bounds are
   allowed. The state has a ghost `log` of every accepted constraint.
   Sanity checks: `fun x -> x`; `1 2` is rejected; in `(fun x -> x) 42`
-  propagation gives the result variable the lower bound `int`.
+  propagation gives the result variable the lower bound `int`; in
+  `let id = fun x -> x in id` the parameter is generalized and the use
+  instantiates it (`typeTerm_let_id`).
   Simple types have no unions, so the domain of a `fn` is a signature
   `sig P`, with the two rules of `lib/typer.ml`: an argument record below a
   signature is constrained against the argument record `Dₖ` for its number
