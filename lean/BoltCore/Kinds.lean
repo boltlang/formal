@@ -19,8 +19,8 @@ It follows that the chains of row-variable tails through upper bounds are
 acyclic: an upper bound `{fs | ρ}` of `v` lacks what `v` lacks, so
 `kind ρ = kind v ⊎ fs` with `fs` non-empty, and `kind ρ` is strictly
 larger. The number of logged labels *not* in a variable's kind is therefore
-a rank for `TailRanked` (`kinds_tailRanked`), which discharges the last
-assumption of Theorem 1 (`theorem1`).
+a rank for `TailRanked` (`kinds_tailRanked`), which discharges the
+assumption of the solution theorem.
 
 The kind map is fixed for a run (see `State.kind`), so kinds of existing
 variables never change, and no scoping invariant is needed.

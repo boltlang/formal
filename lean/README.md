@@ -13,15 +13,20 @@ lake exe boltcore-check CERT.json   # check a certificate from `boltcore --cert`
 
 ## Main results
 
-- **Theorem 1** (`theorem1`, `Kinds.lean`): if the algorithm model types `t`
-  with `st` from the built-ins, then `t : θ(st)` in the declarative system,
-  where `θ` is the solution of the final state. Rows, row expansion and
-  kinds are included; there are no assumptions.
+- **Theorem 1** (`theorem1`, `Adequacy.lean`): if the algorithm model types
+  `t` with `st` from the built-ins, in a run without structural recursive
+  types, then `t : θ(st)` in the declarative system with constrained
+  schemes, where `θ` is the solution of the final state. The model has
+  levels: `let` generalizes, a use instantiates, and constraining extrudes.
+  Rows, row expansion and kinds are included; there are no assumptions.
+  The proof goes through the certificate of the run and uses classical
+  logic.
 - **Certificates** (`PTyp.sound_top`): a valid certificate with a typing
   skeleton with let-polymorphism gives a declarative typing with
   constrained schemes, over a solution without recursive types
   (`Valid.nonrec`). Every accepted run of the model yields one
-  (`TypeTerm.certificate`, `Adequacy.lean`).
+  (`TypeTerm.certificate`, `Adequacy.lean`), so the checker never rejects
+  a correct run of the model.
 - **The executable checker** (`check_sound`, `Check.lean`): Boolean checks
   that imply validity and the skeleton, run by `boltcore-check`.
 - **Type safety** (`type_safety`, `Safety.lean`): a term that is well-typed
@@ -52,16 +57,24 @@ one unsorted syntax of simple types, translated into the sorts by position.
 | `BoltCore/Typing.lean` | declarative typing (constrained schemes `∀ᾱ. D ⇒ σ`, with constraints at any sort, for built-ins and let-polymorphism; record extension; selection of present fields `pre τ` only; selection with a default of optional fields; closed record literals; conditionals; functions of a parameter list, `fn`) with examples; selecting a missing field is untypable (`not_typ_sel_missing`), and so is passing an argument twice (`not_twice_le_sig`) |
 | `BoltCore/Eval.lean` | operational semantics: values, closures and a call-by-value interpreter with fuel; the binding of arguments to the parameters of a `fn`; the built-ins as values; the calls of issue #2 as examples |
 | `BoltCore/Safety.lean` | type safety: typing of values (`VTyp`), canonical forms by inverting one layer of subtyping, argument records against parameter lists (`ArgsOK`), and safety by induction on the fuel (`safe`, `type_safety`) |
-| `BoltCore/Algorithm.lean` | model of `lib/typer.ml` (no levels): state, `Constrain`/`TypeTerm` as big-step relations; signatures `sig P` with their two constraint rules, and `fn`; ranked bounds (`StructRanked`) rule out structural recursive types |
-| `BoltCore/Soundness.lean` | soundness of constraining on the bound graph: justification and consistency invariants, preserved by `constrain` and `typeTerm` |
+| `BoltCore/Algorithm.lean` | model of `lib/typer.ml`: state, levels, extrusion (`Extrude`), `Constrain`, instantiation (`State.instantiate`) and `TypeTerm` as big-step relations; `let` generalizes the variables above its level; signatures `sig P` with their two constraint rules, and `fn`; ranked bounds (`StructRanked`) rule out structural recursive types |
+| `BoltCore/Extrusion.lean` | what extrusion leaves alone: it only allocates and adds bounds, its result has level at most the target, it keeps the type constructor, and it does not touch variables of low level |
+| `BoltCore/Locality.lean` | locality: a set of variables that is closed under bounds and contains what a run allocates stays closed, and bounds outside it are untouched (`Extrude.local`, `Constrain.local`); scope as an instance (`Scope`: a fresh variable has no bounds) |
+| `BoltCore/Justify.lean` | the ghost log as a relation (`Logged`), one step of justification (`GStep`), growth of a state, the two invariants with pending pairs |
+| `BoltCore/Rename.lean` | renamings of type variables: what they commute with, and `GStep.rename` (a renaming of a justified constraint is justified) |
+| `BoltCore/Levels.lean` | a bound of a variable has at most its level (`LevelInv`), kept by extrusion and constraining |
+| `BoltCore/ExtrusionSound.lean` | every pair an extrusion logs is justified (`Extrude.just`); consistency; bounds in the log |
+| `BoltCore/Instantiate.lean` | what instantiating a scheme does to a state: growth, scope, consistency, levels, closed sets |
+| `BoltCore/Soundness.lean` | soundness of constraining on the bound graph: justification and consistency, preserved by `constrain` with extrusion (`ConstrainTop.sound`, for a state and types in scope) |
+| `BoltCore/TypeWf.lean` | typing with levels: locality (`TypeTerm.local`), frames (a run leaves the variables above its level alone, `TypeTerm.frame`), the allocation invariants of every state a run reaches (`TypeTerm.wf`: scope, levels of bounds, consistency) |
 | `BoltCore/Solution.lean` | the solution of the inferred constraints (unifying coalescing via graph variables), simple types translated by position (`toTy`, `toRow`, `toField`), and its invariants |
 | `BoltCore/Sorts.lean` | `Abs` is never a function parameter or result, and the parameters of a signature are types (`NAC`), preserved by `constrain` and `typeTerm` |
 | `BoltCore/SolutionRows.lean` | the solution theorem at the type and row sorts, rows and extrusion-shaped justifications included (assuming acyclic row-variable tails), proved under a generalization (`solution_gen`: generalized variables read, at the type and row sorts, as an instance of their bounds); the plain theorem (`solution_ty`, `solution_row`) is the case where nothing is generalized |
-| `BoltCore/Theorem1.lean` | soundness of type inference (`soundness`), assuming acyclic row-variable tails; generalized over renamings of type variables (`soundR`), for instantiation |
-| `BoltCore/Kinds.lean` | kinds for row variables: the algorithm keeps rows well-kinded, so tails are acyclic; **Theorem 1** with no assumptions (`theorem1`) |
-| `BoltCore/Certificate.lean` | certificates (accepted constraints, bounds, kinds, ranks) and their validity; every accepted run yields a valid one (`TypeTerm.certificateValid`) |
+| `BoltCore/Final.lean` | what the solution theorem needs of the final state (`Final`); the fields of inferred records |
+| `BoltCore/Kinds.lean` | kinds for row variables: the algorithm keeps rows well-kinded, so tails are acyclic (`kinds_tailRanked`); a copy has the kind of its original |
+| `BoltCore/Certificate.lean` | certificates (accepted constraints, bounds, kinds, ranks) and their validity; the certificate of a state that satisfies the invariants is valid (`State.certificate_valid`) |
 | `BoltCore/PolyLet.lean` | typing skeletons with let-polymorphism: schemes from generalized variables and their bounds (`mkScheme`), checked generalization (`GenOK`) and instantiation (`InstOK`), soundness (`PTyp.sound_top`; uses classical logic), no recursive types (`Valid.nonrec`) |
-| `BoltCore/Adequacy.lean` | every accepted run of the model yields a valid certificate and a skeleton (`TypeTerm.certificate`); Theorem 1 through certificates (`theorem1_cert`) |
+| `BoltCore/Adequacy.lean` | every accepted run of the model yields a valid certificate and a skeleton with let-polymorphism (`TypeTerm.certificate`), proved relative to the state the whole run ends in; **Theorem 1** (`theorem1`) |
 | `BoltCore/Check.lean` | the executable checker: Boolean checks of validity (`Certificate.check`) and of polymorphic skeletons over annotated terms (`infer`), with `check_sound`: an accepted certificate types the term |
 | `BoltCore/SafeInfer.lean` | inferred and certified programs do not go wrong (`infer_safe`, `check_safe`) |
 | `BoltCore/Examples.lean` | example certificates with let-polymorphism, unconstrained and constrained, accepted by the executable checker (`decide`), which gives their validity, skeletons and typings |
@@ -219,10 +232,10 @@ gives the result of an evaluation, not its steps).
 
 ## The algorithm and its soundness
 
-- `Algorithm.lean` models `lib/typer.ml` without levels. Bounds live in an
-  explicit `State`. `Constrain`, row expansion included, and `TypeTerm` are
-  big-step relations, "succeeds from state `s` with state `s'`", and a type
-  error is the absence of a derivation. Rules only apply where the OCaml
+- `Algorithm.lean` models `lib/typer.ml`, levels included. Bounds live in
+  an explicit `State`. `Constrain`, row expansion and extrusion included,
+  and `TypeTerm` are big-step relations, "succeeds from state `s` with
+  state `s'`", and a type error is the absence of a derivation. Rules only apply where the OCaml
   `match` would reach them, so the relations are as deterministic as the
   code. Like the OCaml code, an accepted run ends in a state whose bounds
   are ranked (`StructRanked`: a variable's non-variable bounds mention only
@@ -236,6 +249,15 @@ gives the result of an evaluation, not its steps).
   signature is constrained against the argument record `Dₖ` for its number
   of positional arguments (`Constrain.recordSig`), and a signature below a
   record or a signature has every `Dₖ` below it (`Constrain.sigL`).
+  Levels (Sec. 3.5): each variable has one, fixed for a run like its kind.
+  A bound is installed on a variable only if its level is not above the
+  variable's; otherwise it is extruded to that level first (`Extrude`,
+  Fig. 7: a variable whose level is too high gets a copy, once per
+  polarity, which becomes one of its bounds and gets the copies of its
+  bounds on the other side). `let` types its right-hand side one level up
+  and generalizes the variables above its level that this allocated
+  (`genVars`); a use of the name allocates a copy of each, with the
+  renamed bounds (`State.instantiate`).
 - `Soundness.lean`, the graph level of the paper's Lemma 2. Two invariants
   hold of every state the algorithm reaches. *Justified*: every logged
   constraint is justified by one decomposition step (`GStep`), so the log
@@ -244,8 +266,18 @@ gives the result of an evaluation, not its steps).
   logged below each of its upper bounds. The proofs track *pending* pairs,
   since consistency is broken while a new bound propagates.
   `ConstrainTop.sound`: a successful `constrain` call preserves the
-  invariant and accepts its constraint; `TypeTerm.inv_init`: the invariant
-  holds after typing any term.
+  invariant and accepts its constraint. With extrusion, `v ≤ b` holds
+  through the copy `b'` of `b` (`v ≤ b'` as a bound, `b' ≤ b` accepted),
+  and every pair an extrusion logs is justified (`ExtrusionSound.lean`).
+  Consistency needs a fresh copy to have no bounds, so it is proved for a
+  state in scope, on types in scope (`Locality.lean`).
+- `TypeWf.lean`, why generalizing is sound. A bound of a variable has at
+  most its level (`Levels.lean`), so a variable of level at most `lvl` only
+  reaches such variables. A run at level `lvl` is *local* to the variables
+  of level at most `lvl` and those it allocates (`TypeTerm.frame`): it
+  leaves the others alone. So the variables a `let` generalizes are
+  finished once its right-hand side is typed: they keep their bounds, and
+  no other variable ever mentions them.
 - `Solution.lean`, the paper's unifying coalescing. A simple type is
   translated by the position it occurs in: as a type (`toTy`), a row
   (`toRow`, with the empty row as `nil`) or a field (`toField`, with `Abs`
@@ -268,10 +300,8 @@ gives the result of an evaluation, not its steps).
   same statement for each of its argument records. The coinduction is up to
   transitivity, because a constraint justified through an extruded bound
   only holds through a chain of accepted constraints.
-- `Theorem1.lean`: soundness of inference, assuming chains of row-variable
-  tails are acyclic (`TailRanked`), and for any renaming of the variables
-  (`TypeTerm.soundR`).
-- `Kinds.lean` discharges that assumption. The state carries each
+- `Kinds.lean`: chains of row-variable tails are acyclic (`TailRanked`),
+  which the solution theorem assumes. The state carries each
   variable's kind (the labels it lacks), fixed for a run; every OCaml run
   is a model run for the kinds it ended up allocating. Every accepted
   constraint is well-kinded and relates rows lacking the same labels, which
@@ -282,6 +312,19 @@ gives the result of an evaluation, not its steps).
   type in accepted constraints or inferred types, so the components of a
   function type translate to types. Constraints with `Abs` on the left are
   row constraints, related at the row sort only.
+- `Adequacy.lean`: a run yields a valid certificate and a skeleton
+  (`TypeTerm.certificate`), hence Theorem 1 (`theorem1`). What a `let`
+  generalizes and what a use instantiates are checked against the
+  certificate, the state the *whole* run ends in, while a derivation only
+  knows its own part of the run. So the proof is relative to that final
+  state `F`: each part of a run is told that after it nothing touches a
+  variable above its level (`Fin`, from the frame of the part after it);
+  each `let`-bound name in scope that its generalized variables are
+  finished (`Frozen`, which is `GenOK` and what `InstOK` needs); and
+  justification is stated over the bounds of `F` and the constraints
+  logged so far (`JustLoc`), since the renamed constraints of an
+  instantiation are only justified once nothing else mentions the
+  generalized variables.
 
 ## Roadmap
 
@@ -294,13 +337,14 @@ are needed ("option C").
 3. Soundness of constraining (Lemma 2) and of inference (Theorem 1), with
    rows: done. 3a, the graph level (`Soundness.lean`); 3b, from the
    invariant to `Sub` (`Solution.lean`, `SolutionRows.lean`); 3c, Theorem 1
-   (`Theorem1.lean`, `Kinds.lean`).
+   (`Adequacy.lean`, with `Kinds.lean`). Theorem 1 was first proved
+   directly on a run of a model without levels; it now goes through the
+   certificate of the run.
 4. Let-polymorphism.
    - 4a, declarative: done (`Typing.lean`).
-   - 4b, renamings and interpretations: done. Soundness holds for any
-     renaming of graph variables (`TypeTerm.soundR`), and skeleton
-     soundness under any interpretation that is an instance of the
-     generalized variables (`PTyp.sound`).
+   - 4b, interpretations: done. Skeleton soundness holds under any
+     interpretation that is an instance of the generalized variables
+     (`PTyp.sound`).
    - 4c, generalization: done (`SolutionRows.lean`, `PolyLet.lean`).
      `solution_gen`: if an interpretation reads a `let`'s generalized
      variables, at the type and row sorts, as satisfying their bounds, and
@@ -313,7 +357,7 @@ are needed ("option C").
      checker vets (`GenOK`). Nested generalizations are proved under an
      instance of the enclosing ones; scheme variables are numbered above
      every free variable in sight, so substitution captures nothing.
-   - 4d, instantiation and extrusion, as certificates. Levels and
+   - 4d, instantiation and extrusion, in certificates. Levels and
      extrusion are how the inferencer keeps generalization correct; the
      checker does not need them. Extrusion: done. Justification accepts
      variables as lower bounds; `v ≤ b` through an upper bound `b'` of `v`
@@ -328,9 +372,14 @@ are needed ("option C").
      accepted (`InstOK`). Examples (`Examples.lean`):
      `let id = fun x -> x in id 1` (`∀0. 0 → 0`) and
      `let inc = fun x -> succ x in inc 1` (`∀0 3. 0 ≤ int, int ≤ 3 ⇒ 0 → 3`).
-   - Adequacy for skeletons: done for the model without levels
-     (`TypeTerm.certificate`, `Adequacy.lean`); with levels and
-     instantiation it is tested on the examples instead.
+   - 4e, levels in the model, and adequacy: done
+     ([`../docs/design/levels.md`](../docs/design/levels.md)). The model
+     generalizes, instantiates and extrudes as `lib/typer.ml` does, and
+     every accepted run yields a valid certificate and a skeleton
+     (`TypeTerm.certificate`, `Adequacy.lean`). Two programs the checker
+     used to reject were found on the way; `GStep` has a rule and a weaker
+     premise since (`viaVar`, and the first field of each label in a record
+     step).
    - Presentation: closed `∀`-types, as MLsub prints them, are equivalent
      to the constrained schemes by coalescing. This needs the MLsub
      equations, so it comes with step 5.

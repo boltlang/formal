@@ -1,10 +1,9 @@
 # Levels in the Lean model
 
-Status: in progress. `Constrain` has levels and extrudes, and every
-invariant of a certificate is proved to hold across it. `TypeTerm` has no
-levels yet: its `let` is still monomorphic, and its runs start from a state
-where every level is 0, so no rule for extrusion applies to them. See
-"Order of work".
+Status: done. The model has levels, extrusion, generalization and
+instantiation, and `TypeTerm.certificate` and `theorem1` are proved for it
+(`lean/BoltCore/Adequacy.lean`). This note is the plan as it was carried
+out; "Order of work" says what each step became.
 
 ## Goal
 
@@ -152,9 +151,31 @@ certificate, so with classical logic (`PTyp.sound_top` uses it).
      `Constrain.consist`, `ConstrainTop.sound` and `TypeTerm.inv` take a
      state and types in scope; `TypeTerm.inv` also proves scope.
    - `LbNonVar` is gone; `Inv₂` is `BoundsInLog`.
-3. `TypeTerm` with levels, schemes and instantiation; scope, levels,
-   locality; the invariants of 4; the skeleton with `Rest`.
-4. Retire the direct proof in `Theorem1.lean`; README.
+3. Done: `TypeTerm` with levels.
+   - `Rename.lean` (`GStep.rename`), `Levels.lean` (`LevelInv`),
+     `Instantiate.lean` (`State.instantiate` and its invariants).
+   - `TypeTerm Γ lvl s t st s'` with `CEntry.mono`/`.poly gen st` in the
+     context, `genVars` for what a `let` generalizes, `IsInst` for the
+     renaming of a use.
+   - `TypeWf.lean`: `TypeTerm.local` (for any set that contains every
+     variable allocated from now on), `Frame`, `TypeTerm.frame`,
+     `TypeTerm.wf` (scope, `LevelInv`, consistency). The context invariant
+     is `CtxWF L lvl s Γ`: an entry is in scope, and outside what it
+     generalizes it only mentions variables of level at most `lvl`.
+   - `Adequacy.lean`: `Fin F L lvl s` is the `Rest` above; `Frozen F s gen`
+     is what `GenOK` and `InstOK` need of a scheme; `JustLoc F s` is
+     justification over the bounds of `F` and the log so far. The log has
+     to be the log *so far*: the renaming of a step is a step only if the
+     renamed premises are accepted, and an instantiation only renames what
+     is logged when it happens.
+4. Done: the direct proof in `Theorem1.lean` is gone (the file is
+   `Final.lean`), `theorem1` is in `Adequacy.lean`, and it uses classical
+   logic. README updated.
+
+What is not covered: the model copies every generalized variable at a use,
+as the typer does while recording a certificate; without recording the
+typer copies only those reachable from the type. That the two infer the
+same types is not proved.
 
 ## Found on the way, not part of this
 

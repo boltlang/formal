@@ -4,21 +4,33 @@ import BoltCore.Types
 /-!
 # A model of the inference algorithm
 
-The OCaml type checker (`lib/typer.ml`), without levels (that is, without
-let-polymorphism, as in the paper's proof, Sec. 5). Coalescing
-(`lib/coalesce.ml`) only affects how types are printed and is left for the
-presentation of types (roadmap, step 5). Following the paper (Sec. 5.2), the only
-mutable state of the algorithm, the bounds of type variables, becomes an
-explicit `State`, and the algorithm's functions become big-step relations:
+The OCaml type checker (`lib/typer.ml`): constraining with extrusion
+(Fig. 7 and 9), and typing with levels, generalization and instantiation
+(Fig. 8, Sec. 3.5). Coalescing (`lib/coalesce.ml`) only affects how types
+are printed and is left for the presentation of types (roadmap, step 5).
+Following the paper (Sec. 5.2), the only mutable state of the algorithm,
+the bounds of type variables, becomes an explicit `State`, and the
+algorithm's functions become big-step relations:
 
 * `Constrain s a b s'`: constraining `a ≤ b` in state `s` succeeds with
   final state `s'`. A type error is the absence of a derivation.
-* `TypeTerm Γ s t st s'`: typing `t` succeeds with simple type `st`.
+* `Extrude s c pol lvl t t' s' c'`: the copy `t'` of `t` at level `lvl`.
+* `TypeTerm Γ lvl s t st s'`: typing `t` at level `lvl` succeeds with
+  simple type `st`.
 
 Each `Constrain` rule only applies where the OCaml `match` would reach it
 (`New`: the pair is neither cached nor reflexive; `_ ≤ Abs` before a
-variable on the left; a variable on the left before one on the right), so
-the relation is as deterministic as the code.
+variable on the left; a variable on the left before one on the right; a
+bound installed only if its level is low enough, and extruded otherwise),
+so the relation is as deterministic as the code.
+
+The level and the kind of a variable are fixed for a run: the rules that
+allocate a variable require it to have the right ones. Every run of the
+OCaml code is a run of the model, for the levels and kinds it ended up
+allocating, with one difference: a use of a `let`-bound name copies every
+generalized variable of its scheme, as the OCaml code does while recording
+a certificate, and not only those reachable from the type (see
+"Instantiation").
 
 Parameter lists (issue #2): a signature `sig P` is a simple type, the
 domain of a function with a parameter list. It stands for the union of the

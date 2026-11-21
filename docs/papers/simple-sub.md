@@ -115,8 +115,8 @@ overloading, flow typing or first-class polymorphism (see
 | Soundness through unifying coalescing (Fig. 12) into recursive types | The solution `θ` reads each variable as the intersection of the non-variable upper bounds reachable through variable bounds (`Solution.lean`) |
 | Lemma 2 with a stronger hypothesis relating `Σ` to the cache, and consistency loosened during propagation | A ghost log of accepted constraints with two invariants, justification and consistency, and *pending* pairs while a bound propagates (`Soundness.lean`) |
 | Theorem 1: `⊢ t : τ` with `τ ≤∀ E⁺⟦st⟧` | `t : θ(st)` in the declarative system, over the solution (`theorem1`). Relating it to coalesced closed types needs the MLsub equations (roadmap step 5). |
-| Let-polymorphism left out, justified by let-duplication (footnote 15) | Constrained schemes `∀ᾱ. D ⇒ σ` as in HM(X), proved sound for certificates of polymorphic programs (`PolyLet.lean`) |
-| Completeness (Theorem 2, Lemmas 3–5) sketched | Not proved. Certificate adequacy (`TypeTerm.certificate`) is proved for the model without levels and tested on the examples for the real typer. |
+| Let-polymorphism left out, justified by let-duplication (footnote 15) | Constrained schemes `∀ᾱ. D ⇒ σ` as in HM(X). The model has levels, extrusion and instantiation (Sec. 3.5, Fig. 7), and Theorem 1 covers them: every run yields a certificate with a polymorphic skeleton (`Adequacy.lean`), which is sound (`PolyLet.lean`) |
+| Completeness (Theorem 2, Lemmas 3–5) sketched | Not proved. Certificate adequacy (`TypeTerm.certificate`) is proved for the model: a run it accepts is never rejected by the checker. |
 | Minimal rules, MLsub equations optional | The same choice. `Lattice.lean` proves that function merging is not derivable from the minimal rules. |
 
 The Lean development also covers what the paper does not have: rows and

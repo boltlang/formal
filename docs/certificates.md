@@ -67,10 +67,11 @@ the JSON parser, the ranks (computed by `boltcore-check` and checked by
 written.
 
 The other direction, *adequacy*, is proved for the Lean model of the
-algorithm without levels (`TypeTerm.certificate`, `Adequacy.lean`):
-an accepted run yields a valid certificate and a skeleton the checker's
-rules accept. For the real typer, with levels
-and let-polymorphism, it is tested.
+algorithm (`TypeTerm.certificate`, `Adequacy.lean`): an accepted run yields
+a valid certificate and a skeleton the checker's rules accept. The model
+has levels, extrusion, generalization and instantiation, as `lib/typer.ml`
+does ([design/levels.md](design/levels.md)). It is a model: that the OCaml
+code runs as the model does is not proved, and the script below tests it.
 
 ## How the typer produces one
 

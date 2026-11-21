@@ -15,14 +15,15 @@ is, what validity means, and proves the two theorems a checker rests on:
 * **Adequacy** (`TypeTerm.certificate`, `Adequacy.lean`): every run of the
   algorithm model yields a valid certificate and a skeleton for its term.
   So the format can express everything the algorithm does, and a correct
-  inferencer is never rejected. Validity is proved here
-  (`TypeTerm.certificateValid`).
+  inferencer is never rejected. Here is the part that does not depend on
+  the run: the certificate of a state that satisfies the invariants is
+  valid (`State.certificate_valid`).
 
 A certificate holds the accepted constraints, the bounds of each variable,
 and the kinds of the variables, as finite lists (variables not listed have
 no bounds and lack no labels). Validity collects the invariants of the
 soundness proofs: justification and consistency (`Inv`), bounds recorded as
-accepted constraints with no variable lower bounds (`Inv₂`), `Abs` never a
+accepted constraints (`BoundsInLog`), `Abs` never a
 function component (`LogNAC`), and the kind discipline (`KLog`). Each one
 quantifies only over the certificate's lists, so it is decidable; the
 executable checker will come with proofs that it decides them.
