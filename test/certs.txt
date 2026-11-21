@@ -32,7 +32,6 @@ let twice(f) = fn (x) -> f(f(x)) in twice(fn (a, b = 0) -> add(a, b))(1)
 # copy of its upper bound through its own copy (`GStep.viaVar`).
 fn (a) -> let f(x) = let g(y) = a(if true then x else y) in g in f
 fn (a) -> fn (b) -> let f(x) = let g(y) = let h(z) = a(if z then x else y) in h in g in f(b)
-# A repeated label under extrusion: a step compares the first field of a
-# label on each side, the others are shadowed.
-fn (a) -> let f(x) = a({l = x; l = 1}) in f
-fn (a) -> let f(x) = a({l = 1; l = x}) in f
+# Records under extrusion, with a field of each level.
+fn (a) -> let f(x) = a({l = x; m = 1}) in f
+fn (a) -> let f(x) = a({l = 1; m = x}) in f

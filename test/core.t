@@ -325,10 +325,13 @@ selection
   $ boltcore -e 'fn (r) -> succ(r.n ?? 0)'
   - : (r: {n?: int, ..}) -> int
 
-A label is set at most once in a `with`:
+A label is set at most once, in a record and in a `with`:
 
+  $ boltcore -e '{a = 1; a = true}'
+  parse error: 1:11: label 'a' is set twice (at '=')
+  [2]
   $ boltcore -e '{a = 0} with {a = 1; a = true}'
-  parse error: 1:31: label 'a' set twice in 'with' (at 'end of input')
+  parse error: 1:24: label 'a' is set twice (at '=')
   [2]
 
 Raw output is contractive: a variable cycle without a constructor in between

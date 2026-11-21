@@ -177,9 +177,8 @@ as the typer does while recording a certificate; without recording the
 typer copies only those reachable from the type. That the two infer the
 same types is not proved.
 
-## Found on the way, not part of this
+## Found on the way
 
-A record literal with a repeated label is typed by its first field
+A record literal with a repeated label was typed by its first field
 (`{l = 1; l = true}.l : int`) and printed by its last
-(`{l = 1; l = true} : {l: bool}`). The `with` form rejects a repeated label
-in the parser; a record literal does not.
+(`{l = 1; l = true} : {l: bool}`). It is a parse error now, as in a `with`.

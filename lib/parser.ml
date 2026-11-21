@@ -258,18 +258,7 @@ let parse_program (src : string) : item list =
       | WITH ->
           advance ();
           (match atom () with
-           | Rcd fs ->
-               (* a label may be set once: which binding would win is
-                  ambiguous (the Lean model takes the labels as distinct) *)
-               let rec dup = function
-                 | [] -> ()
-                 | (n, _) :: rest ->
-                     if List.mem_assoc n rest then
-                       fail (Printf.sprintf "label '%s' set twice in 'with'" n);
-                     dup rest
-               in
-               dup fs;
-               t := Ext (!t, fs)
+           | Rcd fs -> t := Ext (!t, fs) (* its labels are distinct, see [atom] *)
            | _ -> fail "expected '{' after 'with'")
       | _ -> continue := false
     done;
@@ -281,20 +270,24 @@ let parse_program (src : string) : item list =
     | LPAREN -> advance (); let e = expr () in expect RPAREN; e
     | LBRACE ->
         advance ();
-        let rec fields () =
+        (* a label is set at most once, in a record and in a [with]: which
+           field would win is ambiguous (the type checker and the semantics
+           take the first, the printed type showed the last) *)
+        let rec fields seen =
           match peek () with
           | RBRACE -> advance (); []
           | _ ->
               let n = ident () in
+              if List.mem n seen then fail (Printf.sprintf "label '%s' is set twice" n);
               expect EQ;
               let e = expr () in
               (match peek () with
                | SEMI -> advance ()
                | RBRACE -> ()
                | _ -> fail "expected ';' or '}'");
-              (n, e) :: fields ()
+              (n, e) :: fields (n :: seen)
         in
-        Rcd (fields ())
+        Rcd (fields [])
     | _ -> fail "expected expression"
   in
   (* an item ends where the next one starts: without application by

@@ -100,7 +100,10 @@ recursive types.
 
 - **A real mismatch was found.** In `{a = 0} with {a = 1; a = true}`, OCaml
   kept the last binding of the repeated label, while the Lean rule takes the
-  first. A label repeated in a `with` is now a parse error.
+  first. A label repeated in a `with` is now a parse error, and so is one
+  repeated in a record literal, whose printed type showed the last field
+  while typing used the first (`{l = 1; l = true}` printed as `{l: bool}`,
+  with `.l : int`).
 - **Extrusion needs one rule of its own.** Between variables, `v ≤ w`
   through a variable `m` that is an upper bound of `v` and a lower bound of
   `w` (`GStep.viaVar`). It takes three levels to need it: a variable that is
@@ -108,13 +111,14 @@ recursive types.
   outer one. The first programs did not have that, and the rule was added
   when one was found that the checker rejected
   (`fn (a) -> let f(x) = let g(y) = a(if true then x else y) in g in f`).
-- **A step compares the first field of each label.** A record literal may
-  repeat a label, and a step used to compare every field of the right side
-  with the first of that label on the left, as `constrain` does. An
+- **A step compares the first field of each label.** A record literal
+  could repeat a label, and a step used to compare every field of the right
+  side with the first of that label on the left, as `constrain` does. An
   extruded copy of such a record is not below the original in that sense,
   so the checker rejected `fn (a) -> let f(x) = a({l = x; l = 1}) in f`.
   A shadowed field has no meaning (`Ty.field` takes the first), and a step
-  now ignores it.
+  now ignores it. The parser rejects such a literal since; the Lean model
+  does not assume that it does.
 - **What the log needs.** Dropping the extruded pairs or the instantiated
   constraints makes the checker reject programs. The lower bounds below
   upper ones are what consistency asks for in the three-level program

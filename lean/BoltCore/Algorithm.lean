@@ -43,8 +43,9 @@ signature has every `Dₖ` below it (`Constrain.sigL`).
 
 Deviations from the OCaml code, to revisit: the memo table for row
 expansion is keyed by the label list as given rather than as a sorted set.
-The labels in a `with` are distinct: the parser (`lib/parser.ml`) rejects a
-repeated one.
+The labels in a `with` and in a record literal are distinct: the parser
+(`lib/parser.ml`) rejects a repeated one. The model does not assume it of
+record literals.
 -/
 
 namespace BoltCore.Alg

@@ -33,7 +33,7 @@ instead of typing `s` under them as hypotheses, since subtyping under both
 lower and upper bounds is not transitive in general (the "bad bounds" of
 DOT). A monomorphic `let` is the scheme with no variables. There is no
 value restriction (no mutable state). Labels in a record literal or a `with` are distinct
-(the parser rejects a repeated one in a `with`).
+(the parser rejects a repeated one).
 -/
 
 namespace BoltCore
