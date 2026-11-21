@@ -209,25 +209,6 @@ theorem tailRank_upVar_le {s : State} {rank : Nat → Nat} (hr : TailRanked s ra
     (hm : SType.var m ∈ (s.bounds v).upper) : tailRank rank (.var m) ≤ tailRank rank (.var v) := by
   rw [tailRank_var, tailRank_var]; have := hr.upVar v m hm; omega
 
-theorem SFields.Rel.lookup {Q : SType → SType → Prop} {l : String} {g : SType} :
-    ∀ {P' P : SFields}, SFields.Rel Q P' P → P.lookup l = some g →
-      ∃ f, P'.lookup l = some f ∧ Q f g
-  | _, _, .nil, h => by simp [SFields.lookup] at h
-  | _, _, @SFields.Rel.cons _ f g' _ _ n hq r, h => by
-    simp only [SFields.lookup] at h ⊢
-    by_cases hn : n = l
-    · simp only [hn, ite_true] at h ⊢; cases h; exact ⟨f, rfl, hq⟩
-    · simp only [hn, ite_false] at h ⊢; exact r.lookup h
-
-theorem SFields.Rel.lookup_none {Q : SType → SType → Prop} {l : String} :
-    ∀ {P' P : SFields}, SFields.Rel Q P' P → P.lookup l = none → P'.lookup l = none
-  | _, _, .nil, _ => rfl
-  | _, _, @SFields.Rel.cons _ _ _ _ _ n _ r, h => by
-    simp only [SFields.lookup] at h ⊢
-    by_cases hn : n = l
-    · simp [hn] at h
-    · simp only [hn, ite_false] at h ⊢; exact r.lookup_none h
-
 /-! ## One layer
 
 The coinduction is up to transitivity (`Sub.coind_trans`): a constraint
@@ -403,10 +384,6 @@ end
 The parameters of a logged signature are types (`SParams.NAC`), so each of
 its argument records translates to the argument record of its translated
 parameters, and the signature to their union. -/
-
-theorem SType.list_isPre : ∀ τs : List SType, (SType.list τs).IsPre
-  | [] => trivial
-  | _ :: _ => trivial
 
 theorem SType.toTyI_list (I : SInterp) : ∀ {τs : List SType}, (∀ τ ∈ τs, τ.IsPre) →
     (SType.list τs).toTyI I = Ty.list (τs.map (·.toTyI I))

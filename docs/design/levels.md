@@ -1,7 +1,10 @@
 # Levels in the Lean model
 
-Status: design, with the first slice done (the two justification rules
-below). Nothing else here is proved yet.
+Status: in progress. Done: the two justification rules below; levels in
+the state and the extrusion relations (`Algorithm.lean`); what extrusion
+leaves alone (`Extrusion.lean`); every pair an extrusion logs is justified
+(`ExtrusionSound.lean`, `Extrude.just`). `Constrain` does not extrude yet,
+and `TypeTerm` has no levels: see "Order of work".
 
 ## Goal
 
@@ -123,9 +126,32 @@ certificate, so with classical logic (`PTyp.sound_top` uses it).
 ## Order of work
 
 1. Done: the two justification rules.
-2. `State.level`, `Extrude`, the two `Constrain` rules; scope and levels
-   for `Constrain`; the invariants of 4 for `Constrain`. `TypeTerm` is
-   untouched and still builds (it allocates at any level).
+2. Extrusion and `Constrain`. `TypeTerm` is untouched and still builds (it
+   allocates at any level).
+   - Done: `State.level`, `Extrude`; `Same`, `Extrude.level_le`,
+     `Extrude.con`, `Extrude.frame`; `Extrude.grows`, `Extrude.logged`,
+     `CopiesOK`, `Extrude.rows`, `GStep.sameLabels`, `sigPairs_just`,
+     `Extrude.just`. `Soundness.lean` was split: its definitions are in
+     `Justify.lean`.
+   - Next: locality for `Extrude` (any set `X` of variables that contains
+     the variables the run allocates and is closed under bounds stays
+     closed, and bounds outside `X` are untouched), with scope as the
+     instance `X = {v < s'.next}`. Then `Extrude.consist` (needs scope: a
+     fresh copy has no bounds; the pending pairs are the bounds of the
+     copied variable against its copy), `BoundsInLog`, `LogNAC`, `KInv`
+     for `Extrude`.
+   - Then the `Constrain` rules. `varL` and `varR` get the level guards
+     (`varR` also takes a variable of lower level on the left). Extrusion
+     is two rules per side, not a recursive call: after extruding, either
+     the constraint against the copy is cached, or the copy is installed
+     and propagated (`go lhs rhs'` can only do that: the copy is not a
+     variable, not `Abs`, and low enough by `Extrude.level_le`). This
+     avoids a window in which the cached original has no installed bound.
+     `CacheInLog` gets two more facts: a cached `v ≤ b` with `b` not a
+     variable has installed `b` if `b` is low enough, and for `b` a record
+     over a low row variable, a record with the same tail and fields below
+     (what `ExpandG.var` asks for); and expansion variables have the level
+     of their row variable.
 3. `TypeTerm` with levels, schemes and instantiation; scope, levels,
    locality; the invariants of 4; the skeleton with `Rest`.
 4. Retire the direct proof in `Theorem1.lean`; README.

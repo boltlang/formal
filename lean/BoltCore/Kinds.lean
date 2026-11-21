@@ -80,10 +80,6 @@ theorem SFields.labels_append : ∀ fs gs : SFields, (fs.append gs).labels = fs.
   | .nil, _ => rfl
   | .cons _ _ fs, gs => by simp [SFields.append, SFields.labels, SFields.labels_append fs gs]
 
-theorem SFields.append_nil : ∀ fs : SFields, fs.append .nil = fs
-  | .nil => rfl
-  | .cons _ _ fs => by simp [SFields.append, SFields.append_nil fs]
-
 theorem SFields.mem_labels {l : String} : ∀ fs : SFields, l ∈ fs.labels ↔ (fs.lookup l).isSome
   | .nil => by simp [SFields.labels, SFields.lookup]
   | .cons n f fs => by

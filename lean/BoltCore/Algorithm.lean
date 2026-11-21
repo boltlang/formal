@@ -366,7 +366,10 @@ abbrev Copies := List ((Nat × Bool) × Nat)
 
 /-- A copy and its original as a constraint: a positive copy is above the
 original, a negative one below. -/
-def polPair (pol : Bool) (t t' : SType) : SType × SType := if pol then (t, t') else (t', t)
+def polPair (pol : Bool) (t t' : SType) : SType × SType :=
+  match pol with
+  | true => (t, t')
+  | false => (t', t)
 
 /-- The lists of two argument lists, suffix by suffix (down to the last
 cell). -/
@@ -384,6 +387,12 @@ def sigPairs (lo hi : SParams) : List (SType × SType) :=
     (lo.domain k, .sig hi) :: (lo.domain k, hi.domain k) ::
       listPairs (Param.pos k lo.toList) (Param.pos k hi.toList)
 
+/-- `sigPairs`, for a signature and its copy at a polarity. -/
+def sigPairsPol (pol : Bool) (P P' : SParams) : List (SType × SType) :=
+  match pol with
+  | true => sigPairs P P'
+  | false => sigPairs P' P
+
 mutual
 inductive Extrude : State → Copies → Bool → Nat → SType → SType → State → Copies → Prop where
   /-- The level is low enough: nothing to copy. -/
@@ -399,8 +408,7 @@ inductive Extrude : State → Copies → Bool → Nat → SType → SType → St
   | sig : lvl < (SType.sig P).level s.level →
       ExtrudeParams s c pol lvl P P' s₁ c₁ →
       Extrude s c pol lvl (.sig P) (.sig P')
-        (s₁.logAll (polPair pol (.sig P) (.sig P') ::
-          (if pol then sigPairs P P' else sigPairs P' P))) c₁
+        (s₁.logAll (polPair pol (.sig P) (.sig P') :: sigPairsPol pol P P')) c₁
   /-- A variable that was copied at this polarity. -/
   | varCopied : lvl < s.level v → c.lookup (v, pol) = some w →
       Extrude s c pol lvl (.var v) (.var w) (s.logAll [polPair pol (.var v) (.var w)]) c
