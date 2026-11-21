@@ -158,6 +158,22 @@ theorem SType.SameCon.nonvar : ∀ {t t' : SType}, t.SameCon t' → (∀ w, t �
     fun _ h => nomatch h
   | .var v, .var _, _, h => absurd rfl (h v)
 
+theorem Extrude.ne_abs (h : Extrude s c pol lvl t t' s' c') (ht : t ≠ .abs) : t' ≠ .abs := by
+  rcases h.con with rfl | hc
+  · exact ht
+  · exact hc.isPre.2.ne_abs
+
+theorem Extrude.isPre (h : Extrude s c pol lvl t t' s' c') (ht : t.IsPre) : t'.IsPre := by
+  rcases h.con with rfl | hc
+  · exact ht
+  · exact hc.isPre.2
+
+/-- The copies of fields have their labels. -/
+theorem ExtrudeFields.labels : ExtrudeFields s c pol lvl fs fs' s' c' → fs'.labels = fs.labels
+  | .nil => rfl
+  | .opt _ h => by simp [SFields.labels, h.labels]
+  | .cons _ _ h => by simp [SFields.labels, h.labels]
+
 /-! ## Variables of low level are not touched -/
 
 theorem bounds_addUpper_ne {s : State} {v w : Nat} {t : SType} (h : w ≠ v) :

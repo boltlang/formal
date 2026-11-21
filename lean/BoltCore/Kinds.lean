@@ -370,6 +370,297 @@ theorem rest_kind {fs₀ fs₁ : SFields} {ρ σ r : Nat}
   by_cases x₁ : l ∈ K ρ <;> by_cases x₂ : l ∈ K σ <;> by_cases x₃ : l ∈ fs₀.labels <;>
     by_cases x₄ : l ∈ fs₁.labels <;> by_cases x₅ : l ∈ K r <;> simp_all
 
+/-! ## Extrusion
+
+A copy has the kind of its original (the rules that allocate one require
+it), so a type and its copy lack the same labels as rows (`KSame`). -/
+
+/-- Each copy has the kind of its original. -/
+def CopiesK (K : Nat → List String) (c : Copies) : Prop := ∀ v pol w, ((v, pol), w) ∈ c → K w = K v
+
+theorem CopiesK.nil : CopiesK K [] := fun _ _ _ h => nomatch h
+
+theorem CopiesK.cons {c : Copies} (h : CopiesK K c) (hw : K w = K v) :
+    CopiesK K (((v, pol), w) :: c) := by
+  intro v' pol' w' hm
+  rcases List.mem_cons.mp hm with e | hm
+  · cases e; exact hw
+  · exact h v' pol' w' hm
+
+/-- A type and its copy, as rows: the same labels, and a row variable for a
+tail only if the other has one, of the same kind. -/
+structure KSame (K : Nat → List String) (t t' : SType) : Prop where
+  labels : (rowView t').1.labels = (rowView t).1.labels
+  tail : ∀ σ, (rowView t').2 = .var σ → ∃ ρ, (rowView t).2 = .var ρ ∧ K σ = K ρ
+  tail' : ∀ ρ, (rowView t).2 = .var ρ → ∃ σ, (rowView t').2 = .var σ ∧ K σ = K ρ
+
+theorem KSame.refl (t : SType) : KSame K t t :=
+  ⟨rfl, fun σ h => ⟨σ, h, rfl⟩, fun ρ h => ⟨ρ, h, rfl⟩⟩
+
+/-- Two types that are not rows over a row variable. -/
+theorem KSame.of_nonvar {t t' : SType} (h : (rowView t).1.labels = (rowView t').1.labels)
+    (ht : ∀ w, (rowView t).2 ≠ .var w) (ht' : ∀ w, (rowView t').2 ≠ .var w) : KSame K t t' :=
+  ⟨h.symm, fun σ e => absurd e (ht' σ), fun ρ e => absurd e (ht ρ)⟩
+
+theorem KSame.vars {v w : Nat} (h : K w = K v) : KSame K (.var v) (.var w) :=
+  ⟨rfl, fun σ e => ⟨v, rfl, by simp only [rowView] at e; cases e; exact h⟩,
+    fun ρ e => ⟨w, rfl, by simp only [rowView] at e; cases e; exact h⟩⟩
+
+theorem KSame.kok {t t' : SType} (h : KSame K t t') : KOK K t t' := by
+  intro ρ σ hρ hσ l
+  obtain ⟨ρ', hρ', e⟩ := h.tail σ hσ
+  rw [hρ] at hρ'; cases hρ'
+  simp only [RowKind, h.labels, e]
+
+theorem KSame.kok' {t t' : SType} (h : KSame K t t') : KOK K t' t :=
+  fun σ ρ hσ hρ l => (h.kok ρ σ hρ hσ l).symm
+
+/-- The copy lacks what the original lacks, against any other row. -/
+theorem KSame.kok_left {t t' b : SType} (h : KSame K t t') (hk : KOK K t b) : KOK K t' b := by
+  intro σ τ hσ hτ l
+  obtain ⟨ρ, hρ, e⟩ := h.tail σ hσ
+  have := hk ρ τ hρ hτ l
+  simp only [RowKind, h.labels, e] at this ⊢
+  exact this
+
+theorem KSame.kok_right {t t' b : SType} (h : KSame K t t') (hk : KOK K b t) : KOK K b t' := by
+  intro τ σ hτ hσ l
+  obtain ⟨ρ, hρ, e⟩ := h.tail σ hσ
+  have := hk τ ρ hτ hρ l
+  simp only [RowKind, h.labels, e] at this ⊢
+  exact this
+
+theorem KSame.kempty {t t' : SType} (h : KSame K t t') (hk : KEmpty K t) : KEmpty K t' := by
+  intro σ hσ l
+  obtain ⟨ρ, hρ, e⟩ := h.tail σ hσ
+  have := hk ρ hρ l
+  simp only [RowKind, h.labels, e] at this ⊢
+  exact this
+
+theorem SFields.eq_nil_of_labels : ∀ {fs : SFields}, fs.labels = [] → fs = .nil
+  | .nil, _ => rfl
+  | .cons _ _ _, h => by simp [SFields.labels] at h
+
+theorem KSame.recOK {t t' : SType} (h : KSame K t t') (hk : RecOK K t) : RecOK K t' := by
+  intro σ hσ
+  obtain ⟨ρ, hρ, e⟩ := h.tail σ hσ
+  have := hk ρ hρ
+  refine ⟨fun hn => this.1 (SFields.eq_nil_of_labels ?_), fun l hl => ?_⟩
+  · rw [← h.labels, hn]; rfl
+  · rw [e]; exact this.2 l (h.labels ▸ hl)
+
+/-- A copy of a row variable can stand for it on the right. -/
+theorem KOK.to_copy {a : SType} {v n : Nat} (h : KOK K a (.var v)) (hk : K n = K v) :
+    KOK K a (.var n) := (KSame.vars hk).kok_right h
+
+theorem KOK.from_copy {b : SType} {v n : Nat} (h : KOK K (.var v) b) (hk : K n = K v) :
+    KOK K (.var n) b := (KSame.vars hk).kok_left h
+
+mutual
+theorem Extrude.ksame : Extrude s c pol lvl t t' s' c' → s.kind = K → CopiesK K c →
+    KSame K t t' ∧ CopiesK K c'
+  | .low _, _, hc => ⟨.refl _, hc⟩
+  | .arrow _ h₁ h₂, e, hc =>
+    ⟨.of_nonvar rfl (fun _ h => nomatch h) (fun _ h => nomatch h),
+      (h₂.ksame (h₁.same.kind.trans e) (h₁.ksame e hc).2).2⟩
+  | .record _ h₁ h₂, e, hc => by
+    have r₁ := h₁.ksame e hc
+    have r₂ := h₂.ksame (h₁.same.kind.trans e) r₁.2
+    refine ⟨⟨?_, r₂.1.tail, r₂.1.tail'⟩, r₂.2⟩
+    simp only [rowView, SFields.labels_append, r₁.1, r₂.1.labels]
+  | .sig _ h, e, hc =>
+    ⟨.of_nonvar rfl (fun _ h => nomatch h) (fun _ h => nomatch h), h.ksame e hc⟩
+  | .varCopied _ hw, _, hc => ⟨.vars (hc _ _ _ (lookup_mem hw)), hc⟩
+  | .varPos _ _ _ hk h, e, hc =>
+    have hk' := e ▸ hk
+    ⟨.vars hk', (h.ksame e (hc.cons hk')).2⟩
+  | .varNeg _ _ _ hk h, e, hc =>
+    have hk' := e ▸ hk
+    ⟨.vars hk', (h.ksame e (hc.cons hk')).2⟩
+
+theorem ExtrudeFields.ksame : ExtrudeFields s c pol lvl fs fs' s' c' → s.kind = K →
+    CopiesK K c → fs'.labels = fs.labels ∧ CopiesK K c'
+  | .nil, _, hc => ⟨rfl, hc⟩
+  | .opt h₁ h₂, e, hc => by
+    have r₂ := h₂.ksame (h₁.same.kind.trans e) (h₁.ksame e hc).2
+    exact ⟨by simp [SFields.labels, r₂.1], r₂.2⟩
+  | .cons _ h₁ h₂, e, hc => by
+    have r₂ := h₂.ksame (h₁.same.kind.trans e) (h₁.ksame e hc).2
+    exact ⟨by simp [SFields.labels, r₂.1], r₂.2⟩
+
+theorem ExtrudeParams.ksame : ExtrudeParams s c pol lvl P P' s' c' → s.kind = K →
+    CopiesK K c → CopiesK K c'
+  | .nil, _, hc => hc
+  | .cons h₁ h₂, e, hc => h₂.ksame (h₁.same.kind.trans e) (h₁.ksame e hc).2
+
+theorem ExtrudeEach.ksame : ExtrudeEach s c pol lvl ts ts' s' c' → s.kind = K →
+    CopiesK K c → (∀ t' ∈ ts', ∃ t ∈ ts, KSame K t t') ∧ CopiesK K c'
+  | .nil, _, hc => ⟨(fun _ h => nomatch h), hc⟩
+  | .cons h₁ h₂, e, hc => by
+    have r₁ := h₁.ksame e hc
+    have r₂ := h₂.ksame (h₁.same.kind.trans e) r₁.2
+    refine ⟨fun t' h => ?_, r₂.2⟩
+    rcases List.mem_cons.mp h with rfl | h
+    · exact ⟨_, List.mem_cons_self .., r₁.1⟩
+    · obtain ⟨t, ht, hk⟩ := r₂.1 t' h
+      exact ⟨t, List.mem_cons_of_mem _ ht, hk⟩
+end
+
+theorem KInv.logAll {s : State} {ps : List (SType × SType)} (h : KInv K s)
+    (hps : ∀ p ∈ ps, WK K p.1 ∧ WK K p.2 ∧ KOK K p.1 p.2) : KInv K (s.logAll ps) := by
+  refine ⟨h.kind, fun p hp => ?_, h.exps⟩
+  rcases List.mem_append.mp hp with hp | hp
+  · exact hps p hp
+  · exact h.log p hp
+
+theorem polPair_K {t t' : SType} (ht : WK K t) (ht' : WK K t') (hs : KSame K t t') :
+    ∀ {pol : Bool}, WK K (polPair pol t t').1 ∧ WK K (polPair pol t t').2 ∧
+      KOK K (polPair pol t t').1 (polPair pol t t').2
+  | true => ⟨ht, ht', hs.kok⟩
+  | false => ⟨ht', ht, hs.kok'⟩
+
+theorem listPairs_K : ∀ {as bs : List SType}, (∀ a ∈ as, WK K a ∧ KEmpty K a) →
+    (∀ b ∈ bs, WK K b ∧ KEmpty K b) →
+    ∀ p ∈ listPairs as bs, WK K p.1 ∧ WK K p.2 ∧ KOK K p.1 p.2
+  | [], _, _, _, _, hp => nomatch hp
+  | _ :: _, [], _, _, _, hp => nomatch hp
+  | _ :: _, _ :: _, ha, hb, p, hp => by
+    rcases List.mem_cons.mp hp with rfl | hp
+    · have la := WK.list ha
+      have lb := WK.list hb
+      exact ⟨la.1, lb.1, .of_empty la.2 lb.2⟩
+    · exact listPairs_K (fun a h => ha a (List.mem_cons_of_mem _ h))
+        (fun b h => hb b (List.mem_cons_of_mem _ h)) p hp
+
+theorem sigPairs_K {lo hi : SParams} (hlo : PWK K lo) (hhi : PWK K hi) :
+    ∀ p ∈ sigPairs lo hi, WK K p.1 ∧ WK K p.2 ∧ KOK K p.1 p.2 := by
+  intro p hp
+  obtain ⟨k, _, hp⟩ := List.mem_flatMap.mp hp
+  rcases List.mem_cons.mp hp with rfl | hp
+  · exact ⟨(hlo.domain k).1, hhi, .of_nonvarR fun _ h => nomatch h⟩
+  rcases List.mem_cons.mp hp with rfl | hp
+  · exact ⟨(hlo.domain k).1, (hhi.domain k).1, .of_empty (hlo.domain k).2 (hhi.domain k).2⟩
+  · exact listPairs_K
+      (fun _ hτ => by obtain ⟨q, hq, rfl⟩ := Param.mem_pos hτ; exact hlo.mem q hq)
+      (fun _ hτ => by obtain ⟨q, hq, rfl⟩ := Param.mem_pos hτ; exact hhi.mem q hq) p hp
+
+theorem sigPairsPol_K {P P' : SParams} (h : PWK K P) (h' : PWK K P') :
+    ∀ {pol : Bool}, ∀ p ∈ sigPairsPol pol P P', WK K p.1 ∧ WK K p.2 ∧ KOK K p.1 p.2
+  | true => sigPairs_K h h'
+  | false => sigPairs_K h' h
+
+mutual
+/-- Extrusion keeps the log and its result well-kinded. -/
+theorem Extrude.kinds : Extrude s c pol lvl t t' s' c' → BoundsInLog s → KInv K s →
+    CopiesK K c → WK K t → KInv K s' ∧ WK K t'
+  | .low _, _, k, _, ht => ⟨k, ht⟩
+  | .arrow hlv h₁ h₂, hb, k, hc, ht => by
+    have s₁ := h₁.ksame k.kind hc
+    have r₁ := h₁.kinds hb k hc ht.1
+    have s₂ := h₂.ksame r₁.1.kind s₁.2
+    have r₂ := h₂.kinds (h₁.inLog hb) r₁.1 s₁.2 ht.2.2.1
+    have ht' : WK K (SType.arrow _ _) := ⟨r₁.2, s₁.1.kempty ht.2.1, r₂.2, s₂.1.kempty ht.2.2.2⟩
+    exact ⟨r₂.1.logAll fun p hp => by
+      have e := List.mem_singleton.mp hp; subst e
+      exact polPair_K ht ht' ((Extrude.arrow hlv h₁ h₂).ksame k.kind hc).1, ht'⟩
+  | .record hlv h₁ h₂, hb, k, hc, ht => by
+    have s₁ := h₁.ksame k.kind hc
+    have r₁ := h₁.kinds hb k hc ht.1
+    have r₂ := h₂.kinds (h₁.inLog hb) r₁.1 s₁.2 ht.2.1
+    have hs := ((Extrude.record hlv h₁ h₂).ksame k.kind hc).1
+    have ht' : WK K (SType.record _ _) := ⟨r₁.2, r₂.2, hs.recOK ht.2.2⟩
+    exact ⟨r₂.1.logAll fun p hp => by
+      have e := List.mem_singleton.mp hp; subst e
+      exact polPair_K ht ht' hs, ht'⟩
+  | .sig hlv h', hb, k, hc, ht => by
+    have r := h'.kinds hb k hc ht
+    refine ⟨r.1.logAll fun p hp => ?_, r.2⟩
+    rcases List.mem_cons.mp hp with rfl | hp
+    · exact polPair_K (t := .sig _) (t' := .sig _) ht r.2
+        ((Extrude.sig hlv h').ksame k.kind hc).1
+    · exact sigPairsPol_K ht r.2 p hp
+  | .varCopied hlv hw, _, k, hc, _ =>
+    ⟨k.logAll fun p hp => by
+      have e := List.mem_singleton.mp hp; subst e
+      exact polPair_K (t := .var _) (t' := .var _) trivial trivial
+        (.vars (hc _ _ _ (lookup_mem hw))), trivial⟩
+  | .varPos (s := s) (v := v) _ _ _ hk h', hb, k, hc, _ => by
+    have hk' : K s.next = K v := k.kind ▸ hk
+    have k₀ : KInv K ((s.fresh.addUpper v (.var s.next)).logAll [(.var v, .var s.next)]) :=
+      KInv.logAll (s := s.fresh.addUpper v (.var s.next)) ⟨k.kind, k.log, k.exps⟩ fun p hp => by
+        have e := List.mem_singleton.mp hp; subst e
+        exact ⟨trivial, trivial, (KSame.vars hk').kok⟩
+    have hlow : ∀ t ∈ (s.bounds v).lower, WK K t ∧ KOK K t (.var v) := fun t ht =>
+      have := k.log _ (hb.2 v t ht)
+      ⟨this.1, this.2.2⟩
+    have hs := h'.ksame k.kind (hc.cons hk')
+    have r := h'.kinds (BoundsInLog.addUpperLog (s := s.fresh) hb.fresh) k₀ (hc.cons hk')
+      fun t ht => (hlow t ht).1
+    refine ⟨KInv.logAll (s := State.addLowers _ s.next _) ⟨r.1.kind, r.1.log, r.1.exps⟩
+      fun p hp => ?_, trivial⟩
+    rcases List.mem_append.mp hp with hp | hp
+    · obtain ⟨t', ht', rfl⟩ := List.mem_map.mp hp
+      obtain ⟨t, ht, hst⟩ := hs.1 t' ht'
+      exact ⟨r.2 t' ht', trivial, hst.kok_left ((hlow t ht).2.to_copy hk')⟩
+    · obtain ⟨t, ht, rfl⟩ := List.mem_map.mp hp
+      exact ⟨(hlow t ht).1, trivial, (hlow t ht).2.to_copy hk'⟩
+  | .varNeg (s := s) (v := v) _ _ _ hk h', hb, k, hc, _ => by
+    have hk' : K s.next = K v := k.kind ▸ hk
+    have k₀ : KInv K ((s.fresh.addLower v (.var s.next)).logAll [(.var s.next, .var v)]) :=
+      KInv.logAll (s := s.fresh.addLower v (.var s.next)) ⟨k.kind, k.log, k.exps⟩ fun p hp => by
+        have e := List.mem_singleton.mp hp; subst e
+        exact ⟨trivial, trivial, (KSame.vars hk').kok'⟩
+    have hup : ∀ t ∈ (s.bounds v).upper, WK K t ∧ KOK K (.var v) t := fun t ht =>
+      have := k.log _ (hb.1 v t ht)
+      ⟨this.2.1, this.2.2⟩
+    have hs := h'.ksame k.kind (hc.cons hk')
+    have r := h'.kinds (BoundsInLog.addLowerLog (s := s.fresh) hb.fresh) k₀ (hc.cons hk')
+      fun t ht => (hup t ht).1
+    refine ⟨KInv.logAll (s := State.addUppers _ s.next _) ⟨r.1.kind, r.1.log, r.1.exps⟩
+      fun p hp => ?_, trivial⟩
+    rcases List.mem_append.mp hp with hp | hp
+    · obtain ⟨t', ht', rfl⟩ := List.mem_map.mp hp
+      obtain ⟨t, ht, hst⟩ := hs.1 t' ht'
+      exact ⟨trivial, r.2 t' ht', hst.kok_right ((hup t ht).2.from_copy hk')⟩
+    · obtain ⟨t, ht, rfl⟩ := List.mem_map.mp hp
+      exact ⟨trivial, (hup t ht).1, (hup t ht).2.from_copy hk'⟩
+
+theorem ExtrudeFields.kinds : ExtrudeFields s c pol lvl fs fs' s' c' → BoundsInLog s →
+    KInv K s → CopiesK K c → FWK K fs → KInv K s' ∧ FWK K fs'
+  | .nil, _, k, _, ht => ⟨k, ht⟩
+  | .opt h₁ h₂, hb, k, hc, ht => by
+    have s₁ := h₁.ksame k.kind hc
+    have r₁ := h₁.kinds hb k hc ht.1.1
+    have r₂ := h₂.kinds (h₁.inLog hb) r₁.1 s₁.2 ht.2.2
+    exact ⟨r₂.1, ⟨r₁.2, s₁.1.kempty ht.1.2⟩, KEmpty.of_nonvar (fun _ h => nomatch h), r₂.2⟩
+  | .cons _ h₁ h₂, hb, k, hc, ht => by
+    have s₁ := h₁.ksame k.kind hc
+    have r₁ := h₁.kinds hb k hc ht.1
+    have r₂ := h₂.kinds (h₁.inLog hb) r₁.1 s₁.2 ht.2.2
+    exact ⟨r₂.1, r₁.2, s₁.1.kempty ht.2.1, r₂.2⟩
+
+theorem ExtrudeParams.kinds : ExtrudeParams s c pol lvl P P' s' c' → BoundsInLog s →
+    KInv K s → CopiesK K c → PWK K P → KInv K s' ∧ PWK K P'
+  | .nil, _, k, _, ht => ⟨k, ht⟩
+  | .cons h₁ h₂, hb, k, hc, ht => by
+    have s₁ := h₁.ksame k.kind hc
+    have r₁ := h₁.kinds hb k hc ht.1
+    have r₂ := h₂.kinds (h₁.inLog hb) r₁.1 s₁.2 ht.2.2
+    exact ⟨r₂.1, r₁.2, s₁.1.kempty ht.2.1, r₂.2⟩
+
+theorem ExtrudeEach.kinds : ExtrudeEach s c pol lvl ts ts' s' c' → BoundsInLog s →
+    KInv K s → CopiesK K c → (∀ t ∈ ts, WK K t) → KInv K s' ∧ ∀ t' ∈ ts', WK K t'
+  | .nil, _, k, _, _ => ⟨k, fun _ h => nomatch h⟩
+  | .cons h₁ h₂, hb, k, hc, ht => by
+    have s₁ := h₁.ksame k.kind hc
+    have r₁ := h₁.kinds hb k hc (ht _ (List.mem_cons_self ..))
+    have r₂ := h₂.kinds (h₁.inLog hb) r₁.1 s₁.2 fun t h => ht t (List.mem_cons_of_mem _ h)
+    refine ⟨r₂.1, fun t' h => ?_⟩
+    rcases List.mem_cons.mp h with rfl | h
+    · exact r₁.2
+    · exact r₂.2 t' h
+end
+
 mutual
 theorem Constrain.kinds : Constrain s a b s' → Inv₂ s → KInv K s →
     WK K a → WK K b → KOK K a b → KInv K s'

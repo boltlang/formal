@@ -181,6 +181,129 @@ theorem LogNAC.upper {s : State} (h : LogNAC s) (h₂ : Inv₂ s) (hx : x ∈ (s
 theorem LogNAC.lower {s : State} (h : LogNAC s) (h₂ : Inv₂ s) (hx : x ∈ (s.bounds v).lower) :
     x.NAC := (h _ (h₂.inLog.2 v x hx)).1
 
+/-! ## Extrusion -/
+
+theorem LogNAC.logAll {s : State} {ps : List (SType × SType)} (h : LogNAC s)
+    (hps : ∀ p ∈ ps, p.1.NAC ∧ p.2.NAC) : LogNAC (s.logAll ps) := by
+  intro p hp
+  rcases List.mem_append.mp hp with hp | hp
+  · exact hps p hp
+  · exact h p hp
+
+theorem polPair_NAC {t t' : SType} (ht : t.NAC) (ht' : t'.NAC) :
+    ∀ {pol : Bool}, (polPair pol t t').1.NAC ∧ (polPair pol t t').2.NAC
+  | true => ⟨ht, ht'⟩
+  | false => ⟨ht', ht⟩
+
+theorem listPairs_NAC : ∀ {as bs : List SType}, (∀ a ∈ as, a.NAC) → (∀ b ∈ bs, b.NAC) →
+    ∀ p ∈ listPairs as bs, p.1.NAC ∧ p.2.NAC
+  | [], _, _, _, _, hp => nomatch hp
+  | _ :: _, [], _, _, _, hp => nomatch hp
+  | _ :: _, _ :: _, ha, hb, p, hp => by
+    rcases List.mem_cons.mp hp with rfl | hp
+    · exact ⟨SType.list_NAC ha, SType.list_NAC hb⟩
+    · exact listPairs_NAC (fun a h => ha a (List.mem_cons_of_mem _ h))
+        (fun b h => hb b (List.mem_cons_of_mem _ h)) p hp
+
+theorem sigPairs_NAC {lo hi : SParams} (hlo : lo.NAC) (hhi : hi.NAC) :
+    ∀ p ∈ sigPairs lo hi, p.1.NAC ∧ p.2.NAC := by
+  intro p hp
+  obtain ⟨k, _, hp⟩ := List.mem_flatMap.mp hp
+  rcases List.mem_cons.mp hp with rfl | hp
+  · exact ⟨hlo.domain k, hhi⟩
+  rcases List.mem_cons.mp hp with rfl | hp
+  · exact ⟨hlo.domain k, hhi.domain k⟩
+  · exact listPairs_NAC
+      (fun _ hτ => by obtain ⟨q, hq, rfl⟩ := Param.mem_pos hτ; exact (hlo.mem q hq).2)
+      (fun _ hτ => by obtain ⟨q, hq, rfl⟩ := Param.mem_pos hτ; exact (hhi.mem q hq).2) p hp
+
+theorem sigPairsPol_NAC {P P' : SParams} (h : P.NAC) (h' : P'.NAC) :
+    ∀ {pol : Bool}, ∀ p ∈ sigPairsPol pol P P', p.1.NAC ∧ p.2.NAC
+  | true => sigPairs_NAC h h'
+  | false => sigPairs_NAC h' h
+
+mutual
+/-- Extrusion keeps the log and its result free of `Abs` components. -/
+theorem Extrude.nac : Extrude s c pol lvl t t' s' c' → BoundsInLog s → t.NAC → LogNAC s →
+    LogNAC s' ∧ t'.NAC
+  | .low _, _, ht, h => ⟨h, ht⟩
+  | .arrow _ h₁ h₂, hb, ht, h => by
+    have r₁ := h₁.nac hb ht.2.2.1 h
+    have r₂ := h₂.nac (h₁.inLog hb) ht.2.2.2 r₁.1
+    have ht' : (SType.arrow _ _).NAC := ⟨h₁.ne_abs ht.1, h₂.ne_abs ht.2.1, r₁.2, r₂.2⟩
+    exact ⟨r₂.1.logAll fun p hp => by
+      have e := List.mem_singleton.mp hp; subst e; exact polPair_NAC ht ht', ht'⟩
+  | .record _ h₁ h₂, hb, ht, h => by
+    have r₁ := h₁.nac hb ht.1 h
+    have r₂ := h₂.nac (h₁.inLog hb) ht.2 r₁.1
+    have ht' : (SType.record _ _).NAC := ⟨r₁.2, r₂.2⟩
+    exact ⟨r₂.1.logAll fun p hp => by
+      have e := List.mem_singleton.mp hp; subst e; exact polPair_NAC ht ht', ht'⟩
+  | .sig _ h', hb, ht, h => by
+    have r := h'.nac hb ht h
+    refine ⟨r.1.logAll fun p hp => ?_, r.2⟩
+    rcases List.mem_cons.mp hp with rfl | hp
+    · exact polPair_NAC (t := .sig _) (t' := .sig _) ht r.2
+    · exact sigPairsPol_NAC ht r.2 p hp
+  | .varCopied _ _, _, _, h =>
+    ⟨h.logAll fun p hp => by
+      have e := List.mem_singleton.mp hp; subst e
+      exact polPair_NAC (t := .var _) (t' := .var _) trivial trivial, trivial⟩
+  | .varPos (s := s) (v := v) _ _ _ _ h', hb, _, h => by
+    have r := h'.nac (BoundsInLog.addUpperLog (s := s.fresh) hb.fresh)
+      (fun t ht => (h _ (hb.2 v t ht)).1)
+      (LogNAC.logAll (s := s.fresh.addUpper v (.var s.next)) h fun p hp => by
+        have e := List.mem_singleton.mp hp; subst e; exact ⟨trivial, trivial⟩)
+    refine ⟨r.1.logAll fun p hp => ?_, trivial⟩
+    rcases List.mem_append.mp hp with hp | hp
+    · obtain ⟨t, ht, rfl⟩ := List.mem_map.mp hp
+      exact ⟨r.2 t ht, trivial⟩
+    · obtain ⟨t, ht, rfl⟩ := List.mem_map.mp hp
+      exact ⟨(h _ (hb.2 v t ht)).1, trivial⟩
+  | .varNeg (s := s) (v := v) _ _ _ _ h', hb, _, h => by
+    have r := h'.nac (BoundsInLog.addLowerLog (s := s.fresh) hb.fresh)
+      (fun t ht => (h _ (hb.1 v t ht)).2)
+      (LogNAC.logAll (s := s.fresh.addLower v (.var s.next)) h fun p hp => by
+        have e := List.mem_singleton.mp hp; subst e; exact ⟨trivial, trivial⟩)
+    refine ⟨r.1.logAll fun p hp => ?_, trivial⟩
+    rcases List.mem_append.mp hp with hp | hp
+    · obtain ⟨t, ht, rfl⟩ := List.mem_map.mp hp
+      exact ⟨trivial, r.2 t ht⟩
+    · obtain ⟨t, ht, rfl⟩ := List.mem_map.mp hp
+      exact ⟨trivial, (h _ (hb.1 v t ht)).2⟩
+
+theorem ExtrudeFields.nac : ExtrudeFields s c pol lvl fs fs' s' c' → BoundsInLog s → fs.NAC →
+    LogNAC s → LogNAC s' ∧ fs'.NAC
+  | .nil, _, ht, h => ⟨h, ht⟩
+  | .opt h₁ h₂, hb, ht, h => by
+    have r₁ := h₁.nac hb ht.1 h
+    have r₂ := h₂.nac (h₁.inLog hb) ht.2 r₁.1
+    exact ⟨r₂.1, r₁.2, r₂.2⟩
+  | .cons _ h₁ h₂, hb, ht, h => by
+    have r₁ := h₁.nac hb ht.1 h
+    have r₂ := h₂.nac (h₁.inLog hb) ht.2 r₁.1
+    exact ⟨r₂.1, r₁.2, r₂.2⟩
+
+theorem ExtrudeParams.nac : ExtrudeParams s c pol lvl P P' s' c' → BoundsInLog s → P.NAC →
+    LogNAC s → LogNAC s' ∧ P'.NAC
+  | .nil, _, ht, h => ⟨h, ht⟩
+  | .cons h₁ h₂, hb, ht, h => by
+    have r₁ := h₁.nac hb ht.2.1 h
+    have r₂ := h₂.nac (h₁.inLog hb) ht.2.2 r₁.1
+    exact ⟨r₂.1, h₁.isPre ht.1, r₁.2, r₂.2⟩
+
+theorem ExtrudeEach.nac : ExtrudeEach s c pol lvl ts ts' s' c' → BoundsInLog s →
+    (∀ t ∈ ts, t.NAC) → LogNAC s → LogNAC s' ∧ ∀ t' ∈ ts', t'.NAC
+  | .nil, _, _, h => ⟨h, fun _ h => nomatch h⟩
+  | .cons h₁ h₂, hb, ht, h => by
+    have r₁ := h₁.nac hb (ht _ (List.mem_cons_self ..)) h
+    have r₂ := h₂.nac (h₁.inLog hb) (fun t h => ht t (List.mem_cons_of_mem _ h)) r₁.1
+    refine ⟨r₂.1, fun t' h => ?_⟩
+    rcases List.mem_cons.mp h with rfl | h
+    · exact r₁.2
+    · exact r₂.2 t' h
+end
+
 mutual
 theorem Constrain.nac : Constrain s a b s' → Inv₂ s → a.NAC → b.NAC → LogNAC s → LogNAC s'
   | .cached _, _, _, _, h => h
