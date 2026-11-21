@@ -49,8 +49,12 @@ theorem Extrude.same : Extrude s c pol lvl t t' s' c' → Same s s'
   | .record _ h₁ h₂ => (h₁.same.trans h₂.same).trans .logAll
   | .sig _ h => h.same.trans .logAll
   | .varCopied _ _ => .logAll
-  | .varPos _ _ _ _ h => ((Same.fresh.trans .addUpper).trans h.same).trans (Same.addLowers.trans .logAll)
-  | .varNeg _ _ _ _ h => ((Same.fresh.trans .addLower).trans h.same).trans (Same.addUppers.trans .logAll)
+  | .varPos _ _ _ _ h =>
+    ((Same.fresh.trans (Same.addUpper.trans .logAll)).trans h.same).trans
+      (Same.addLowers.trans .logAll)
+  | .varNeg _ _ _ _ h =>
+    ((Same.fresh.trans (Same.addLower.trans .logAll)).trans h.same).trans
+      (Same.addUppers.trans .logAll)
 
 theorem ExtrudeFields.same : ExtrudeFields s c pol lvl fs fs' s' c' → Same s s'
   | .nil => .refl

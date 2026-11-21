@@ -8,6 +8,7 @@ import BoltCore.Eval
 import BoltCore.Safety
 import BoltCore.Algorithm
 import BoltCore.Extrusion
+import BoltCore.Locality
 import BoltCore.Justify
 import BoltCore.ExtrusionSound
 import BoltCore.Soundness

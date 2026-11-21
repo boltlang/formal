@@ -34,9 +34,11 @@ theorem Extrude.grows : Extrude s c pol lvl t t' s' c' → Grows s s'
   | .sig _ h => h.grows.trans .logAll
   | .varCopied _ _ => .logAll
   | .varPos _ _ _ _ h =>
-    ((Grows.fresh.trans .addUpper).trans h.grows).trans (Grows.addLowers.trans .logAll)
+    ((Grows.fresh.trans (Grows.addUpper.trans .logAll)).trans h.grows).trans
+      (Grows.addLowers.trans .logAll)
   | .varNeg _ _ _ _ h =>
-    ((Grows.fresh.trans .addLower).trans h.grows).trans (Grows.addUppers.trans .logAll)
+    ((Grows.fresh.trans (Grows.addLower.trans .logAll)).trans h.grows).trans
+      (Grows.addUppers.trans .logAll)
 
 theorem ExtrudeFields.grows : ExtrudeFields s c pol lvl fs fs' s' c' → Grows s s'
   | .nil => .refl
@@ -84,8 +86,10 @@ theorem logged_polPair {s : State} {ps : List (SType × SType)} {t t' : SType} :
 theorem Extrude.logged : Extrude s c pol lvl t t' s' c' → PolR (Logged s') pol t t'
   | .low _ => .logged_refl
   | .arrow .. | .record .. | .sig .. | .varCopied .. => logged_polPair (List.mem_cons_self ..)
-  | .varPos .. => .inr (List.mem_append_left _ (List.mem_cons_self ..))
-  | .varNeg .. => .inr (List.mem_append_left _ (List.mem_cons_self ..))
+  | .varPos _ _ _ _ h =>
+    .inr ((h.grows.trans (Grows.addLowers.trans .logAll)).log _ (List.mem_cons_self ..))
+  | .varNeg _ _ _ _ h =>
+    .inr ((h.grows.trans (Grows.addUppers.trans .logAll)).log _ (List.mem_cons_self ..))
 
 /-! ## Copies are bounds -/
 
@@ -123,10 +127,10 @@ theorem Extrude.copiesOK : Extrude s c pol lvl t t' s' c' → CopiesOK s c → C
   | .sig _ h', h => (h'.copiesOK h).mono .logAll
   | .varCopied _ _, h => h.mono .logAll
   | .varPos _ _ _ _ h', h =>
-    (h'.copiesOK ((h.mono (Grows.fresh.trans .addUpper)).cons
+    (h'.copiesOK ((h.mono (Grows.fresh.trans (Grows.addUpper.trans .logAll))).cons
       (pol := true) mem_upper_addUpper)).mono (Grows.addLowers.trans .logAll)
   | .varNeg _ _ _ _ h', h =>
-    (h'.copiesOK ((h.mono (Grows.fresh.trans .addLower)).cons
+    (h'.copiesOK ((h.mono (Grows.fresh.trans (Grows.addLower.trans .logAll))).cons
       (pol := false) mem_lower_addLower)).mono (Grows.addUppers.trans .logAll)
 
 theorem ExtrudeFields.copiesOK : ExtrudeFields s c pol lvl fs fs' s' c' → CopiesOK s c →
@@ -153,11 +157,11 @@ theorem Extrude.varBound (h : Extrude s c pol lvl (.var u) (.var u') s' c') (hc 
   | low _ => exact .inl rfl
   | varCopied _ hw => exact .inr ((hc _ _ _ (lookup_mem hw)).mono .logAll)
   | varPos _ _ _ _ h' =>
-    exact .inr (BoundPol.mono (h'.grows.trans (Grows.addLowers.trans .logAll)) (pol := true)
-      mem_upper_addUpper)
+    exact .inr (BoundPol.mono (Grows.logAll.trans (h'.grows.trans (Grows.addLowers.trans .logAll)))
+      (pol := true) mem_upper_addUpper)
   | varNeg _ _ _ _ h' =>
-    exact .inr (BoundPol.mono (h'.grows.trans (Grows.addUppers.trans .logAll)) (pol := false)
-      mem_lower_addLower)
+    exact .inr (BoundPol.mono (Grows.logAll.trans (h'.grows.trans (Grows.addUppers.trans .logAll)))
+      (pol := false) mem_lower_addLower)
 
 /-! ## A bound and its copy -/
 
@@ -550,12 +554,16 @@ theorem Extrude.just : Extrude s c pol lvl t t' s' c' → CopiesOK s c → JustE
     · exact .varR hb
     · exact .varL hb
   | .varPos (s := s) (v := v) (c := c) _ _ _ _ h', hc, hj => by
-    have hc₀ : CopiesOK (s.fresh.addUpper v (.var s.next)) (((v, true), s.next) :: c) :=
-      (hc.mono (Grows.fresh.trans .addUpper)).cons (pol := true) mem_upper_addUpper
-    have j₁ := h'.just hc₀ (hj.grow (Grows.fresh.trans .addUpper) fun _ hp => hp)
+    have hc₀ : CopiesOK ((s.fresh.addUpper v (.var s.next)).logAll [(.var v, .var s.next)])
+        (((v, true), s.next) :: c) :=
+      (hc.mono (Grows.fresh.trans (Grows.addUpper.trans .logAll))).cons (pol := true)
+        mem_upper_addUpper
+    have j₁ := h'.just hc₀ ((hj.grow (Grows.fresh.trans .addUpper) fun _ hp => hp).logAll
+      fun p hp => by
+        have e := List.mem_singleton.mp hp
+        subst e
+        exact .varL mem_upper_addUpper)
     refine (j₁.grow .addLowers fun _ hp => hp).logAll fun p hp => ?_
-    rcases List.mem_cons.mp hp with rfl | hp
-    · exact .varL (Grows.addLowers.upper _ _ (h'.grows.upper _ _ mem_upper_addUpper))
     rcases List.mem_append.mp hp with hp | hp
     · obtain ⟨l', hl', rfl⟩ := List.mem_map.mp hp
       exact .varR (mem_lower_addLowers hl')
@@ -567,12 +575,16 @@ theorem Extrude.just : Extrude s c pol lvl t t' s' c' → CopiesOK s c → JustE
           (Logged.mono (Grows.addLowers.trans .logAll) h₅)
       · exact .viaVar (Grows.addLowers.upper _ _ hb) (mem_lower_addLowers hl')
   | .varNeg (s := s) (v := v) (c := c) _ _ _ _ h', hc, hj => by
-    have hc₀ : CopiesOK (s.fresh.addLower v (.var s.next)) (((v, false), s.next) :: c) :=
-      (hc.mono (Grows.fresh.trans .addLower)).cons (pol := false) mem_lower_addLower
-    have j₁ := h'.just hc₀ (hj.grow (Grows.fresh.trans .addLower) fun _ hp => hp)
+    have hc₀ : CopiesOK ((s.fresh.addLower v (.var s.next)).logAll [(.var s.next, .var v)])
+        (((v, false), s.next) :: c) :=
+      (hc.mono (Grows.fresh.trans (Grows.addLower.trans .logAll))).cons (pol := false)
+        mem_lower_addLower
+    have j₁ := h'.just hc₀ ((hj.grow (Grows.fresh.trans .addLower) fun _ hp => hp).logAll
+      fun p hp => by
+        have e := List.mem_singleton.mp hp
+        subst e
+        exact .varR mem_lower_addLower)
     refine (j₁.grow .addUppers fun _ hp => hp).logAll fun p hp => ?_
-    rcases List.mem_cons.mp hp with rfl | hp
-    · exact .varR (Grows.addUppers.lower _ _ (h'.grows.lower _ _ mem_lower_addLower))
     rcases List.mem_append.mp hp with hp | hp
     · obtain ⟨u', hu', rfl⟩ := List.mem_map.mp hp
       exact .varL (mem_upper_addUppers hu')
@@ -599,6 +611,258 @@ theorem ExtrudeEach.just : ExtrudeEach s c pol lvl ts ts' s' c' → CopiesOK s c
     JustExcept s P → JustExcept s' P
   | .nil, _, hj => hj
   | .cons h₁ h₂, hc, hj => h₂.just (h₁.copiesOK hc) (h₁.just hc hj)
+end
+
+/-! ## Consistency
+
+A copied variable gets its copy as a bound, which consistency relates to
+each of its bounds on the other side: these pairs are pending while those
+bounds are extruded, and logged at the end. The copy itself is fresh, so
+it only has the bounds it is given, on one side. This is where scope is
+needed. -/
+
+theorem ConsExcept.logAll {ps : List (SType × SType)} (h : ConsExcept s P) :
+    ConsExcept (s.logAll ps) P :=
+  fun v l u hl hu => (h v l u hl hu).imp (Logged.mono .logAll) id
+
+theorem ConsExcept.fresh (h : ConsExcept s P) : ConsExcept s.fresh P := h
+
+theorem upper_addLowers {s : State} {v w : Nat} {ts : List SType} :
+    ((s.addLowers v ts).bounds w).upper = (s.bounds w).upper := by
+  simp only [State.addLowers]; split <;> rfl
+
+theorem lower_addUppers {s : State} {v w : Nat} {ts : List SType} :
+    ((s.addUppers v ts).bounds w).lower = (s.bounds w).lower := by
+  simp only [State.addUppers]; split <;> rfl
+
+theorem Scoped.fresh {s : State} (h : Scoped s) : Scoped s.fresh :=
+  fun v b hb => ⟨Nat.lt_succ_of_lt (h v b hb).1, (h v b hb).2.mono fun _ hw => Nat.lt_succ_of_lt hw⟩
+
+theorem Scoped.logAll {s : State} {ps : List (SType × SType)} (h : Scoped s) :
+    Scoped (s.logAll ps) := h
+
+theorem Scoped.addUpper {s : State} {v : Nat} {t : SType} (h : Scoped s) (hv : v < s.next)
+    (ht : t.In (· < s.next)) : Scoped (s.addUpper v t) := by
+  intro w b hb
+  rcases hb with hb | hb
+  · rcases mem_upper_addUpper_inv hb with ⟨rfl, rfl⟩ | hb
+    · exact ⟨hv, ht⟩
+    · exact h w b (.inl hb)
+  · rw [lower_addUpper] at hb; exact h w b (.inr hb)
+
+theorem Scoped.addLower {s : State} {v : Nat} {t : SType} (h : Scoped s) (hv : v < s.next)
+    (ht : t.In (· < s.next)) : Scoped (s.addLower v t) := by
+  intro w b hb
+  rcases hb with hb | hb
+  · rw [upper_addLower] at hb; exact h w b (.inl hb)
+  · rcases mem_lower_addLower_inv hb with ⟨rfl, rfl⟩ | hb
+    · exact ⟨hv, ht⟩
+    · exact h w b (.inr hb)
+
+mutual
+theorem Extrude.consist : Extrude s c pol lvl t t' s' c' → Scoped s → t.In (· < s.next) →
+    CopiesScoped s c → ConsExcept s P → ConsExcept s' P
+  | .low _, _, _, _, h => h
+  | .arrow _ h₁ h₂, hs, ht, hc, h => by
+    have ht' := SType.in_arrow.mp ht
+    have sc := h₁.scoped hs ht'.1 hc
+    exact (h₂.consist sc.1 (ht'.2.mono fun _ hw => Nat.lt_of_lt_of_le hw h₁.same.next) sc.2.2
+      (h₁.consist hs ht'.1 hc h)).logAll
+  | .record _ h₁ h₂, hs, ht, hc, h => by
+    have ht' := SType.in_record.mp ht
+    have sc := h₁.scoped hs ht'.1 hc
+    exact (h₂.consist sc.1 (ht'.2.mono fun _ hw => Nat.lt_of_lt_of_le hw h₁.same.next) sc.2.2
+      (h₁.consist hs ht'.1 hc h)).logAll
+  | .sig _ h', hs, ht, hc, h => (h'.consist hs (SType.in_sig.mp ht) hc h).logAll
+  | .varCopied _ _, _, _, _, h => h.logAll
+  | .varPos (s := s) (v := v) (c := c) (s₁ := s₁) (ls := ls) _ _ hl _ h', hs, ht, hc, h => by
+    have hvs : v < s.next := (SType.in_var (X := (· < s.next))).mp ht
+    have hs₀ : Scoped ((s.fresh.addUpper v (.var s.next)).logAll [(.var v, .var s.next)]) :=
+      Scoped.addUpper (s := s.fresh) hs.fresh (Nat.lt_succ_of_lt hvs)
+        ((SType.in_var (X := (· < s.next + 1))).mpr (Nat.lt_succ_self _))
+    have hc₀ : CopiesScoped ((s.fresh.addUpper v (.var s.next)).logAll [(.var v, .var s.next)])
+        (((v, true), s.next) :: c) :=
+      CopiesIn.cons (fun e he => Nat.lt_succ_of_lt (hc e he)) (Nat.lt_succ_self _)
+    have c₁ := h'.consist hs₀
+      (fun t ht' => (hs v t (.inr ht')).2.mono fun _ hw => Nat.lt_succ_of_lt hw) hc₀
+      (ConsExcept.addUpper (s := s.fresh) (v := v) (b := .var s.next) h.fresh).logAll
+    intro w l u hwl hwu
+    by_cases e : w = s.next
+    · -- the copy is fresh: it has no upper bound
+      subst e
+      have hwu' : u ∈ ((s₁.addLowers s.next ls).bounds s.next).upper := hwu
+      rw [upper_addLowers, h'.frame s.next (Nat.lt_succ_self _) (Nat.le_of_eq hl)] at hwu'
+      have : ((s.fresh.addUpper v (.var s.next)).bounds s.next).upper = [] := by
+        rw [bounds_addUpper_ne (Nat.ne_of_gt hvs)]; exact hs.fresh_upper (Nat.le_refl _)
+      have hwu'' : u ∈ ((s.fresh.addUpper v (.var s.next)).bounds s.next).upper := hwu'
+      rw [this] at hwu''
+      exact nomatch hwu''
+    · have hwl' : l ∈ ((s₁.addLowers s.next ls).bounds w).lower := hwl
+      have hwu' : u ∈ ((s₁.addLowers s.next ls).bounds w).upper := hwu
+      rw [bounds_addLowers_ne e] at hwl' hwu'
+      rcases c₁ w l u hwl' hwu' with hlog | hp
+      · exact .inl (Logged.mono (Grows.addLowers.trans .logAll) hlog)
+      · rcases List.mem_append.mp hp with hp | hp
+        · exact .inl (.inr (List.mem_append_left _ (List.mem_append_right _ hp)))
+        · exact .inr hp
+  | .varNeg (s := s) (v := v) (c := c) (s₁ := s₁) (us := us) _ _ hl _ h', hs, ht, hc, h => by
+    have hvs : v < s.next := (SType.in_var (X := (· < s.next))).mp ht
+    have hs₀ : Scoped ((s.fresh.addLower v (.var s.next)).logAll [(.var s.next, .var v)]) :=
+      Scoped.addLower (s := s.fresh) hs.fresh (Nat.lt_succ_of_lt hvs)
+        ((SType.in_var (X := (· < s.next + 1))).mpr (Nat.lt_succ_self _))
+    have hc₀ : CopiesScoped ((s.fresh.addLower v (.var s.next)).logAll [(.var s.next, .var v)])
+        (((v, false), s.next) :: c) :=
+      CopiesIn.cons (fun e he => Nat.lt_succ_of_lt (hc e he)) (Nat.lt_succ_self _)
+    have c₁ := h'.consist hs₀
+      (fun t ht' => (hs v t (.inl ht')).2.mono fun _ hw => Nat.lt_succ_of_lt hw) hc₀
+      (ConsExcept.addLower (s := s.fresh) (v := v) (a := .var s.next) h.fresh).logAll
+    intro w l u hwl hwu
+    by_cases e : w = s.next
+    · -- the copy is fresh: it has no lower bound
+      subst e
+      have hwl' : l ∈ ((s₁.addUppers s.next us).bounds s.next).lower := hwl
+      rw [lower_addUppers, h'.frame s.next (Nat.lt_succ_self _) (Nat.le_of_eq hl)] at hwl'
+      have : ((s.fresh.addLower v (.var s.next)).bounds s.next).lower = [] := by
+        rw [bounds_addLower_ne (Nat.ne_of_gt hvs)]; exact hs.fresh_lower (Nat.le_refl _)
+      have hwl'' : l ∈ ((s.fresh.addLower v (.var s.next)).bounds s.next).lower := hwl'
+      rw [this] at hwl''
+      exact nomatch hwl''
+    · have hwl' : l ∈ ((s₁.addUppers s.next us).bounds w).lower := hwl
+      have hwu' : u ∈ ((s₁.addUppers s.next us).bounds w).upper := hwu
+      rw [bounds_addUppers_ne e] at hwl' hwu'
+      rcases c₁ w l u hwl' hwu' with hlog | hp
+      · exact .inl (Logged.mono (Grows.addUppers.trans .logAll) hlog)
+      · rcases List.mem_append.mp hp with hp | hp
+        · exact .inl (.inr (List.mem_append_left _ (List.mem_append_right _ hp)))
+        · exact .inr hp
+
+theorem ExtrudeFields.consist : ExtrudeFields s c pol lvl fs fs' s' c' → Scoped s →
+    fs.In (· < s.next) → CopiesScoped s c → ConsExcept s P → ConsExcept s' P
+  | .nil, _, _, _, h => h
+  | .opt h₁ h₂, hs, ht, hc, h => by
+    have ht' := SFields.in_cons.mp ht
+    have sc := h₁.scoped hs (SType.in_opt.mp ht'.1) hc
+    exact h₂.consist sc.1 (fun w hw => Nat.lt_of_lt_of_le (ht'.2 w hw) h₁.same.next) sc.2.2
+      (h₁.consist hs (SType.in_opt.mp ht'.1) hc h)
+  | .cons _ h₁ h₂, hs, ht, hc, h => by
+    have ht' := SFields.in_cons.mp ht
+    have sc := h₁.scoped hs ht'.1 hc
+    exact h₂.consist sc.1 (fun w hw => Nat.lt_of_lt_of_le (ht'.2 w hw) h₁.same.next) sc.2.2
+      (h₁.consist hs ht'.1 hc h)
+
+theorem ExtrudeParams.consist : ExtrudeParams s c pol lvl Q Q' s' c' → Scoped s →
+    Q.In (· < s.next) → CopiesScoped s c → ConsExcept s P → ConsExcept s' P
+  | .nil, _, _, _, h => h
+  | .cons h₁ h₂, hs, ht, hc, h => by
+    have ht' := SParams.in_cons.mp ht
+    have sc := h₁.scoped hs ht'.1 hc
+    exact h₂.consist sc.1 (fun w hw => Nat.lt_of_lt_of_le (ht'.2 w hw) h₁.same.next) sc.2.2
+      (h₁.consist hs ht'.1 hc h)
+
+theorem ExtrudeEach.consist : ExtrudeEach s c pol lvl ts ts' s' c' → Scoped s →
+    (∀ t ∈ ts, t.In (· < s.next)) → CopiesScoped s c → ConsExcept s P → ConsExcept s' P
+  | .nil, _, _, _, h => h
+  | .cons h₁ h₂, hs, ht, hc, h => by
+    have sc := h₁.scoped hs (ht _ (List.mem_cons_self ..)) hc
+    exact h₂.consist sc.1
+      (fun t h' => (ht t (List.mem_cons_of_mem _ h')).mono
+        fun _ hw => Nat.lt_of_lt_of_le hw h₁.same.next) sc.2.2
+      (h₁.consist hs (ht _ (List.mem_cons_self ..)) hc h)
+end
+
+/-! ## Bounds are logged -/
+
+theorem BoundsInLog.logAll {ps : List (SType × SType)} (h : BoundsInLog s) :
+    BoundsInLog (s.logAll ps) :=
+  ⟨fun v x hx => List.mem_append_right _ (h.1 v x hx),
+   fun v x hx => List.mem_append_right _ (h.2 v x hx)⟩
+
+theorem BoundsInLog.fresh (h : BoundsInLog s) : BoundsInLog s.fresh := h
+
+theorem BoundsInLog.addUpperLog {s : State} {v : Nat} {t : SType} (h : BoundsInLog s) :
+    BoundsInLog ((s.addUpper v t).logAll [(.var v, t)]) := by
+  refine ⟨fun w x hx => ?_, fun w x hx => ?_⟩
+  · rcases mem_upper_addUpper_inv hx with ⟨rfl, rfl⟩ | hx
+    · exact List.mem_cons_self ..
+    · exact List.mem_cons_of_mem _ (h.1 w x hx)
+  · have hx' : x ∈ ((s.addUpper v t).bounds w).lower := hx
+    rw [lower_addUpper] at hx'
+    exact List.mem_cons_of_mem _ (h.2 w x hx')
+
+theorem BoundsInLog.addLowerLog {s : State} {v : Nat} {t : SType} (h : BoundsInLog s) :
+    BoundsInLog ((s.addLower v t).logAll [(t, .var v)]) := by
+  refine ⟨fun w x hx => ?_, fun w x hx => ?_⟩
+  · have hx' : x ∈ ((s.addLower v t).bounds w).upper := hx
+    rw [upper_addLower] at hx'
+    exact List.mem_cons_of_mem _ (h.1 w x hx')
+  · rcases mem_lower_addLower_inv hx with ⟨rfl, rfl⟩ | hx
+    · exact List.mem_cons_self ..
+    · exact List.mem_cons_of_mem _ (h.2 w x hx)
+
+theorem BoundsInLog.addLowersLog {s : State} {v : Nat} {ts : List SType}
+    {ps : List (SType × SType)} (h : BoundsInLog s) (hps : ∀ t ∈ ts, (t, SType.var v) ∈ ps) :
+    BoundsInLog ((s.addLowers v ts).logAll ps) := by
+  refine ⟨fun w x hx => ?_, fun w x hx => ?_⟩
+  · have hx' : x ∈ ((s.addLowers v ts).bounds w).upper := hx
+    rw [upper_addLowers] at hx'
+    exact List.mem_append_right _ (h.1 w x hx')
+  · have hx' : x ∈ ((s.addLowers v ts).bounds w).lower := hx
+    by_cases e : w = v
+    · subst e
+      simp only [State.addLowers, ite_true, List.mem_append] at hx'
+      rcases hx' with hx' | hx'
+      · exact List.mem_append_left _ (hps x hx')
+      · exact List.mem_append_right _ (h.2 w x hx')
+    · rw [bounds_addLowers_ne e] at hx'
+      exact List.mem_append_right _ (h.2 w x hx')
+
+theorem BoundsInLog.addUppersLog {s : State} {v : Nat} {ts : List SType}
+    {ps : List (SType × SType)} (h : BoundsInLog s) (hps : ∀ t ∈ ts, (SType.var v, t) ∈ ps) :
+    BoundsInLog ((s.addUppers v ts).logAll ps) := by
+  refine ⟨fun w x hx => ?_, fun w x hx => ?_⟩
+  · have hx' : x ∈ ((s.addUppers v ts).bounds w).upper := hx
+    by_cases e : w = v
+    · subst e
+      simp only [State.addUppers, ite_true, List.mem_append] at hx'
+      rcases hx' with hx' | hx'
+      · exact List.mem_append_left _ (hps x hx')
+      · exact List.mem_append_right _ (h.1 w x hx')
+    · rw [bounds_addUppers_ne e] at hx'
+      exact List.mem_append_right _ (h.1 w x hx')
+  · have hx' : x ∈ ((s.addUppers v ts).bounds w).lower := hx
+    rw [lower_addUppers] at hx'
+    exact List.mem_append_right _ (h.2 w x hx')
+
+mutual
+/-- Every bound an extrusion installs is logged, when it is installed. -/
+theorem Extrude.inLog : Extrude s c pol lvl t t' s' c' → BoundsInLog s → BoundsInLog s'
+  | .low _, h => h
+  | .arrow _ h₁ h₂, h => (h₂.inLog (h₁.inLog h)).logAll
+  | .record _ h₁ h₂, h => (h₂.inLog (h₁.inLog h)).logAll
+  | .sig _ h', h => (h'.inLog h).logAll
+  | .varCopied _ _, h => h.logAll
+  | .varPos (s := s) _ _ _ _ h', h =>
+    (h'.inLog (BoundsInLog.addUpperLog (s := s.fresh) h.fresh)).addLowersLog
+      fun t ht => List.mem_append_left _ (List.mem_map.mpr ⟨t, ht, rfl⟩)
+  | .varNeg (s := s) _ _ _ _ h', h =>
+    (h'.inLog (BoundsInLog.addLowerLog (s := s.fresh) h.fresh)).addUppersLog
+      fun t ht => List.mem_append_left _ (List.mem_map.mpr ⟨t, ht, rfl⟩)
+
+theorem ExtrudeFields.inLog : ExtrudeFields s c pol lvl fs fs' s' c' → BoundsInLog s →
+    BoundsInLog s'
+  | .nil, h => h
+  | .opt h₁ h₂, h => h₂.inLog (h₁.inLog h)
+  | .cons _ h₁ h₂, h => h₂.inLog (h₁.inLog h)
+
+theorem ExtrudeParams.inLog : ExtrudeParams s c pol lvl Q Q' s' c' → BoundsInLog s →
+    BoundsInLog s'
+  | .nil, h => h
+  | .cons h₁ h₂, h => h₂.inLog (h₁.inLog h)
+
+theorem ExtrudeEach.inLog : ExtrudeEach s c pol lvl ts ts' s' c' → BoundsInLog s →
+    BoundsInLog s'
+  | .nil, h => h
+  | .cons h₁ h₂, h => h₂.inLog (h₁.inLog h)
 end
 
 end BoltCore.Alg

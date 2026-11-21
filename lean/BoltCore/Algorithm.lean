@@ -356,7 +356,7 @@ first two, `lib/cert.ml` adds the others):
 * for a signature, the argument records of the lower one below the upper
   one and below its argument records, and their lists of positional
   arguments, suffix by suffix (`sigPairs`, the OCaml `note_sig`);
-* each bound of a copy, as a constraint;
+* each bound that is installed, as a constraint, when it is installed;
 * for a positive copy `w` of `v`, each lower bound of `v` below `w`, which
   consistency at `v` asks for; dually for a negative copy. -/
 
@@ -417,19 +417,19 @@ inductive Extrude : State → Copies → Bool → Nat → SType → SType → St
   `v` again), and gets their copies as its lower bounds. -/
   | varPos : lvl < s.level v → c.lookup (v, true) = none →
       s.level s.next = lvl → s.kind s.next = s.kind v →
-      ExtrudeEach (s.fresh.addUpper v (.var s.next)) (((v, true), s.next) :: c) true lvl
-        (s.bounds v).lower ls s₁ c₁ →
+      ExtrudeEach ((s.fresh.addUpper v (.var s.next)).logAll [(.var v, .var s.next)])
+        (((v, true), s.next) :: c) true lvl (s.bounds v).lower ls s₁ c₁ →
       Extrude s c true lvl (.var v) (.var s.next)
-        ((s₁.addLowers s.next ls).logAll ((.var v, .var s.next) ::
-          (ls.map (·, .var s.next) ++ (s.bounds v).lower.map (·, .var s.next)))) c₁
+        ((s₁.addLowers s.next ls).logAll
+          (ls.map (·, .var s.next) ++ (s.bounds v).lower.map (·, .var s.next))) c₁
   /-- A negative occurrence, dually. -/
   | varNeg : lvl < s.level v → c.lookup (v, false) = none →
       s.level s.next = lvl → s.kind s.next = s.kind v →
-      ExtrudeEach (s.fresh.addLower v (.var s.next)) (((v, false), s.next) :: c) false lvl
-        (s.bounds v).upper us s₁ c₁ →
+      ExtrudeEach ((s.fresh.addLower v (.var s.next)).logAll [(.var s.next, .var v)])
+        (((v, false), s.next) :: c) false lvl (s.bounds v).upper us s₁ c₁ →
       Extrude s c false lvl (.var v) (.var s.next)
-        ((s₁.addUppers s.next us).logAll ((.var s.next, .var v) ::
-          (us.map (.var s.next, ·) ++ (s.bounds v).upper.map (.var s.next, ·)))) c₁
+        ((s₁.addUppers s.next us).logAll
+          (us.map (.var s.next, ·) ++ (s.bounds v).upper.map (.var s.next, ·))) c₁
 
 /-- The fields of a record: an optional field is not a type, only the type
 in it is extruded. -/

@@ -1,4 +1,4 @@
-import BoltCore.Extrusion
+import BoltCore.Locality
 
 /-!
 # Justification and consistency
@@ -356,5 +356,12 @@ theorem ConsExcept.addLower (h : ConsExcept s P) :
   rcases mem_lower_addLower_inv hl with ⟨rfl, rfl⟩ | hl
   · exact .inr (List.mem_append_left _ (List.mem_map.mpr ⟨u, hu, rfl⟩))
   · exact (h w l u hl hu).imp (Logged.mono .addLower) (List.mem_append_right _)
+
+/-! ## Bounds are logged -/
+
+/-- Every bound was installed by a logged constraint. -/
+def BoundsInLog (s : State) : Prop :=
+  (∀ v x, x ∈ (s.bounds v).upper → (.var v, x) ∈ s.log) ∧
+  (∀ v x, x ∈ (s.bounds v).lower → (x, .var v) ∈ s.log)
 
 end BoltCore.Alg

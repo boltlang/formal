@@ -52,11 +52,6 @@ theorem Clo.nonvar : Clo σ n u → ∀ w, u ≠ .var w
 
 /-! ## Two more invariants -/
 
-/-- Every bound was installed by a logged constraint. -/
-def BoundsInLog (s : State) : Prop :=
-  (∀ v x, x ∈ (s.bounds v).upper → (.var v, x) ∈ s.log) ∧
-  (∀ v x, x ∈ (s.bounds v).lower → (x, .var v) ∈ s.log)
-
 /-- Lower bounds are never variables (a variable-to-variable constraint
 always installs an upper bound). -/
 def LbNonVar (s : State) : Prop := ∀ v x, x ∈ (s.bounds v).lower → ∀ w, x ≠ .var w
