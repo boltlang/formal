@@ -52,40 +52,32 @@ theorem Clo.nonvar : Clo σ n u → ∀ w, u ≠ .var w
 
 /-! ## Two more invariants -/
 
-/-- Lower bounds are never variables (a variable-to-variable constraint
-always installs an upper bound). -/
-def LbNonVar (s : State) : Prop := ∀ v x, x ∈ (s.bounds v).lower → ∀ w, x ≠ .var w
-
+/-- Every bound was installed by a logged constraint (`BoundsInLog`), as
+an invariant of the algorithm. -/
 structure Inv₂ (s : State) : Prop where
   inLog : BoundsInLog s
-  lbNonVar : LbNonVar s
 
 theorem Inv₂.of_bounds {s s' : State} (h : Inv₂ s) (hb : s'.bounds = s.bounds)
     (hlog : ∀ p, p ∈ s.log → p ∈ s'.log) : Inv₂ s' := by
-  refine ⟨⟨fun v x hx => ?_, fun v x hx => ?_⟩, fun v x hx => ?_⟩
+  refine ⟨⟨fun v x hx => ?_, fun v x hx => ?_⟩⟩
   · rw [hb] at hx; exact hlog _ (h.inLog.1 v x hx)
   · rw [hb] at hx; exact hlog _ (h.inLog.2 v x hx)
-  · rw [hb] at hx; exact h.lbNonVar v x hx
 
 theorem Inv₂.addUpper {s : State} {v : Nat} {b : SType} (h : Inv₂ (s.remember (.var v) b)) :
     Inv₂ ((s.remember (.var v) b).addUpper v b) := by
-  refine ⟨⟨fun w x hx => ?_, fun w x hx => ?_⟩, fun w x hx => ?_⟩
+  refine ⟨⟨fun w x hx => ?_, fun w x hx => ?_⟩⟩
   · rcases mem_upper_addUpper_inv hx with ⟨rfl, rfl⟩ | hx
     · exact List.mem_cons_self ..
     · exact h.inLog.1 w x hx
   · rw [lower_addUpper] at hx; exact h.inLog.2 w x hx
-  · rw [lower_addUpper] at hx; exact h.lbNonVar w x hx
 
-theorem Inv₂.addLower {s : State} {v : Nat} {a : SType} (hnv : ∀ w, a ≠ .var w)
-    (h : Inv₂ (s.remember a (.var v))) : Inv₂ ((s.remember a (.var v)).addLower v a) := by
-  refine ⟨⟨fun w x hx => ?_, fun w x hx => ?_⟩, fun w x hx => ?_⟩
+theorem Inv₂.addLower {s : State} {v : Nat} {a : SType} (h : Inv₂ (s.remember a (.var v))) :
+    Inv₂ ((s.remember a (.var v)).addLower v a) := by
+  refine ⟨⟨fun w x hx => ?_, fun w x hx => ?_⟩⟩
   · rw [upper_addLower] at hx; exact h.inLog.1 w x hx
   · rcases mem_lower_addLower_inv hx with ⟨rfl, rfl⟩ | hx
     · exact List.mem_cons_self ..
     · exact h.inLog.2 w x hx
-  · rcases mem_lower_addLower_inv hx with ⟨rfl, rfl⟩ | hx
-    · exact hnv
-    · exact h.lbNonVar w x hx
 
 theorem Inv₂.remember {s : State} (h : Inv₂ s) : Inv₂ (s.remember a b) :=
   h.of_bounds rfl fun _ hp => List.mem_cons_of_mem _ hp
@@ -99,8 +91,13 @@ theorem Constrain.inv₂ : Constrain s a b s' → Inv₂ s → Inv₂ s'
   | .absRecord _ h₁ h₂, h | .nilRecord _ h₁ h₂, h | .recordNil _ _ h₁ h₂, h =>
     h₂.inv₂ (h₁.inv₂ h.remember)
   | .record _ _ _ h₁ h₂ h₃, h => h₃.inv₂ (h₂.inv₂ (h₁.inv₂ h.remember))
-  | .varL _ _ h', h => h'.inv₂ h.remember.addUpper
-  | .varR _ hnv h', h => h'.inv₂ (h.remember.addLower hnv)
+  | .varL _ _ _ h', h => h'.inv₂ h.remember.addUpper
+  | .varR _ _ _ h', h => h'.inv₂ h.remember.addLower
+  | .extLHit _ _ _ hx _, h | .extRHit _ _ _ hx _, h => ⟨hx.inLog h.remember.inLog⟩
+  | .extLNew _ _ _ hx _ h', h =>
+    h'.inv₂ (Inv₂.addUpper (Inv₂.remember ⟨hx.inLog h.remember.inLog⟩))
+  | .extRNew _ _ _ hx _ h', h =>
+    h'.inv₂ (Inv₂.addLower (Inv₂.remember ⟨hx.inLog h.remember.inLog⟩))
   | .recordSig _ _ _ _ _ h', h | .sigL _ _ h', h => h'.inv₂ h.remember
 
 theorem ConstrainEach.inv₂ : ConstrainEach s ps s' → Inv₂ s → Inv₂ s'
@@ -120,7 +117,7 @@ theorem Expand.inv₂ : Expand s t ms t' s' → Inv₂ s → Inv₂ s'
   | .abs _ h', h | .nil _ h', h => h'.inv₂ h
   | .allAbsent _ _ h', h => h'.inv₂ h
   | .memo _ _ h₁ _ h₂, h => h₂.inv₂ (h₁.inv₂ h)
-  | .fresh _ _ h₁ _ _ h₂, h => h₂.inv₂ ((h₁.inv₂ h).of_bounds rfl fun _ hp => hp)
+  | .fresh _ _ h₁ _ _ _ h₂, h => h₂.inv₂ ((h₁.inv₂ h).of_bounds rfl fun _ hp => hp)
 end
 
 theorem Inv₂.fresh {s : State} (h : Inv₂ s) : Inv₂ s.fresh := h.of_bounds rfl fun _ hp => hp
@@ -157,7 +154,7 @@ theorem TypeParams.inv₂ : TypeParams Γ s ps P Γ' s' → Inv₂ s → Inv₂ 
 end
 
 theorem Inv₂.init {K : Nat → List String} : Inv₂ (State.initK K) :=
-  ⟨⟨(fun _ _ h => nomatch h), (fun _ _ h => nomatch h)⟩, (fun _ _ h => nomatch h)⟩
+  ⟨⟨(fun _ _ h => nomatch h), (fun _ _ h => nomatch h)⟩⟩
 
 /-! ## Closing chains of variable bounds -/
 

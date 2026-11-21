@@ -333,20 +333,40 @@ theorem Constrain.nac : Constrain s a b s' → Inv₂ s → a.NAC → b.NAC → 
     have n₁ := h₁.nac i.remember (v₀.1.common v₁.1) (h.remember ha hb)
     have n₂ := h₂.nac i₁ v₀.2 v₁.1.missing n₁
     exact h₃.nac i₂ (restRow_NAC v₀.1.missing n₂.2) v₁.2 n₂.1
-  | .varL _ _ h', i, _, hb, h =>
+  | .varL _ _ _ h', i, _, hb, h =>
     h'.nac i.remember.addUpper
       (fun p hp => by
         simp only [List.mem_map] at hp
         obtain ⟨x, hx, rfl⟩ := hp
         exact ⟨h.lower i hx, hb⟩)
       (h.remember trivial hb)
-  | .varR _ hnv h', i, ha, _, h =>
-    h'.nac (i.remember.addLower hnv)
+  | .varR _ _ _ h', i, ha, _, h =>
+    h'.nac i.remember.addLower
       (fun p hp => by
         simp only [List.mem_map] at hp
         obtain ⟨x, hx, rfl⟩ := hp
         exact ⟨ha, h.upper i hx⟩)
       (h.remember ha trivial)
+  | .extLHit _ _ _ hx _, i, ha, hb, h => (hx.nac i.remember.inLog hb (h.remember ha hb)).1
+  | .extLNew _ _ _ hx _ h', i, ha, hb, h => by
+    have r := hx.nac i.remember.inLog hb (h.remember ha hb)
+    have i₁ : Inv₂ _ := ⟨hx.inLog i.remember.inLog⟩
+    exact h'.nac i₁.remember.addUpper
+      (fun p hp => by
+        simp only [List.mem_map] at hp
+        obtain ⟨x, hx', rfl⟩ := hp
+        exact ⟨r.1.lower i₁ hx', r.2⟩)
+      (r.1.remember trivial r.2)
+  | .extRHit _ _ _ hx _, i, ha, hb, h => (hx.nac i.remember.inLog ha (h.remember ha hb)).1
+  | .extRNew _ _ _ hx _ h', i, ha, hb, h => by
+    have r := hx.nac i.remember.inLog ha (h.remember ha hb)
+    have i₁ : Inv₂ _ := ⟨hx.inLog i.remember.inLog⟩
+    exact h'.nac i₁.remember.addLower
+      (fun p hp => by
+        simp only [List.mem_map] at hp
+        obtain ⟨x, hx', rfl⟩ := hp
+        exact ⟨r.2, r.1.upper i₁ hx'⟩)
+      (r.1.remember r.2 trivial)
   | .recordSig (k := k) _ _ _ _ _ h', i, ha, hb, h =>
     h'.nac i.remember ha (SParams.NAC.domain hb k) (h.remember ha hb)
   | .sigL _ _ h', i, ha, hb, h =>
@@ -384,7 +404,7 @@ theorem Expand.nac : Expand s t ms t' s' → Inv₂ s → t.NAC → ms.NAC → L
   | .allAbsent _ _ h', i, ht, hms, h => ⟨h'.nac i hms.absentIn.absPairs h, ht⟩
   | .memo _ _ h₁ _ h₂, i, _, hms, h =>
     ⟨h₂.nac (h₁.inv₂ i) trivial ⟨hms.presentIn, trivial⟩ (h₁.nac i hms.absentIn.absPairs h), trivial⟩
-  | .fresh _ _ h₁ _ _ h₂, i, _, hms, h =>
+  | .fresh _ _ h₁ _ _ _ h₂, i, _, hms, h =>
     ⟨h₂.nac ((h₁.inv₂ i).of_bounds rfl fun _ hp => hp) trivial ⟨hms.presentIn, trivial⟩
       (h₁.nac i hms.absentIn.absPairs h), trivial⟩
 end
@@ -486,15 +506,6 @@ theorem TypeParams.nac : TypeParams Γ s ps P Γ' s' → CtxNAC Γ → Inv₂ s 
 end
 
 theorem LogNAC.init {K : Nat → List String} : LogNAC (State.initK K) := fun _ h => nomatch h
-
-theorem SCtx.lookup_mem {Γ : SCtx} (h : Γ.lookup x = some st) : (x, st) ∈ Γ := by
-  simp only [SCtx.lookup, Option.map_eq_some_iff] at h
-  obtain ⟨p, hp, rfl⟩ := h
-  have hx := List.find?_some hp
-  simp at hx
-  have := List.mem_of_find?_eq_some hp
-  subst hx
-  exact this
 
 theorem builtins_NAC : CtxNAC builtins := by
   intro x st h

@@ -26,7 +26,7 @@ open State
 /-- A top-level `constrain` call accepts its constraint (no invariant needed). -/
 theorem ConstrainTop.logged {s s' : State} (h : ConstrainTop s a b s') : Logged s' a b := by
   obtain ⟨s₁, hc, rfl⟩ := h
-  exact (hc.logged ⟨(fun _ h => nomatch h), (fun _ _ h => nomatch h)⟩).2
+  exact hc.accepts fun _ h => nomatch h
 
 theorem ConstrainTop.log_grows {s s' : State} (h : ConstrainTop s a b s') :
     ∀ p, p ∈ s.log → p ∈ s'.log := by

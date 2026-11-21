@@ -323,4 +323,602 @@ theorem ExtrudeParams.scoped (h : ExtrudeParams s c pol lvl P P' s' c') (hs : Sc
     (fun e he => Nat.lt_of_lt_of_le (hc e he) hn) (hs.closed hn)
   exact ⟨hs.of_local hn r.2.2, r.1, r.2.1⟩
 
+/-! ## What constraining keeps -/
+
+/-- The levels and kinds are the same, and no variable was freed. -/
+structure Keeps (s s' : State) : Prop where
+  level : s'.level = s.level
+  kind : s'.kind = s.kind
+  next : s.next ≤ s'.next
+
+namespace Keeps
+
+theorem refl : Keeps s s := ⟨rfl, rfl, Nat.le_refl _⟩
+
+theorem trans (h₁ : Keeps s₁ s₂) (h₂ : Keeps s₂ s₃) : Keeps s₁ s₃ :=
+  ⟨h₂.level.trans h₁.level, h₂.kind.trans h₁.kind, Nat.le_trans h₁.next h₂.next⟩
+
+theorem of_same (h : Same s s') : Keeps s s' := ⟨h.level, h.kind, h.next⟩
+
+theorem remember : Keeps s (s.remember a b) := ⟨rfl, rfl, Nat.le_refl _⟩
+theorem fresh : Keeps s s.fresh := ⟨rfl, rfl, Nat.le_succ _⟩
+theorem addUpper : Keeps s (s.addUpper v t) := ⟨rfl, rfl, Nat.le_refl _⟩
+theorem addLower : Keeps s (s.addLower v t) := ⟨rfl, rfl, Nat.le_refl _⟩
+
+end Keeps
+
+mutual
+theorem Constrain.keeps : Constrain s a b s' → Keeps s s'
+  | .cached _ => .refl
+  | .refl => .refl
+  | .arrow _ h₁ h₂ => Keeps.remember.trans (h₁.keeps.trans h₂.keeps)
+  | .absR _ => .remember
+  | .absRecord _ h₁ h₂ => Keeps.remember.trans (h₁.keeps.trans h₂.keeps)
+  | .nilRecord _ h₁ h₂ => Keeps.remember.trans (h₁.keeps.trans h₂.keeps)
+  | .recordNil _ _ h₁ h₂ => Keeps.remember.trans (h₁.keeps.trans h₂.keeps)
+  | .record _ _ _ h₁ h₂ h₃ => Keeps.remember.trans (h₁.keeps.trans (h₂.keeps.trans h₃.keeps))
+  | .varL _ _ _ h => (Keeps.remember.trans .addUpper).trans h.keeps
+  | .varR _ _ _ h => (Keeps.remember.trans .addLower).trans h.keeps
+  | .extLHit _ _ _ hx _ => Keeps.remember.trans (.of_same hx.same)
+  | .extLNew _ _ _ hx _ h =>
+    (Keeps.remember.trans (.of_same hx.same)).trans ((Keeps.remember.trans .addUpper).trans h.keeps)
+  | .extRHit _ _ _ hx _ => Keeps.remember.trans (.of_same hx.same)
+  | .extRNew _ _ _ hx _ h =>
+    (Keeps.remember.trans (.of_same hx.same)).trans ((Keeps.remember.trans .addLower).trans h.keeps)
+  | .recordSig _ _ _ _ _ h => Keeps.remember.trans h.keeps
+  | .sigL _ _ h => Keeps.remember.trans h.keeps
+
+theorem ConstrainEach.keeps : ConstrainEach s ps s' → Keeps s s'
+  | .nil => .refl
+  | .cons h₁ h₂ => h₁.keeps.trans h₂.keeps
+
+theorem ConstrainField.keeps : ConstrainField s a b s' → Keeps s s'
+  | .toAbs | .misMis | .misOpt => .refl
+  | .optOpt _ h | .preOpt _ h | .pre _ _ h => h.keeps
+
+theorem FieldsEach.keeps : FieldsEach s ps s' → Keeps s s'
+  | .nil => .refl
+  | .cons h₁ h₂ => h₁.keeps.trans h₂.keeps
+
+theorem Expand.keeps : Expand s t ms t' s' → Keeps s s'
+  | .none => .refl
+  | .abs _ h | .nil _ h => h.keeps
+  | .allAbsent _ _ h => h.keeps
+  | .memo _ _ h₁ _ h₂ => h₁.keeps.trans h₂.keeps
+  | .fresh _ _ h₁ _ _ _ h₂ =>
+    h₁.keeps.trans
+      ⟨h₂.keeps.level, h₂.keeps.kind, Nat.le_trans (Nat.le_succ _) h₂.keeps.next⟩
+end
+
+/-! ## The variables of the types constraining builds -/
+
+section
+variable {X : Nat → Prop}
+
+theorem SType.in_abs : SType.abs.In X := fun _ h => by simp [SType.vars] at h
+theorem SType.in_missing : SType.missing.In X := fun _ h => by simp [SType.vars] at h
+theorem SType.in_nil : SType.nil.In X := fun _ h => by simp [SType.vars] at h
+
+theorem SFields.In.append : ∀ {fs gs : SFields}, fs.In X → gs.In X → (fs.append gs).In X
+  | .nil, _, _, h => h
+  | .cons _ _ _, _, h₁, h₂ =>
+    have h := SFields.in_cons.mp h₁
+    SFields.in_cons.mpr ⟨h.1, SFields.In.append h.2 h₂⟩
+
+theorem rowView_in : ∀ t : SType, t.In X → (rowView t).1.In X ∧ (rowView t).2.In X
+  | .record fs t, h => by
+    have h' := SType.in_record.mp h
+    have ih := rowView_in t h'.2
+    simp only [rowView]
+    exact ⟨h'.1.append ih.1, ih.2⟩
+  | .var _, h | .prim _, h | .abs, h | .missing, h | .nil, h | .arrow _ _, h | .opt _, h
+  | .sig _, h => ⟨SFields.in_nil, h⟩
+
+theorem SFields.In.lookup {l : String} {f : SType} : ∀ {fs : SFields}, fs.In X →
+    fs.lookup l = some f → f.In X
+  | .nil, _, h => by simp [SFields.lookup] at h
+  | .cons n g rest, hfs, h => by
+    have h' := SFields.in_cons.mp hfs
+    simp only [SFields.lookup] at h
+    split at h
+    · cases h; exact h'.1
+    · exact h'.2.lookup h
+
+theorem SFields.In.common {fs₀ : SFields} (h₀ : fs₀.In X) : ∀ {fs₁ : SFields}, fs₁.In X →
+    ∀ p ∈ fs₀.common fs₁, p.1.In X ∧ p.2.In X
+  | .nil, _, _, h => nomatch h
+  | .cons n g rest, hfs, p, hp => by
+    have h' := SFields.in_cons.mp hfs
+    simp only [SFields.common] at hp
+    split at hp
+    · next f hf =>
+      simp only [List.mem_cons] at hp
+      rcases hp with rfl | hp
+      · exact ⟨h₀.lookup hf, h'.1⟩
+      · exact h₀.common h'.2 p hp
+    · exact h₀.common h'.2 p hp
+
+theorem SFields.In.missing {fs₀ : SFields} : ∀ {fs₁ : SFields}, fs₁.In X → (fs₀.missing fs₁).In X
+  | .nil, _ => SFields.in_nil
+  | .cons n g rest, hfs => by
+    have h' := SFields.in_cons.mp hfs
+    simp only [SFields.missing]
+    split
+    · exact h'.2.missing
+    · exact SFields.in_cons.mpr ⟨h'.1, h'.2.missing⟩
+
+theorem SFields.In.absPairs : ∀ {fs : SFields}, fs.In X →
+    ∀ p ∈ fs.absPairs, p.1.In X ∧ p.2.In X
+  | .nil, _, _, h => nomatch h
+  | .cons _ f rest, hfs, p, hp => by
+    have h' := SFields.in_cons.mp hfs
+    simp only [SFields.absPairs, List.mem_cons] at hp
+    rcases hp with rfl | hp
+    · exact ⟨SType.in_abs, h'.1⟩
+    · exact h'.2.absPairs p hp
+
+theorem SFields.In.misPairs : ∀ {fs : SFields}, fs.In X →
+    ∀ p ∈ fs.misPairs, p.1.In X ∧ p.2.In X
+  | .nil, _, _, h => nomatch h
+  | .cons _ f rest, hfs, p, hp => by
+    have h' := SFields.in_cons.mp hfs
+    simp only [SFields.misPairs, List.mem_cons] at hp
+    rcases hp with rfl | hp
+    · exact ⟨SType.in_missing, h'.1⟩
+    · exact h'.2.misPairs p hp
+
+theorem SFields.In.toMisPairs : ∀ {fs : SFields}, fs.In X →
+    ∀ p ∈ fs.toMisPairs, p.1.In X ∧ p.2.In X
+  | .nil, _, _, h => nomatch h
+  | .cons _ f rest, hfs, p, hp => by
+    have h' := SFields.in_cons.mp hfs
+    simp only [SFields.toMisPairs, List.mem_cons] at hp
+    rcases hp with rfl | hp
+    · exact ⟨h'.1, SType.in_missing⟩
+    · exact h'.2.toMisPairs p hp
+
+theorem SFields.In.absentIn {K : List String} : ∀ {fs : SFields}, fs.In X → (fs.absentIn K).In X
+  | .nil, _ => SFields.in_nil
+  | .cons n _ _, hfs => by
+    have h' := SFields.in_cons.mp hfs
+    simp only [SFields.absentIn]; split
+    · exact SFields.in_cons.mpr ⟨h'.1, h'.2.absentIn⟩
+    · exact h'.2.absentIn
+
+theorem SFields.In.presentIn {K : List String} : ∀ {fs : SFields}, fs.In X → (fs.presentIn K).In X
+  | .nil, _ => SFields.in_nil
+  | .cons n _ _, hfs => by
+    have h' := SFields.in_cons.mp hfs
+    simp only [SFields.presentIn]; split
+    · exact h'.2.presentIn
+    · exact SFields.in_cons.mpr ⟨h'.1, h'.2.presentIn⟩
+
+theorem SFields.In.absOf : ∀ {fs : SFields}, (fs.absOf).In X
+  | .nil => SFields.in_nil
+  | .cons _ _ _ => SFields.in_cons.mpr ⟨SType.in_abs, SFields.In.absOf⟩
+
+theorem restRow_in {ex : SFields} {t : SType} (he : ex.In X) (ht : t.In X) : (restRow ex t).In X := by
+  cases ex with
+  | nil => exact ht
+  | cons => exact SType.in_record.mpr ⟨he, ht⟩
+
+theorem SParams.In.mem : ∀ {P : SParams}, P.In X → ∀ p ∈ P.toList, p.ty.In X
+  | .nil, _, _, h => nomatch h
+  | .cons _ _ _ _ _, hP, p, hp => by
+    have h' := SParams.in_cons.mp hP
+    rcases List.mem_cons.mp hp with rfl | hp
+    · exact h'.1
+    · exact h'.2.mem p hp
+
+theorem SType.list_in : ∀ {τs : List SType}, (∀ τ ∈ τs, τ.In X) → (SType.list τs).In X
+  | [], _ => SType.in_record.mpr ⟨SFields.in_nil, SType.in_nil⟩
+  | τ :: _, h =>
+    SType.in_record.mpr ⟨SFields.in_cons.mpr ⟨h τ (List.mem_cons_self ..),
+      SFields.in_cons.mpr ⟨SType.list_in fun σ hσ => h σ (List.mem_cons_of_mem _ hσ),
+        SFields.in_nil⟩⟩, SType.in_nil⟩
+
+theorem SFields.ofParams_in : ∀ {ps : List (Param SType)}, (∀ p ∈ ps, p.ty.In X) →
+    (SFields.ofParams ps).In X
+  | [], _ => SFields.in_nil
+  | p :: _, h => by
+    refine SFields.in_cons.mpr ⟨?_, SFields.ofParams_in fun q hq => h q (List.mem_cons_of_mem _ hq)⟩
+    have := h p (List.mem_cons_self ..)
+    cases ho : p.opt
+    · simpa using this
+    · simpa using SType.in_opt.mpr this
+
+/-- The variables of an argument record are those of the signature. -/
+theorem SParams.In.domain {P : SParams} (h : P.In X) (k : Nat) : (P.domain k).In X :=
+  SType.in_record.mpr ⟨SFields.in_cons.mpr ⟨SType.list_in fun _ hτ => by
+      obtain ⟨p, hp, rfl⟩ := Param.mem_pos hτ
+      exact h.mem p hp,
+    SFields.ofParams_in fun p hp => h.mem p (Param.mem_named hp)⟩, SType.in_nil⟩
+
+/-! ## Locality of constraining -/
+
+/-- An expansion variable of a row variable of `X` is in `X`. -/
+def ExpsIn (X : Nat → Prop) (s : State) : Prop := ∀ v L r, ((v, L), r) ∈ s.exps → X v → X r
+
+/-- The expansion variables added between two states are in `X`. -/
+def ExpsNew (X : Nat → Prop) (s s' : State) : Prop := ∀ e ∈ s'.exps, e ∈ s.exps ∨ X e.2
+
+theorem ExpsNew.refl {s : State} : ExpsNew X s s := fun _ h => .inl h
+
+theorem ExpsNew.trans {s₁ s₂ s₃ : State} (h₁ : ExpsNew X s₁ s₂) (h₂ : ExpsNew X s₂ s₃) :
+    ExpsNew X s₁ s₃ := fun e he => (h₂ e he).elim (h₁ e) .inr
+
+theorem ExpsNew.of_eq {s s' : State} (h : s'.exps = s.exps) : ExpsNew X s s' :=
+  fun _ he => .inl (h ▸ he)
+
+theorem ExpsNew.addExp {s : State} {k : Nat × List String} {r n : Nat} (hr : X r) :
+    ExpsNew X s { s with next := n, exps := (k, r) :: s.exps } :=
+  fun _ he => (List.mem_cons.mp he).elim (fun e' => .inr (e' ▸ hr)) .inl
+
+theorem ExpsIn.of_new {s s' : State} (h : ExpsIn X s) (hn : ExpsNew X s s') : ExpsIn X s' :=
+  fun v L r hm hv => (hn _ hm).elim (fun hm' => h v L r hm' hv) id
+
+theorem Local.addUpper {s : State} {v : Nat} {t : SType} (hx : XClosed X s) (hv : X v)
+    (ht : t.In X) : Local X s (s.addUpper v t) :=
+  ⟨hx.addUpper ht, fun _ hw => bounds_addUpper_ne fun e => hw (e ▸ hv)⟩
+
+theorem Local.addLower {s : State} {v : Nat} {t : SType} (hx : XClosed X s) (hv : X v)
+    (ht : t.In X) : Local X s (s.addLower v t) :=
+  ⟨hx.addLower ht, fun _ hw => bounds_addLower_ne fun e => hw (e ▸ hv)⟩
+
+/-- Remembering a constraint does not change the bounds. -/
+theorem Local.of_remember {s s' : State} {a b : SType} (h : Local X (s.remember a b) s') :
+    Local X s s' := ⟨h.closed, h.frame⟩
+
+theorem ExpsNew.of_remember {s s' : State} {a b : SType} (h : ExpsNew X (s.remember a b) s') :
+    ExpsNew X s s' := h
+
+mutual
+/-- **Locality of constraining.** -/
+theorem Constrain.local : Constrain s a b s' → Alloc X s s' → a.In X → b.In X → XClosed X s →
+    ExpsIn X s → Local X s s' ∧ ExpsNew X s s'
+  | .cached _, _, _, _, hx, _ => ⟨.refl hx, .refl⟩
+  | .refl, _, _, _, hx, _ => ⟨.refl hx, .refl⟩
+  | .arrow _ h₁ h₂, hal, ha, hb, hx, he => by
+    have ha' := SType.in_arrow.mp ha
+    have hb' := SType.in_arrow.mp hb
+    have r₁ := h₁.local (hal.sub (Nat.le_refl _) h₂.keeps.next) hb'.1 ha'.1 hx he
+    have r₂ := h₂.local (hal.sub h₁.keeps.next (Nat.le_refl _)) ha'.2 hb'.2 r₁.1.closed
+      (he.of_new r₁.2)
+    exact ⟨Local.of_remember (r₁.1.trans r₂.1), r₁.2.trans r₂.2⟩
+  | .absR _, _, _, _, hx, _ => ⟨⟨hx, fun _ _ => rfl⟩, .refl⟩
+  | .absRecord _ h₁ h₂, hal, _, hb, hx, he => by
+    have hb' := SType.in_record.mp hb
+    have r₁ := h₁.local (hal.sub (Nat.le_refl _) h₂.keeps.next) hb'.1.absPairs hx he
+    have r₂ := h₂.local (hal.sub h₁.keeps.next (Nat.le_refl _)) SType.in_abs hb'.2 r₁.1.closed
+      (he.of_new r₁.2)
+    exact ⟨Local.of_remember (r₁.1.trans r₂.1), r₁.2.trans r₂.2⟩
+  | .nilRecord _ h₁ h₂, hal, _, hb, hx, he => by
+    have hb' := SType.in_record.mp hb
+    have r₁ := h₁.local (hal.sub (Nat.le_refl _) h₂.keeps.next) hb'.1.misPairs hx he
+    have r₂ := h₂.local (hal.sub h₁.keeps.next (Nat.le_refl _)) SType.in_nil hb'.2 r₁.1.closed
+      (he.of_new r₁.2)
+    exact ⟨Local.of_remember (r₁.1.trans r₂.1), r₁.2.trans r₂.2⟩
+  | .recordNil _ e₀ h₁ h₂, hal, ha, _, hx, he => by
+    have hv := rowView_in _ ha
+    rw [e₀] at hv
+    have r₁ := h₁.local (hal.sub (Nat.le_refl _) h₂.keeps.next) hv.1.toMisPairs hx he
+    have r₂ := h₂.local (hal.sub h₁.keeps.next (Nat.le_refl _)) hv.2 SType.in_nil r₁.1.closed
+      (he.of_new r₁.2)
+    exact ⟨Local.of_remember (r₁.1.trans r₂.1), r₁.2.trans r₂.2⟩
+  | .record _ e₀ e₁ h₁ h₂ h₃, hal, ha, hb, hx, he => by
+    have v₀ := rowView_in _ ha
+    have v₁ := rowView_in _ hb
+    rw [e₀] at v₀
+    rw [e₁] at v₁
+    have r₁ := h₁.local (hal.sub (Nat.le_refl _) (Nat.le_trans h₂.keeps.next h₃.keeps.next))
+      (v₀.1.common v₁.1) hx he
+    have r₂ := h₂.local (hal.sub h₁.keeps.next h₃.keeps.next) v₀.2 v₁.1.missing r₁.1.closed
+      (he.of_new r₁.2)
+    have r₃ := h₃.local (hal.sub (Nat.le_trans h₁.keeps.next h₂.keeps.next) (Nat.le_refl _))
+      (restRow_in v₀.1.missing r₂.1) v₁.2 r₂.2.1.closed (he.of_new (r₁.2.trans r₂.2.2))
+    exact ⟨Local.of_remember (r₁.1.trans (r₂.2.1.trans r₃.1)), r₁.2.trans (r₂.2.2.trans r₃.2)⟩
+  | .varL (s := s) (v := v) (b := b) _ _ _ h, hal, ha, hb, hx, he => by
+    have hv : X v := SType.in_var.mp ha
+    have l₀ := Local.of_remember (Local.addUpper (s := s.remember (.var v) b) hx hv hb)
+    have r := h.local hal (fun p hp => by
+      obtain ⟨l, hl, rfl⟩ := List.mem_map.mp hp
+      exact ⟨hx v hv l (.inr hl), hb⟩) l₀.closed he
+    exact ⟨l₀.trans r.1, r.2⟩
+  | .varR (s := s) (v := v) (a := a) _ _ _ h, hal, ha, hb, hx, he => by
+    have hv : X v := SType.in_var.mp hb
+    have l₀ := Local.of_remember (Local.addLower (s := s.remember a (.var v)) hx hv ha)
+    have r := h.local hal (fun p hp => by
+      obtain ⟨u, hu, rfl⟩ := List.mem_map.mp hp
+      exact ⟨ha, hx v hv u (.inl hu)⟩) l₀.closed he
+    exact ⟨l₀.trans r.1, r.2⟩
+  | .extLHit _ _ _ hx' _, hal, _, hb, hx, _ => by
+    have r := hx'.local hal hb (fun _ h => nomatch h) hx
+    exact ⟨Local.of_remember r.2.2, .of_eq hx'.same.exps⟩
+  | .extLNew (s₁ := s₁) (v := v) (b' := b') _ _ _ hx' _ h, hal, ha, hb, hx, he => by
+    have hv : X v := SType.in_var.mp ha
+    have r := hx'.local (hal.sub (Nat.le_refl _) h.keeps.next) hb (fun _ h => nomatch h) hx
+    have l₀ := Local.of_remember
+      (Local.addUpper (s := s₁.remember (.var v) b') r.2.2.closed hv r.1)
+    have hn : ExpsNew X s s₁ := .of_eq hx'.same.exps
+    have r' := h.local (hal.sub hx'.same.next (Nat.le_refl _)) (fun p hp => by
+      obtain ⟨l, hl, rfl⟩ := List.mem_map.mp hp
+      exact ⟨r.2.2.closed v hv l (.inr hl), r.1⟩) l₀.closed (he.of_new hn)
+    exact ⟨(Local.of_remember r.2.2).trans (l₀.trans r'.1), hn.trans r'.2⟩
+  | .extRHit _ _ _ hx' _, hal, ha, _, hx, _ => by
+    have r := hx'.local hal ha (fun _ h => nomatch h) hx
+    exact ⟨Local.of_remember r.2.2, .of_eq hx'.same.exps⟩
+  | .extRNew (s₁ := s₁) (v := v) (a' := a') _ _ _ hx' _ h, hal, ha, hb, hx, he => by
+    have hv : X v := SType.in_var.mp hb
+    have r := hx'.local (hal.sub (Nat.le_refl _) h.keeps.next) ha (fun _ h => nomatch h) hx
+    have l₀ := Local.of_remember
+      (Local.addLower (s := s₁.remember a' (.var v)) r.2.2.closed hv r.1)
+    have hn : ExpsNew X s s₁ := .of_eq hx'.same.exps
+    have r' := h.local (hal.sub hx'.same.next (Nat.le_refl _)) (fun p hp => by
+      obtain ⟨u, hu, rfl⟩ := List.mem_map.mp hp
+      exact ⟨r.1, r.2.2.closed v hv u (.inl hu)⟩) l₀.closed (he.of_new hn)
+    exact ⟨(Local.of_remember r.2.2).trans (l₀.trans r'.1), hn.trans r'.2⟩
+  | .recordSig (k := k) _ _ _ _ _ h, hal, ha, hb, hx, he => by
+    have r := h.local hal ha ((SType.in_sig.mp hb).domain k) hx he
+    exact ⟨Local.of_remember r.1, r.2⟩
+  | .sigL _ _ h, hal, ha, hb, hx, he => by
+    have r := h.local hal (fun p hp => by
+      obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hp
+      obtain ⟨k, _, rfl⟩ := List.mem_map.mp hd
+      exact ⟨(SType.in_sig.mp ha).domain k, hb⟩) hx he
+    exact ⟨Local.of_remember r.1, r.2⟩
+
+theorem ConstrainEach.local : ConstrainEach s ps s' → Alloc X s s' →
+    (∀ p ∈ ps, p.1.In X ∧ p.2.In X) → XClosed X s → ExpsIn X s → Local X s s' ∧ ExpsNew X s s'
+  | .nil, _, _, hx, _ => ⟨.refl hx, .refl⟩
+  | .cons h₁ h₂, hal, hp, hx, he => by
+    have p₁ := hp _ (List.mem_cons_self ..)
+    have r₁ := h₁.local (hal.sub (Nat.le_refl _) h₂.keeps.next) p₁.1 p₁.2 hx he
+    have r₂ := h₂.local (hal.sub h₁.keeps.next (Nat.le_refl _))
+      (fun p h => hp p (List.mem_cons_of_mem _ h)) r₁.1.closed (he.of_new r₁.2)
+    exact ⟨r₁.1.trans r₂.1, r₁.2.trans r₂.2⟩
+
+theorem ConstrainField.local : ConstrainField s a b s' → Alloc X s s' → a.In X → b.In X →
+    XClosed X s → ExpsIn X s → Local X s s' ∧ ExpsNew X s s'
+  | .toAbs, _, _, _, hx, _ | .misMis, _, _, _, hx, _ | .misOpt, _, _, _, hx, _ =>
+    ⟨.refl hx, .refl⟩
+  | .optOpt _ h, hal, ha, hb, hx, he =>
+    h.local hal (SType.in_opt.mp ha) (SType.in_opt.mp hb) hx he
+  | .preOpt _ h, hal, ha, hb, hx, he => h.local hal ha (SType.in_opt.mp hb) hx he
+  | .pre _ _ h, hal, ha, hb, hx, he => h.local hal ha hb hx he
+
+theorem FieldsEach.local : FieldsEach s ps s' → Alloc X s s' →
+    (∀ p ∈ ps, p.1.In X ∧ p.2.In X) → XClosed X s → ExpsIn X s → Local X s s' ∧ ExpsNew X s s'
+  | .nil, _, _, hx, _ => ⟨.refl hx, .refl⟩
+  | .cons h₁ h₂, hal, hp, hx, he => by
+    have p₁ := hp _ (List.mem_cons_self ..)
+    have r₁ := h₁.local (hal.sub (Nat.le_refl _) h₂.keeps.next) p₁.1 p₁.2 hx he
+    have r₂ := h₂.local (hal.sub h₁.keeps.next (Nat.le_refl _))
+      (fun p h => hp p (List.mem_cons_of_mem _ h)) r₁.1.closed (he.of_new r₁.2)
+    exact ⟨r₁.1.trans r₂.1, r₁.2.trans r₂.2⟩
+
+theorem Expand.local : Expand s t ms t' s' → Alloc X s s' → t.In X → ms.In X → XClosed X s →
+    ExpsIn X s → t'.In X ∧ Local X s s' ∧ ExpsNew X s s'
+  | .none, _, ht, _, hx, _ => ⟨ht, .refl hx, .refl⟩
+  | .abs _ h, hal, ht, hm, hx, he => ⟨ht, h.local hal hm.absPairs hx he⟩
+  | .nil _ h, hal, ht, hm, hx, he => ⟨ht, h.local hal hm.misPairs hx he⟩
+  | .allAbsent _ _ h, hal, ht, hm, hx, he => ⟨ht, h.local hal hm.absentIn.absPairs hx he⟩
+  | .memo (v := v) _ _ h₁ hl h₂, hal, ht, hm, hx, he => by
+    have hv : X v := SType.in_var.mp ht
+    have r₁ := h₁.local (hal.sub (Nat.le_refl _) h₂.keeps.next) hm.absentIn.absPairs hx he
+    have he₁ := he.of_new r₁.2
+    have hr := he₁ _ _ _ (lookup_mem hl) hv
+    have r₂ := h₂.local (hal.sub h₁.keeps.next (Nat.le_refl _)) ht
+      (SType.in_record.mpr ⟨hm.presentIn, SType.in_var.mpr hr⟩) r₁.1.closed he₁
+    exact ⟨SType.in_var.mpr hr, r₁.1.trans r₂.1, r₁.2.trans r₂.2⟩
+  | .fresh (s := s) (v := v) (s₁ := s₁) (ms := ms) _ _ h₁ _ _ _ h₂, hal, ht, hm, hx, he => by
+    have r₁ := h₁.local (hal.sub (Nat.le_refl _) (Nat.le_trans (Nat.le_succ _) h₂.keeps.next))
+      hm.absentIn.absPairs hx he
+    have hr : X s₁.next :=
+      hal _ h₁.keeps.next (Nat.lt_of_lt_of_le (Nat.lt_succ_self _) h₂.keeps.next)
+    have hn := ExpsNew.addExp (s := s₁) (k := (v, (ms.presentIn (s.kind v)).labels))
+      (n := s₁.next + 1) hr
+    have r₂ := h₂.local (fun w hw hw' => hal w (Nat.le_trans h₁.keeps.next (Nat.le_of_succ_le hw)) hw')
+      ht (SType.in_record.mpr ⟨hm.presentIn, SType.in_var.mpr hr⟩) r₁.1.closed
+      ((he.of_new r₁.2).of_new hn)
+    exact ⟨SType.in_var.mpr hr, r₁.1.trans ⟨r₂.1.closed, r₂.1.frame⟩, r₁.2.trans (hn.trans r₂.2)⟩
+end
+
+end
+
+/-! ## Expansion variables -/
+
+/-- An expansion variable has the level of its row variable. -/
+def ExpLevel (s : State) : Prop := ∀ v L r, ((v, L), r) ∈ s.exps → s.level r = s.level v
+
+theorem Same.expLevel {s s' : State} (hs : Same s s') (h : ExpLevel s) : ExpLevel s' :=
+  fun v L r hm => by rw [hs.level]; exact h v L r (hs.exps ▸ hm)
+
+mutual
+theorem Constrain.expLevel : Constrain s a b s' → ExpLevel s → ExpLevel s'
+  | .cached _, h | .refl, h | .absR _, h => h
+  | .arrow _ h₁ h₂, h | .absRecord _ h₁ h₂, h | .nilRecord _ h₁ h₂, h
+  | .recordNil _ _ h₁ h₂, h => h₂.expLevel (h₁.expLevel h)
+  | .record _ _ _ h₁ h₂ h₃, h => h₃.expLevel (h₂.expLevel (h₁.expLevel h))
+  | .varL _ _ _ h', h | .varR _ _ _ h', h | .recordSig _ _ _ _ _ h', h | .sigL _ _ h', h =>
+    h'.expLevel h
+  | .extLHit _ _ _ hx _, h | .extRHit _ _ _ hx _, h => hx.same.expLevel h
+  | .extLNew _ _ _ hx _ h', h | .extRNew _ _ _ hx _ h', h => h'.expLevel (hx.same.expLevel h)
+
+theorem ConstrainEach.expLevel : ConstrainEach s ps s' → ExpLevel s → ExpLevel s'
+  | .nil, h => h
+  | .cons h₁ h₂, h => h₂.expLevel (h₁.expLevel h)
+
+theorem ConstrainField.expLevel : ConstrainField s a b s' → ExpLevel s → ExpLevel s'
+  | .toAbs, h | .misMis, h | .misOpt, h => h
+  | .optOpt _ h', h | .preOpt _ h', h | .pre _ _ h', h => h'.expLevel h
+
+theorem FieldsEach.expLevel : FieldsEach s ps s' → ExpLevel s → ExpLevel s'
+  | .nil, h => h
+  | .cons h₁ h₂, h => h₂.expLevel (h₁.expLevel h)
+
+theorem Expand.expLevel : Expand s t ms t' s' → ExpLevel s → ExpLevel s'
+  | .none, h => h
+  | .abs _ h', h | .nil _ h', h | .allAbsent _ _ h', h => h'.expLevel h
+  | .memo _ _ h₁ _ h₂, h => h₂.expLevel (h₁.expLevel h)
+  | .fresh _ _ h₁ _ _ hl h₂, h =>
+    h₂.expLevel fun v L r hm => by
+      rcases List.mem_cons.mp hm with e | hm
+      · cases e
+        show (_ : State).level _ = (_ : State).level _
+        rw [h₁.keeps.level]; exact hl
+      · exact h₁.expLevel h v L r hm
+end
+
+/-! ## Scope of constraining -/
+
+/-- The allocation invariants of a state: it only mentions allocated
+variables, and an expansion variable has the level of its row variable. -/
+structure Scope (s : State) : Prop where
+  bounds : Scoped s
+  exps : ∀ e ∈ s.exps, e.2 < s.next
+  expLevel : ExpLevel s
+
+theorem Scope.expsIn {s : State} (h : Scope s) {n : Nat} (hn : s.next ≤ n) : ExpsIn (· < n) s :=
+  fun _ _ _ hm _ => Nat.lt_of_lt_of_le (h.exps _ hm) hn
+
+theorem Scope.of_local {s s' : State} (h : Scope s) (hn : s.next ≤ s'.next)
+    (l : Local (· < s'.next) s s') (he : ExpsNew (· < s'.next) s s') (hl : ExpLevel s') :
+    Scope s' :=
+  ⟨h.bounds.of_local hn l, fun e hm =>
+    (he e hm).elim (fun hm' => Nat.lt_of_lt_of_le (h.exps e hm') hn) id, hl⟩
+
+theorem Scope.remember {s : State} {a b : SType} (h : Scope s) : Scope (s.remember a b) :=
+  ⟨h.bounds, h.exps, h.expLevel⟩
+
+theorem Scope.fresh {s : State} (h : Scope s) : Scope s.fresh :=
+  ⟨fun v b hb => ⟨Nat.lt_succ_of_lt (h.bounds v b hb).1,
+      (h.bounds v b hb).2.mono fun _ hw => Nat.lt_succ_of_lt hw⟩,
+    fun e he => Nat.lt_succ_of_lt (h.exps e he), h.expLevel⟩
+
+/-- A type in scope stays in scope. -/
+theorem SType.In.scope_mono {t : SType} {n m : Nat} (h : t.In (· < n)) (hnm : n ≤ m) :
+    t.In (· < m) := h.mono fun _ hw => Nat.lt_of_lt_of_le hw hnm
+
+theorem SFields.In.scope_mono {fs : SFields} {n m : Nat} (h : fs.In (· < n)) (hnm : n ≤ m) :
+    fs.In (· < m) := fun w hw => Nat.lt_of_lt_of_le (h w hw) hnm
+
+theorem pairs_scope_mono {ps : List (SType × SType)} {n m : Nat}
+    (h : ∀ p ∈ ps, p.1.In (· < n) ∧ p.2.In (· < n)) (hnm : n ≤ m) :
+    ∀ p ∈ ps, p.1.In (· < m) ∧ p.2.In (· < m) :=
+  fun p hp => ⟨(h p hp).1.scope_mono hnm, (h p hp).2.scope_mono hnm⟩
+
+/-- Extrusion keeps the allocation invariants. -/
+theorem Extrude.scope (h : Extrude s c pol lvl t t' s' c') (hs : Scope s)
+    (ht : t.In (· < s.next)) (hc : CopiesScoped s c) : Scope s' ∧ t'.In (· < s'.next) :=
+  have r := h.scoped hs.bounds ht hc
+  ⟨⟨r.1, fun e he => Nat.lt_of_lt_of_le (hs.exps e (h.same.exps ▸ he)) h.same.next,
+    h.same.expLevel hs.expLevel⟩, r.2.1⟩
+
+/-- **Constraining keeps the state in scope.** -/
+theorem Constrain.scope (h : Constrain s a b s') (hs : Scope s) (ha : a.In (· < s.next))
+    (hb : b.In (· < s.next)) : Scope s' := by
+  have hn := h.keeps.next
+  have r := h.local (X := (· < s'.next)) (fun _ _ hw => hw) (ha.scope_mono hn) (hb.scope_mono hn)
+    (hs.bounds.closed hn) (hs.expsIn hn)
+  exact hs.of_local hn r.1 r.2 (h.expLevel hs.expLevel)
+
+theorem ConstrainEach.scope (h : ConstrainEach s ps s') (hs : Scope s)
+    (hp : ∀ p ∈ ps, p.1.In (· < s.next) ∧ p.2.In (· < s.next)) : Scope s' := by
+  have hn := h.keeps.next
+  have r := h.local (X := (· < s'.next)) (fun _ _ hw => hw) (pairs_scope_mono hp hn)
+    (hs.bounds.closed hn) (hs.expsIn hn)
+  exact hs.of_local hn r.1 r.2 (h.expLevel hs.expLevel)
+
+theorem FieldsEach.scope (h : FieldsEach s ps s') (hs : Scope s)
+    (hp : ∀ p ∈ ps, p.1.In (· < s.next) ∧ p.2.In (· < s.next)) : Scope s' := by
+  have hn := h.keeps.next
+  have r := h.local (X := (· < s'.next)) (fun _ _ hw => hw) (pairs_scope_mono hp hn)
+    (hs.bounds.closed hn) (hs.expsIn hn)
+  exact hs.of_local hn r.1 r.2 (h.expLevel hs.expLevel)
+
+theorem ConstrainField.scope (h : ConstrainField s a b s') (hs : Scope s)
+    (ha : a.In (· < s.next)) (hb : b.In (· < s.next)) : Scope s' := by
+  have hn := h.keeps.next
+  have r := h.local (X := (· < s'.next)) (fun _ _ hw => hw) (ha.scope_mono hn) (hb.scope_mono hn)
+    (hs.bounds.closed hn) (hs.expsIn hn)
+  exact hs.of_local hn r.1 r.2 (h.expLevel hs.expLevel)
+
+theorem Expand.scope (h : Expand s t ms t' s') (hs : Scope s) (ht : t.In (· < s.next))
+    (hm : ms.In (· < s.next)) : Scope s' ∧ t'.In (· < s'.next) := by
+  have hn := h.keeps.next
+  have r := h.local (X := (· < s'.next)) (fun _ _ hw => hw) (ht.scope_mono hn)
+    (hm.scope_mono hn) (hs.bounds.closed hn) (hs.expsIn hn)
+  exact ⟨hs.of_local hn r.2.1 r.2.2 (h.expLevel hs.expLevel), r.1⟩
+
+theorem ConstrainTop.keeps {s s' : State} {a b : SType} (h : ConstrainTop s a b s') : Keeps s s' := by
+  obtain ⟨s₁, hc, rfl⟩ := h
+  exact ⟨hc.keeps.level, hc.keeps.kind, hc.keeps.next⟩
+
+theorem ConstrainTop.scope {s s' : State} {a b : SType} (h : ConstrainTop s a b s') (hs : Scope s)
+    (ha : a.In (· < s.next)) (hb : b.In (· < s.next)) : Scope s' := by
+  obtain ⟨s₁, hc, rfl⟩ := h
+  have r := hc.scope ⟨hs.bounds, hs.exps, hs.expLevel⟩ ha hb
+  exact ⟨r.bounds, r.exps, r.expLevel⟩
+
+/-! ## Scope of typing -/
+
+theorem SCtx.lookup_mem {Γ : SCtx} (h : Γ.lookup x = some st) : (x, st) ∈ Γ := by
+  simp only [SCtx.lookup, Option.map_eq_some_iff] at h
+  obtain ⟨p, hp, rfl⟩ := h
+  have hx := List.find?_some hp
+  simp at hx
+  have := List.mem_of_find?_eq_some hp
+  subst hx
+  exact this
+
+/-- The types of a context only mention variables of `X`. -/
+def CtxIn (X : Nat → Prop) (Γ : SCtx) : Prop := ∀ x st, Γ.lookup x = some st → st.In X
+
+theorem CtxIn.cons {X : Nat → Prop} {Γ : SCtx} {x : String} {st : SType} (h : CtxIn X Γ)
+    (hst : st.In X) : CtxIn X ((x, st) :: Γ) := by
+  intro y t hy
+  simp only [SCtx.lookup, List.find?_cons] at hy
+  by_cases e : x = y
+  · simp [e] at hy; subst hy; exact hst
+  · simp only [e, decide_false] at hy; exact h y t hy
+
+theorem CtxIn.mono {X Y : Nat → Prop} {Γ : SCtx} (h : CtxIn X Γ) (hxy : ∀ w, X w → Y w) :
+    CtxIn Y Γ := fun x st hx => (h x st hx).mono hxy
+
+theorem CtxIn.scope_mono {Γ : SCtx} {n m : Nat} (h : CtxIn (· < n) Γ) (hnm : n ≤ m) :
+    CtxIn (· < m) Γ := h.mono fun _ hw => Nat.lt_of_lt_of_le hw hnm
+
+mutual
+theorem TypeTerm.keeps : TypeTerm Γ s t st s' → Keeps s s'
+  | .lit | .var _ => .refl
+  | .lam _ h => Keeps.fresh.trans h.keeps
+  | .app _ h₁ h₂ hc =>
+    (Keeps.fresh.trans h₁.keeps).trans (h₂.keeps.trans hc.keeps)
+  | .rcd h => h.keeps
+  | .sel _ h hc => (Keeps.fresh.trans h.keeps).trans hc.keeps
+  | .selOr _ h hc hd hc' =>
+    (Keeps.fresh.trans h.keeps).trans
+      (hc.keeps.trans (hd.keeps.trans hc'.keeps))
+  | .ext _ h₁ h₂ _ hc =>
+    (h₁.keeps.trans h₂.keeps).trans (Keeps.fresh.trans hc.keeps)
+  | .extNil h => h.keeps
+  | .letIn h₁ h₂ => h₁.keeps.trans h₂.keeps
+  | .letRec _ _ h₁ hc h₂ =>
+    (Keeps.fresh.trans h₁.keeps).trans (hc.keeps.trans h₂.keeps)
+  | .ite _ hc h₁ ha h₂ hb h₃ =>
+    (Keeps.fresh.trans hc.keeps).trans
+      (h₁.keeps.trans (ha.keeps.trans (h₂.keeps.trans (hb.keeps.trans h₃.keeps))))
+  | .fn _ hp h => hp.keeps.trans h.keeps
+
+theorem TypeFields.keeps : TypeFields Γ s fs F s' → Keeps s s'
+  | .nil => .refl
+  | .cons h₁ h₂ => h₁.keeps.trans h₂.keeps
+
+theorem TypeParams.keeps : TypeParams Γ s ps P Γ' s' → Keeps s s'
+  | .nil => .refl
+  | .req _ h => Keeps.fresh.trans h.keeps
+  | .dflt _ hd hc h =>
+    (Keeps.fresh.trans hd.keeps).trans (hc.keeps.trans h.keeps)
+end
+
 end BoltCore.Alg

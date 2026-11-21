@@ -198,6 +198,11 @@ def SType.IsRecSig : SType → Prop
   | .record _ _ | .sig _ => True
   | _ => False
 
+theorem SType.IsRecSig.nonvar : ∀ {b : SType}, b.IsRecSig → ∀ w, b ≠ .var w
+  | .record _ _, _, _ | .sig _, _, _ => fun h => nomatch h
+  | .var _, h, _ | .prim _, h, _ | .arrow _ _, h, _ | .abs, h, _ | .missing, h, _
+  | .opt _, h, _ | .nil, h, _ => absurd h id
+
 /-! ## Levels
 
 Each variable has a level, for let-polymorphism (Sec. 3.5): the right-hand
@@ -493,16 +498,48 @@ inductive Constrain : State → SType → SType → State → Prop where
       Expand s₁ t₀ (fs₀.missing fs₁) t₀' s₂ →
       Constrain s₂ (restRow (fs₁.missing fs₀) t₀') t₁ s₃ →
       Constrain s (.record fa ta) (.record fb tb) s₃
-  /-- A variable on the left: record the upper bound, then make every lower
-  bound fit it (installing the bound first, as Sec. 3.2.2 requires). -/
-  | varL : s.New (.var v) b → b ≠ .abs →
+  /-- A variable on the left, and a right side whose level is not above
+  the variable's: record the upper bound, then make every lower bound fit
+  it (installing the bound first, as Sec. 3.2.2 requires). -/
+  | varL : s.New (.var v) b → b ≠ .abs → b.level s.level ≤ s.level v →
       ConstrainEach ((s.remember (.var v) b).addUpper v b)
         ((s.bounds v).lower.map (·, b)) s₁ →
       Constrain s (.var v) b s₁
-  | varR : s.New a (.var v) → (∀ w, a ≠ .var w) →
+  /-- A variable on the right, dually. The left side is a variable only
+  when its level is below (otherwise `varL` applies). -/
+  | varR : s.New a (.var v) → (∀ w, a = .var w → s.level w < s.level v) →
+      a.level s.level ≤ s.level v →
       ConstrainEach ((s.remember a (.var v)).addLower v a)
         ((s.bounds v).upper.map (a, ·)) s₁ →
       Constrain s a (.var v) s₁
+  /-- A variable on the left, and a right side of higher level (not a
+  variable: `varR` applies to one). The right side is extruded to the
+  variable's level, and the variable is constrained against the copy `b'`
+  (`go lhs rhs'`). The copy is not a variable, not `Abs`, and its level is
+  low enough (`Extrude.level_le`), so that call can only do two things: stop
+  if the constraint is cached, as here; or install the copy as a bound and
+  propagate, as in `extLNew`. -/
+  | extLHit : s.New (.var v) b → (∀ w, b ≠ .var w) → s.level v < b.level s.level →
+      Extrude (s.remember (.var v) b) [] false (s.level v) b b' s₁ c →
+      (.var v, b') ∈ s₁.cache →
+      Constrain s (.var v) b s₁
+  | extLNew : s.New (.var v) b → (∀ w, b ≠ .var w) → s.level v < b.level s.level →
+      Extrude (s.remember (.var v) b) [] false (s.level v) b b' s₁ c →
+      (.var v, b') ∉ s₁.cache →
+      ConstrainEach ((s₁.remember (.var v) b').addUpper v b')
+        ((s₁.bounds v).lower.map (·, b')) s₂ →
+      Constrain s (.var v) b s₂
+  /-- A variable on the right, and a left side of higher level, dually. -/
+  | extRHit : s.New a (.var v) → (∀ w, a ≠ .var w) → s.level v < a.level s.level →
+      Extrude (s.remember a (.var v)) [] true (s.level v) a a' s₁ c →
+      (a', .var v) ∈ s₁.cache →
+      Constrain s a (.var v) s₁
+  | extRNew : s.New a (.var v) → (∀ w, a ≠ .var w) → s.level v < a.level s.level →
+      Extrude (s.remember a (.var v)) [] true (s.level v) a a' s₁ c →
+      (a', .var v) ∉ s₁.cache →
+      ConstrainEach ((s₁.remember a' (.var v)).addLower v a')
+        ((s₁.bounds v).upper.map (a', ·)) s₂ →
+      Constrain s a (.var v) s₂
   /-- An argument record below a signature: the number `k` of positional
   arguments, the length of its `*` list, picks `Dₖ`; then it is an ordinary
   record constraint. -/
@@ -543,7 +580,7 @@ row variable does not
 represent the labels in its kind, which are absent too, and is expanded for
 the others (`expansion` in `lib/typer.ml`), reusing a memoized expansion
 variable. The expansion variable lacks the tail's kind and the expanded
-labels. -/
+labels, and has the tail's level. -/
 inductive Expand : State → SType → SFields → SType → State → Prop where
   | none : Expand s t .nil t s
   | abs : ms ≠ .nil → FieldsEach s ms.absPairs s₁ → Expand s .abs ms .abs s₁
@@ -560,6 +597,7 @@ inductive Expand : State → SType → SFields → SType → State → Prop wher
       FieldsEach s (ms.absentIn (s.kind v)).absPairs s₁ →
       s₁.exps.lookup (v, (ms.presentIn (s.kind v)).labels) = none →
       s.kind s₁.next = s.kind v ++ (ms.presentIn (s.kind v)).labels →
+      s.level s₁.next = s.level v →
       Constrain
         { s₁ with next := s₁.next + 1,
                   exps := ((v, (ms.presentIn (s.kind v)).labels), s₁.next) :: s₁.exps }
@@ -707,7 +745,8 @@ theorem typeTerm_app_id :
     ∃ s', TypeTerm builtins State.init (.app (.lam "x" (.var "x")) (.lit 42)) (.var 0) s' ∧
       (s'.bounds 0).lower = [.prim "int"] := by
   refine ⟨_, .app rfl (.lam rfl (.var rfl)) .lit
-    ⟨_, .arrow ?n₁ (.varR ?n₂ ?nv₂ .nil) (.varL ?n₃ ?na₃ (.cons (.varR ?n₄ ?nv₄ .nil) .nil)), rfl⟩, ?b⟩
+    ⟨_, .arrow ?n₁ (.varR ?n₂ ?nv₂ (Nat.le_refl _) .nil)
+      (.varL ?n₃ ?na₃ (Nat.le_refl _) (.cons (.varR ?n₄ ?nv₄ (Nat.le_refl _) .nil) .nil)), rfl⟩, ?b⟩
   case b => rfl
   all_goals
     first

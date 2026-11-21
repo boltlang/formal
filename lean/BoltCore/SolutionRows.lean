@@ -443,11 +443,6 @@ theorem SParams.domains_ne_sig {P : SParams} {d : SType} (hd : d ∈ P.domains) 
   obtain ⟨k, _, rfl⟩ := List.mem_map.mp hd
   exact fun _ h => by simp [SParams.domain] at h
 
-theorem SType.IsRecSig.nonvar : ∀ {b : SType}, b.IsRecSig → ∀ w, b ≠ .var w
-  | .record _ _, _, _ | .sig _, _, _ => fun h => nomatch h
-  | .var _, h, _ | .prim _, h, _ | .arrow _ _, h, _ | .abs, h, _ | .missing, h, _
-  | .opt _, h, _ | .nil, h, _ => absurd h id
-
 /-! ## One layer -/
 
 /-- The coinductive relation: accepted constraints read through `I` at the

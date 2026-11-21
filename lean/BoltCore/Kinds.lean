@@ -730,19 +730,45 @@ theorem Constrain.kinds : Constrain s a b s' → Inv₂ s → KInv K s →
         cases h'
         exact rest_kind (rec₀ ρ rfl) (rec₁ σ rfl) (hk ρ σ rfl rfl) hr l
     exact h₃.kinds (h₂.inv₂ i₁) k₂ hrest.1 v₁.2 hrest.2
-  | .varL (v := v) (b := b) _ _ h', i, k, _, hb, hab =>
+  | .varL (v := v) (b := b) _ _ _ h', i, k, _, hb, hab =>
     h'.kinds i.remember.addUpper (k.remember (a := .var v) (b := b) trivial hb hab).addUpper fun p hp => by
       simp only [List.mem_map] at hp
       obtain ⟨x, hx, rfl⟩ := hp
       have := k.log _ (i.inLog.2 v x hx)
       exact ⟨this.1, hb, this.2.2.trans_var hab⟩
-  | .varR (v := v) (a := a) _ hnv h', i, k, ha, _, hab =>
-    h'.kinds (i.remember.addLower hnv) (k.remember (a := a) (b := .var v) ha trivial hab).addLower
+  | .varR (v := v) (a := a) _ _ _ h', i, k, ha, _, hab =>
+    h'.kinds i.remember.addLower (k.remember (a := a) (b := .var v) ha trivial hab).addLower
       fun p hp => by
       simp only [List.mem_map] at hp
       obtain ⟨x, hx, rfl⟩ := hp
       have := k.log _ (i.inLog.1 v x hx)
       exact ⟨ha, this.2.1, hab.trans_var this.2.2⟩
+  | .extLHit (v := v) (b := b) _ _ _ hx _, i, k, _, hb, hab =>
+    (hx.kinds i.remember.inLog (k.remember (a := .var v) (b := b) trivial hb hab) .nil hb).1
+  | .extLNew (v := v) (b := b) (b' := b') _ _ _ hx _ h', i, k, _, hb, hab => by
+    have k₀ := k.remember (a := .var v) (b := b) trivial hb hab
+    have r := hx.kinds i.remember.inLog k₀ .nil hb
+    have hab' : KOK K (.var v) b' := (hx.ksame k₀.kind .nil).1.kok_right hab
+    have i₁ : Inv₂ _ := ⟨hx.inLog i.remember.inLog⟩
+    exact h'.kinds i₁.remember.addUpper
+      (r.1.remember (a := .var v) (b := b') trivial r.2 hab').addUpper fun p hp => by
+        simp only [List.mem_map] at hp
+        obtain ⟨x, hx', rfl⟩ := hp
+        have := r.1.log _ (i₁.inLog.2 v x hx')
+        exact ⟨this.1, r.2, this.2.2.trans_var hab'⟩
+  | .extRHit (v := v) (a := a) _ _ _ hx _, i, k, ha, _, hab =>
+    (hx.kinds i.remember.inLog (k.remember (a := a) (b := .var v) ha trivial hab) .nil ha).1
+  | .extRNew (v := v) (a := a) (a' := a') _ _ _ hx _ h', i, k, ha, _, hab => by
+    have k₀ := k.remember (a := a) (b := .var v) ha trivial hab
+    have r := hx.kinds i.remember.inLog k₀ .nil ha
+    have hab' : KOK K a' (.var v) := (hx.ksame k₀.kind .nil).1.kok_left hab
+    have i₁ : Inv₂ _ := ⟨hx.inLog i.remember.inLog⟩
+    exact h'.kinds i₁.remember.addLower
+      (r.1.remember (a := a') (b := .var v) r.2 trivial hab').addLower fun p hp => by
+        simp only [List.mem_map] at hp
+        obtain ⟨x, hx', rfl⟩ := hp
+        have := r.1.log _ (i₁.inLog.1 v x hx')
+        exact ⟨r.2, this.2.1, hab'.trans_var this.2.2⟩
   | .recordSig (k := k) _ _ _ _ _ h', i, kk, ha, hb, hab =>
     h'.kinds i.remember (kk.remember ha hb hab) ha (PWK.domain hb k).1
       (.of_nonvarR fun w hw => by simp [SParams.domain, rowView_closed] at hw)
@@ -798,7 +824,7 @@ theorem Expand.kinds : Expand s t ms t' s' → Inv₂ s → KInv K s → FWK K m
     have hr' := hr
     rw [hK] at hr'
     exact ⟨h₂.kinds (h₁.inv₂ i) k₁ hw.1 hw.2.1 hw.2.2, .inr ⟨v, r, rfl, rfl, hr'⟩⟩
-  | .fresh (s := s₀) (s₁ := s₁) (v := v) _ hP h₁ _ hkn h₂, i, k, hms, _ => by
+  | .fresh (s := s₀) (s₁ := s₁) (v := v) _ hP h₁ _ hkn _ h₂, i, k, hms, _ => by
     have k₁ := h₁.kinds i k (FWK.absPairs (FWK.absentIn _ hms))
     have hK : s₀.kind v = K v := congrFun k.kind v
     have hr : ∀ l, l ∈ K s₁.next ↔ l ∈ K v ∨ l ∈ (ms.presentIn (s₀.kind v)).labels := by
