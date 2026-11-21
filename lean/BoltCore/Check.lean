@@ -951,9 +951,6 @@ end Infer
 
 /-! ## The checker -/
 
-/-- The built-ins of `lib/typer.ml`. -/
-def pbuiltins : PCtx := builtins.map fun p => (p.1, .mono p.2)
-
 /-- **Theorem 1 for the executable checker**: if the certificate checks,
 and the annotated term checks against it, the term has the computed type
 in the declarative system, over the certificate's solution. -/

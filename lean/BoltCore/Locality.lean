@@ -540,7 +540,8 @@ theorem SParams.In.domain {P : SParams} (h : P.In X) (k : Nat) : (P.domain k).In
 def ExpsIn (X : Nat → Prop) (s : State) : Prop := ∀ v L r, ((v, L), r) ∈ s.exps → X v → X r
 
 /-- The expansion variables added between two states are in `X`. -/
-def ExpsNew (X : Nat → Prop) (s s' : State) : Prop := ∀ e ∈ s'.exps, e ∈ s.exps ∨ X e.2
+def ExpsNew (X : Nat → Prop) (s s' : State) : Prop :=
+  ∀ e ∈ s'.exps, e ∈ s.exps ∨ (X e.1.1 ∧ X e.2)
 
 theorem ExpsNew.refl {s : State} : ExpsNew X s s := fun _ h => .inl h
 
@@ -550,12 +551,12 @@ theorem ExpsNew.trans {s₁ s₂ s₃ : State} (h₁ : ExpsNew X s₁ s₂) (h�
 theorem ExpsNew.of_eq {s s' : State} (h : s'.exps = s.exps) : ExpsNew X s s' :=
   fun _ he => .inl (h ▸ he)
 
-theorem ExpsNew.addExp {s : State} {k : Nat × List String} {r n : Nat} (hr : X r) :
+theorem ExpsNew.addExp {s : State} {k : Nat × List String} {r n : Nat} (hk : X k.1) (hr : X r) :
     ExpsNew X s { s with next := n, exps := (k, r) :: s.exps } :=
-  fun _ he => (List.mem_cons.mp he).elim (fun e' => .inr (e' ▸ hr)) .inl
+  fun _ he => (List.mem_cons.mp he).elim (fun e' => .inr (e' ▸ ⟨hk, hr⟩)) .inl
 
 theorem ExpsIn.of_new {s s' : State} (h : ExpsIn X s) (hn : ExpsNew X s s') : ExpsIn X s' :=
-  fun v L r hm hv => (hn _ hm).elim (fun hm' => h v L r hm' hv) id
+  fun v L r hm hv => (hn _ hm).elim (fun hm' => h v L r hm' hv) (·.2)
 
 theorem Local.addUpper {s : State} {v : Nat} {t : SType} (hx : XClosed X s) (hv : X v)
     (ht : t.In X) : Local X s (s.addUpper v t) :=
@@ -716,7 +717,7 @@ theorem Expand.local : Expand s t ms t' s' → Alloc X s s' → t.In X → ms.In
     have hr : X s₁.next :=
       hal _ h₁.keeps.next (Nat.lt_of_lt_of_le (Nat.lt_succ_self _) h₂.keeps.next)
     have hn := ExpsNew.addExp (s := s₁) (k := (v, (ms.presentIn (s.kind v)).labels))
-      (n := s₁.next + 1) hr
+      (n := s₁.next + 1) (SType.in_var.mp ht) hr
     have r₂ := h₂.local (fun w hw hw' => hal w (Nat.le_trans h₁.keeps.next (Nat.le_of_succ_le hw)) hw')
       ht (SType.in_record.mpr ⟨hm.presentIn, SType.in_var.mpr hr⟩) r₁.1.closed
       ((he.of_new r₁.2).of_new hn)
@@ -775,17 +776,18 @@ end
 variables, and an expansion variable has the level of its row variable. -/
 structure Scope (s : State) : Prop where
   bounds : Scoped s
-  exps : ∀ e ∈ s.exps, e.2 < s.next
+  exps : ∀ e ∈ s.exps, e.1.1 < s.next ∧ e.2 < s.next
   expLevel : ExpLevel s
 
 theorem Scope.expsIn {s : State} (h : Scope s) {n : Nat} (hn : s.next ≤ n) : ExpsIn (· < n) s :=
-  fun _ _ _ hm _ => Nat.lt_of_lt_of_le (h.exps _ hm) hn
+  fun _ _ _ hm _ => Nat.lt_of_lt_of_le (h.exps _ hm).2 hn
 
 theorem Scope.of_local {s s' : State} (h : Scope s) (hn : s.next ≤ s'.next)
     (l : Local (· < s'.next) s s') (he : ExpsNew (· < s'.next) s s') (hl : ExpLevel s') :
     Scope s' :=
   ⟨h.bounds.of_local hn l, fun e hm =>
-    (he e hm).elim (fun hm' => Nat.lt_of_lt_of_le (h.exps e hm') hn) id, hl⟩
+    (he e hm).elim (fun hm' => ⟨Nat.lt_of_lt_of_le (h.exps e hm').1 hn,
+      Nat.lt_of_lt_of_le (h.exps e hm').2 hn⟩) id, hl⟩
 
 theorem Scope.remember {s : State} {a b : SType} (h : Scope s) : Scope (s.remember a b) :=
   ⟨h.bounds, h.exps, h.expLevel⟩
@@ -793,7 +795,8 @@ theorem Scope.remember {s : State} {a b : SType} (h : Scope s) : Scope (s.rememb
 theorem Scope.fresh {s : State} (h : Scope s) : Scope s.fresh :=
   ⟨fun v b hb => ⟨Nat.lt_succ_of_lt (h.bounds v b hb).1,
       (h.bounds v b hb).2.mono fun _ hw => Nat.lt_succ_of_lt hw⟩,
-    fun e he => Nat.lt_succ_of_lt (h.exps e he), h.expLevel⟩
+    fun e he => ⟨Nat.lt_succ_of_lt (h.exps e he).1, Nat.lt_succ_of_lt (h.exps e he).2⟩,
+    h.expLevel⟩
 
 /-- A type in scope stays in scope. -/
 theorem SType.In.scope_mono {t : SType} {n m : Nat} (h : t.In (· < n)) (hnm : n ≤ m) :
@@ -811,7 +814,8 @@ theorem pairs_scope_mono {ps : List (SType × SType)} {n m : Nat}
 theorem Extrude.scope (h : Extrude s c pol lvl t t' s' c') (hs : Scope s)
     (ht : t.In (· < s.next)) (hc : CopiesScoped s c) : Scope s' ∧ t'.In (· < s'.next) :=
   have r := h.scoped hs.bounds ht hc
-  ⟨⟨r.1, fun e he => Nat.lt_of_lt_of_le (hs.exps e (h.same.exps ▸ he)) h.same.next,
+  ⟨⟨r.1, fun e he => ⟨Nat.lt_of_lt_of_le (hs.exps e (h.same.exps ▸ he)).1 h.same.next,
+      Nat.lt_of_lt_of_le (hs.exps e (h.same.exps ▸ he)).2 h.same.next⟩,
     h.same.expLevel hs.expLevel⟩, r.2.1⟩
 
 /-- **Constraining keeps the state in scope.** -/
@@ -859,66 +863,5 @@ theorem ConstrainTop.scope {s s' : State} {a b : SType} (h : ConstrainTop s a b 
   obtain ⟨s₁, hc, rfl⟩ := h
   have r := hc.scope ⟨hs.bounds, hs.exps, hs.expLevel⟩ ha hb
   exact ⟨r.bounds, r.exps, r.expLevel⟩
-
-/-! ## Scope of typing -/
-
-theorem SCtx.lookup_mem {Γ : SCtx} (h : Γ.lookup x = some st) : (x, st) ∈ Γ := by
-  simp only [SCtx.lookup, Option.map_eq_some_iff] at h
-  obtain ⟨p, hp, rfl⟩ := h
-  have hx := List.find?_some hp
-  simp at hx
-  have := List.mem_of_find?_eq_some hp
-  subst hx
-  exact this
-
-/-- The types of a context only mention variables of `X`. -/
-def CtxIn (X : Nat → Prop) (Γ : SCtx) : Prop := ∀ x st, Γ.lookup x = some st → st.In X
-
-theorem CtxIn.cons {X : Nat → Prop} {Γ : SCtx} {x : String} {st : SType} (h : CtxIn X Γ)
-    (hst : st.In X) : CtxIn X ((x, st) :: Γ) := by
-  intro y t hy
-  simp only [SCtx.lookup, List.find?_cons] at hy
-  by_cases e : x = y
-  · simp [e] at hy; subst hy; exact hst
-  · simp only [e, decide_false] at hy; exact h y t hy
-
-theorem CtxIn.mono {X Y : Nat → Prop} {Γ : SCtx} (h : CtxIn X Γ) (hxy : ∀ w, X w → Y w) :
-    CtxIn Y Γ := fun x st hx => (h x st hx).mono hxy
-
-theorem CtxIn.scope_mono {Γ : SCtx} {n m : Nat} (h : CtxIn (· < n) Γ) (hnm : n ≤ m) :
-    CtxIn (· < m) Γ := h.mono fun _ hw => Nat.lt_of_lt_of_le hw hnm
-
-mutual
-theorem TypeTerm.keeps : TypeTerm Γ s t st s' → Keeps s s'
-  | .lit | .var _ => .refl
-  | .lam _ h => Keeps.fresh.trans h.keeps
-  | .app _ h₁ h₂ hc =>
-    (Keeps.fresh.trans h₁.keeps).trans (h₂.keeps.trans hc.keeps)
-  | .rcd h => h.keeps
-  | .sel _ h hc => (Keeps.fresh.trans h.keeps).trans hc.keeps
-  | .selOr _ h hc hd hc' =>
-    (Keeps.fresh.trans h.keeps).trans
-      (hc.keeps.trans (hd.keeps.trans hc'.keeps))
-  | .ext _ h₁ h₂ _ hc =>
-    (h₁.keeps.trans h₂.keeps).trans (Keeps.fresh.trans hc.keeps)
-  | .extNil h => h.keeps
-  | .letIn h₁ h₂ => h₁.keeps.trans h₂.keeps
-  | .letRec _ _ h₁ hc h₂ =>
-    (Keeps.fresh.trans h₁.keeps).trans (hc.keeps.trans h₂.keeps)
-  | .ite _ hc h₁ ha h₂ hb h₃ =>
-    (Keeps.fresh.trans hc.keeps).trans
-      (h₁.keeps.trans (ha.keeps.trans (h₂.keeps.trans (hb.keeps.trans h₃.keeps))))
-  | .fn _ hp h => hp.keeps.trans h.keeps
-
-theorem TypeFields.keeps : TypeFields Γ s fs F s' → Keeps s s'
-  | .nil => .refl
-  | .cons h₁ h₂ => h₁.keeps.trans h₂.keeps
-
-theorem TypeParams.keeps : TypeParams Γ s ps P Γ' s' → Keeps s s'
-  | .nil => .refl
-  | .req _ h => Keeps.fresh.trans h.keeps
-  | .dflt _ hd hc h =>
-    (Keeps.fresh.trans hd.keeps).trans (hc.keeps.trans h.keeps)
-end
 
 end BoltCore.Alg

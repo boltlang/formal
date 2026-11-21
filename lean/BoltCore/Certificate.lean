@@ -260,16 +260,11 @@ theorem Logged.accepts {s : State} {c : Certificate} (hlog : ∀ p, p ∈ s.log 
   | .inl h => .inl h
   | .inr h => .inr (hlog _ h)
 
-/-- The model *accepts* `t` at `st`: a run from scratch, ending in a state
-without structural recursive types. -/
-def Infers (K : Nat → List String) (t : Term) (st : SType) (s' : State) : Prop :=
-  TypeTerm builtins (State.initK K) t st s' ∧ ∃ r, StructRanked s'.bounds r
-
-/-- **Adequacy of validity**: an accepted run yields a valid certificate. -/
-theorem TypeTerm.certificateValid (h : TypeTerm builtins (State.initK K) t st s')
-    (hr : StructRanked s'.bounds r) : (s'.certificate r).Valid :=
-  State.certificate_valid h.inv_init (h.inv₂ Inv₂.init)
-    (h.nac builtins_NAC Inv₂.init LogNAC.init).1 (h.kinds builtins_K Inv₂.init KInv.init).1 hr
+/-- The model *accepts* `t` at `st`: a run from scratch at level 0, for the
+kinds `K` and the levels `L` of its variables, ending in a state without
+structural recursive types. -/
+def Infers (K : Nat → List String) (L : Nat → Nat) (t : Term) (st : SType) (s' : State) : Prop :=
+  TypeTerm pbuiltins 0 (State.initKL K L) t st s' ∧ ∃ r, StructRanked s'.bounds r
 
 /-! ## No recursive types -/
 

@@ -584,15 +584,15 @@ theorem Scope.addLower {s : State} {v : Nat} {t : SType} (h : Scope s) (hv : v <
   ⟨h.bounds.addLower hv ht, h.exps, h.expLevel⟩
 
 /-- Allocating an expansion variable of the right level. -/
-theorem Scope.addExp {s : State} {v : Nat} {L : List String} (h : Scope s)
+theorem Scope.addExp {s : State} {v : Nat} {L : List String} (h : Scope s) (hv : v < s.next)
     (hl : s.level s.next = s.level v) :
     Scope { s with next := s.next + 1, exps := ((v, L), s.next) :: s.exps } :=
   ⟨fun w b hb => ⟨Nat.lt_succ_of_lt (h.bounds w b hb).1,
       (h.bounds w b hb).2.mono fun _ hw => Nat.lt_succ_of_lt hw⟩,
     fun e he => by
       rcases List.mem_cons.mp he with rfl | he
-      · exact Nat.lt_succ_self _
-      · exact Nat.lt_succ_of_lt (h.exps e he),
+      · exact ⟨Nat.lt_succ_of_lt hv, Nat.lt_succ_self _⟩
+      · exact ⟨Nat.lt_succ_of_lt (h.exps e he).1, Nat.lt_succ_of_lt (h.exps e he).2⟩,
     fun v' L' r' hm => by
       rcases List.mem_cons.mp hm with e | hm
       · cases e; exact hl
@@ -739,13 +739,15 @@ theorem Expand.consist : Expand s t ms t' s' → Scope s → t.In (· < s.next) 
     have n₁ := h₁.keeps.next
     exact h₂.consist hs₁ (ht.scope_mono n₁)
       (SType.in_record.mpr ⟨hm.presentIn.scope_mono n₁,
-        (SType.in_var (X := (· < s₁.next))).mpr (hs₁.exps _ (lookup_mem hl))⟩)
+        (SType.in_var (X := (· < s₁.next))).mpr (hs₁.exps _ (lookup_mem hl)).2⟩)
       (h₁.logged hc).1 (h₁.consist hs hm.absentIn.absPairs hc h)
   | .fresh (s₁ := s₁) _ _ h₁ _ _ hlv h₂, hs, ht, hm, hc, h => by
     have hs₁ := h₁.scope hs hm.absentIn.absPairs
     have n₁ := Nat.le_trans h₁.keeps.next (Nat.le_succ _)
     have hlv' := h₁.grows.level ▸ hlv
-    exact h₂.consist (hs₁.addExp hlv') (ht.scope_mono n₁)
+    exact h₂.consist
+      (hs₁.addExp ((SType.in_var (X := (· < s₁.next))).mp (ht.scope_mono h₁.keeps.next)) hlv')
+      (ht.scope_mono n₁)
       (SType.in_record.mpr ⟨hm.presentIn.scope_mono n₁,
         (SType.in_var (X := (· < s₁.next + 1))).mpr (Nat.lt_succ_self _)⟩)
       ((h₁.logged hc).1.addExp hlv') (h₁.consist hs hm.absentIn.absPairs hc h).expand
@@ -775,6 +777,24 @@ theorem ConstrainTop.step (h : ConstrainTop s a b s') (hs : Scope s) (hi : Inv s
     (ha : a.In (· < s.next)) (hb : b.In (· < s.next)) : Scope s' ∧ Inv s' :=
   ⟨h.scope hs ha hb, (h.sound hs ha hb hi).1⟩
 
+/-- A top-level `constrain` call keeps the bounds consistent. -/
+theorem ConstrainTop.consistent (h : ConstrainTop s a b s') (hs : Scope s)
+    (ha : a.In (· < s.next)) (hb : b.In (· < s.next)) (hc : Consistent s) : Consistent s' := by
+  obtain ⟨s₁, h, rfl⟩ := h
+  have hs₀ : Scope { s with cache := [] } := ⟨hs.bounds, hs.exps, hs.expLevel⟩
+  have hc₀ : CacheInLog { s with cache := [] } :=
+    ⟨(fun _ h => nomatch h), (fun _ _ h => nomatch h), (fun _ _ h => nomatch h), hs.expLevel⟩
+  exact h.consist hs₀ ha hb hc₀ hc
+
+/-- Every constraint a top-level `constrain` call logs is justified when
+it returns. -/
+theorem ConstrainTop.justNew (h : ConstrainTop s a b s') (hs : Scope s) :
+    ∀ p ∈ s'.log, p ∈ s.log ∨ GStep s'.bounds (Logged s') p.1 p.2 := by
+  obtain ⟨s₁, h, rfl⟩ := h
+  have hc₀ : CacheInLog { s with cache := [] } :=
+    ⟨(fun _ h => nomatch h), (fun _ _ h => nomatch h), (fun _ _ h => nomatch h), hs.expLevel⟩
+  exact h.just hc₀ (P := s.log) fun p hp => .inl hp
+
 theorem Inv.fresh (h : Inv s) : Inv s.fresh := ⟨h.just, h.cons⟩
 
 theorem SType.in_prim {X : Nat → Prop} {n : String} : (SType.prim n).In X :=
@@ -787,129 +807,11 @@ theorem SParams.In.scope_mono {P : SParams} {n m : Nat} (h : P.In (· < n)) (hnm
 theorem in_fresh (s : State) : (SType.var s.next).In (· < s.fresh.next) :=
   (SType.in_var (X := (· < s.next + 1))).mpr (Nat.lt_succ_self _)
 
-mutual
-/-- Typing a term on a context in scope keeps the state in scope and the
-invariant, and its type is in scope. -/
-theorem TypeTerm.inv : TypeTerm Γ s t st s' → CtxIn (· < s.next) Γ → Scope s → Inv s →
-    Scope s' ∧ Inv s' ∧ st.In (· < s'.next)
-  | .lit, _, hs, hi => ⟨hs, hi, SType.in_prim⟩
-  | .var hx, hΓ, hs, hi => ⟨hs, hi, hΓ _ _ hx⟩
-  | .lam (s := s₀) _ h, hΓ, hs, hi => by
-    have hv := in_fresh s₀
-    have r := h.inv ((hΓ.scope_mono (Nat.le_succ _)).cons hv) hs.fresh hi.fresh
-    exact ⟨r.1, r.2.1, SType.in_arrow.mpr ⟨hv.scope_mono h.keeps.next, r.2.2⟩⟩
-  | .app (s := s₀) _ h₁ h₂ hc, hΓ, hs, hi => by
-    have k₁ := Nat.le_trans (Nat.le_succ _) h₁.keeps.next
-    have r₁ := h₁.inv (hΓ.scope_mono (Nat.le_succ _)) hs.fresh hi.fresh
-    have r₂ := h₂.inv (hΓ.scope_mono k₁) r₁.1 r₁.2.1
-    have hres := (in_fresh s₀).scope_mono (Nat.le_trans h₁.keeps.next h₂.keeps.next)
-    have c := hc.step r₂.1 r₂.2.1 (r₁.2.2.scope_mono h₂.keeps.next)
-      (SType.in_arrow.mpr ⟨r₂.2.2, hres⟩)
-    exact ⟨c.1, c.2, hres.scope_mono hc.keeps.next⟩
-  | .rcd h, hΓ, hs, hi => by
-    have r := h.inv hΓ hs hi
-    exact ⟨r.1, r.2.1, SType.in_record.mpr ⟨r.2.2, SType.in_nil⟩⟩
-  | .sel (s := s₀) _ h hc, hΓ, hs, hi => by
-    have r := h.inv (hΓ.scope_mono (Nat.le_succ _)) hs.fresh hi.fresh
-    have hres := (in_fresh s₀).scope_mono h.keeps.next
-    have c := hc.step r.1 r.2.1 r.2.2
-      (SType.in_record.mpr ⟨SFields.in_cons.mpr ⟨hres, SFields.in_nil⟩, SType.in_abs⟩)
-    exact ⟨c.1, c.2, hres.scope_mono hc.keeps.next⟩
-  | .selOr (s := s₀) _ h hc hd hc', hΓ, hs, hi => by
-    have r := h.inv (hΓ.scope_mono (Nat.le_succ _)) hs.fresh hi.fresh
-    have hres := (in_fresh s₀).scope_mono h.keeps.next
-    have c := hc.step r.1 r.2.1 r.2.2
-      (SType.in_record.mpr ⟨SFields.in_cons.mpr ⟨SType.in_opt.mpr hres, SFields.in_nil⟩,
-        SType.in_abs⟩)
-    have k₂ := Nat.le_trans (Nat.le_succ _) (Nat.le_trans h.keeps.next hc.keeps.next)
-    have rd := hd.inv (hΓ.scope_mono k₂) c.1 c.2
-    have hres' := hres.scope_mono (Nat.le_trans hc.keeps.next hd.keeps.next)
-    have c' := hc'.step rd.1 rd.2.1 rd.2.2 hres'
-    exact ⟨c'.1, c'.2, hres'.scope_mono hc'.keeps.next⟩
-  | .ext (s₂ := s₂) _ h₁ h₂ _ hc, hΓ, hs, hi => by
-    have r₁ := h₁.inv hΓ hs hi
-    have r₂ := h₂.inv (hΓ.scope_mono h₁.keeps.next) r₁.1 r₁.2.1
-    have hρ := in_fresh s₂
-    have c := hc.step r₂.1.fresh r₂.2.1.fresh
-      (r₁.2.2.scope_mono (Nat.le_trans h₂.keeps.next (Nat.le_succ _)))
-      (SType.in_record.mpr ⟨SFields.In.absOf, hρ⟩)
-    exact ⟨c.1, c.2, SType.in_record.mpr
-      ⟨r₂.2.2.scope_mono (Nat.le_trans (Nat.le_succ _) hc.keeps.next),
-        hρ.scope_mono hc.keeps.next⟩⟩
-  | .extNil h, hΓ, hs, hi => h.inv hΓ hs hi
-  | .letIn h₁ h₂, hΓ, hs, hi => by
-    have r₁ := h₁.inv hΓ hs hi
-    exact h₂.inv ((hΓ.scope_mono h₁.keeps.next).cons r₁.2.2) r₁.1 r₁.2.1
-  | .letRec (s := s₀) (x := x) _ _ h₁ hc h₂, hΓ, hs, hi => by
-    have hΓ' := (hΓ.scope_mono (Nat.le_succ _)).cons (x := x) (in_fresh s₀)
-    have r₁ := h₁.inv hΓ' hs.fresh hi.fresh
-    have c := hc.step r₁.1 r₁.2.1 r₁.2.2 ((in_fresh s₀).scope_mono h₁.keeps.next)
-    exact h₂.inv (hΓ'.scope_mono (Nat.le_trans h₁.keeps.next hc.keeps.next)) c.1 c.2
-  | .ite (s := s₀) _ hc h₁ ha h₂ hb h₃, hΓ, hs, hi => by
-    have rc := hc.inv (hΓ.scope_mono (Nat.le_succ _)) hs.fresh hi.fresh
-    have c₁ := h₁.step rc.1 rc.2.1 rc.2.2 SType.in_prim
-    have k₂ := Nat.le_trans hc.keeps.next h₁.keeps.next
-    have ra := ha.inv (hΓ.scope_mono (Nat.le_trans (Nat.le_succ _) k₂)) c₁.1 c₁.2
-    have k₃ := Nat.le_trans k₂ ha.keeps.next
-    have c₂ := h₂.step ra.1 ra.2.1 ra.2.2 ((in_fresh s₀).scope_mono k₃)
-    have k₄ := Nat.le_trans k₃ h₂.keeps.next
-    have rb := hb.inv (hΓ.scope_mono (Nat.le_trans (Nat.le_succ _) k₄)) c₂.1 c₂.2
-    have k₅ := Nat.le_trans k₄ hb.keeps.next
-    have c₃ := h₃.step rb.1 rb.2.1 rb.2.2 ((in_fresh s₀).scope_mono k₅)
-    exact ⟨c₃.1, c₃.2, (in_fresh s₀).scope_mono (Nat.le_trans k₅ h₃.keeps.next)⟩
-  | .fn _ hp h, hΓ, hs, hi => by
-    have rp := hp.inv hΓ hs hi
-    have r := h.inv rp.2.2.2 rp.1 rp.2.1
-    exact ⟨r.1, r.2.1, SType.in_arrow.mpr
-      ⟨SType.in_sig.mpr (rp.2.2.1.scope_mono h.keeps.next), r.2.2⟩⟩
-
-theorem TypeFields.inv : TypeFields Γ s fs F s' → CtxIn (· < s.next) Γ → Scope s → Inv s →
-    Scope s' ∧ Inv s' ∧ F.In (· < s'.next)
-  | .nil, _, hs, hi => ⟨hs, hi, SFields.in_nil⟩
-  | .cons h₁ h₂, hΓ, hs, hi => by
-    have r₁ := h₁.inv hΓ hs hi
-    have r₂ := h₂.inv (hΓ.scope_mono h₁.keeps.next) r₁.1 r₁.2.1
-    exact ⟨r₂.1, r₂.2.1, SFields.in_cons.mpr ⟨r₁.2.2.scope_mono h₂.keeps.next, r₂.2.2⟩⟩
-
-theorem TypeParams.inv : TypeParams Γ s ps P Γ' s' → CtxIn (· < s.next) Γ → Scope s → Inv s →
-    Scope s' ∧ Inv s' ∧ P.In (· < s'.next) ∧ CtxIn (· < s'.next) Γ'
-  | .nil, hΓ, hs, hi => ⟨hs, hi, SParams.in_nil, hΓ⟩
-  | .req (s := s₀) _ h, hΓ, hs, hi => by
-    have hv := in_fresh s₀
-    have r := h.inv ((hΓ.scope_mono (Nat.le_succ _)).cons hv) hs.fresh hi.fresh
-    exact ⟨r.1, r.2.1, SParams.in_cons.mpr ⟨hv.scope_mono h.keeps.next, r.2.2.1⟩, r.2.2.2⟩
-  | .dflt (s := s₀) _ hd hc h, hΓ, hs, hi => by
-    have rd := hd.inv (hΓ.scope_mono (Nat.le_succ _)) hs.fresh hi.fresh
-    have hv := (in_fresh s₀).scope_mono hd.keeps.next
-    have c := hc.step rd.1 rd.2.1 rd.2.2 hv
-    have k := Nat.le_trans (Nat.le_succ _) (Nat.le_trans hd.keeps.next hc.keeps.next)
-    have r := h.inv ((hΓ.scope_mono k).cons (hv.scope_mono hc.keeps.next)) c.1 c.2
-    exact ⟨r.1, r.2.1, SParams.in_cons.mpr
-      ⟨hv.scope_mono (Nat.le_trans hc.keeps.next h.keeps.next), r.2.2.1⟩, r.2.2.2⟩
-end
-
-theorem Inv.init {K : Nat → List String} : Inv (State.initK K) :=
+theorem Inv.init {K : Nat → List String} {L : Nat → Nat} : Inv (State.initKL K L) :=
   ⟨(fun _ h => nomatch h), (fun _ _ _ h _ => nomatch h)⟩
 
-theorem Scope.init {K : Nat → List String} : Scope (State.initK K) :=
+theorem Scope.init {K : Nat → List String} {L : Nat → Nat} : Scope (State.initKL K L) :=
   ⟨(fun _ _ h => h.elim (fun h => nomatch h) (fun h => nomatch h)), (fun _ h => nomatch h),
     (fun _ _ _ h => nomatch h)⟩
-
-/-- The built-ins mention no variable. -/
-theorem builtins_in {X : Nat → Prop} : CtxIn X builtins := by
-  intro x st h
-  have hm := SCtx.lookup_mem h
-  simp only [builtins, List.mem_cons, Prod.mk.injEq, List.not_mem_nil, or_false] at hm
-  rcases hm with ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, rfl⟩ <;>
-    exact fun w hw => by simp [SType.vars, SParams.vars, builtinSig] at hw
-
-/-- Every state reached by typing a term from scratch is in scope and
-satisfies the invariant. -/
-theorem TypeTerm.inv_init {K : Nat → List String} (h : TypeTerm builtins (State.initK K) t st s') :
-    Inv s' := (h.inv builtins_in .init .init).2.1
-
-theorem TypeTerm.scope_init {K : Nat → List String}
-    (h : TypeTerm builtins (State.initK K) t st s') : Scope s' :=
-  (h.inv builtins_in .init .init).1
 
 end BoltCore.Alg

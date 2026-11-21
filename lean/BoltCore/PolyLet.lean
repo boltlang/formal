@@ -176,19 +176,10 @@ theorem genName_inj {gen : List Nat} {base v w : Nat} (hv : v ∈ gen) (hw : w �
 
 /-! ## Contexts with schemes -/
 
-inductive CEntry where
-  | mono (st : SType)
-  /-- A let-bound name, generalizing `gen` in `st`. -/
-  | poly (gen : List Nat) (st : SType)
-
 /-- The entry does not mention the variables `gen'`. -/
 def CEntry.Avoids (σ : Nat → Bounds) (gen' : List Nat) : CEntry → Prop
   | .mono st => Av gen' st
   | .poly gen st => ∀ v ∈ schemeVars σ gen st, v ∉ gen → v ∉ gen'
-
-abbrev PCtx := List (String × CEntry)
-
-def PCtx.lookup (Γ : PCtx) (x : String) : Option CEntry := (Γ.find? (·.1 = x)).map (·.2)
 
 /-! ## Checking generalization and instantiation -/
 

@@ -289,6 +289,26 @@ theorem GStep.mono (g : Grows s s') :
   | .recordSig hd h => .recordSig hd (h.mono g)
   | .sigL hb h => .sigL hb fun d hd => (h d hd).mono g
 
+/-- A step stays one when the bounds and the accepted constraints grow. -/
+theorem GStep.imp {σ σ' : Nat → Bounds} {R R' : SType → SType → Prop}
+    (hu : ∀ v x, x ∈ (σ v).upper → x ∈ (σ' v).upper)
+    (hl : ∀ v x, x ∈ (σ v).lower → x ∈ (σ' v).lower) (hR : ∀ x y, R x y → R' x y) :
+    GStep σ R a b → GStep σ' R' a b
+  | .absR => .absR
+  | .arrow h₁ h₂ => .arrow (hR _ _ h₁) (hR _ _ h₂)
+  | .absRecord hf ht => .absRecord (fun p hp => (hf p hp).mono hR) (hR _ _ ht)
+  | .nilRecord hf ht => .nilRecord (fun p hp => (hf p hp).mono hR) (hR _ _ ht)
+  | .recordNil h₀ hf ht => .recordNil h₀ (fun p hp => (hf p hp).mono hR) (hR _ _ ht)
+  | .record h₀ h₁ hf he ht =>
+    .record h₀ h₁ (fun l f₀ f₁ e₀ e₁ => (hf l f₀ f₁ e₀ e₁).mono hR) (he.mono hu hR) (hR _ _ ht)
+  | .varL h => .varL (hu _ _ h)
+  | .varR h => .varR (hl _ _ h)
+  | .viaL h h₁ h₂ h₃ h₄ => .viaL (hu _ _ h) h₁ h₂ h₃ (hR _ _ h₄)
+  | .viaR h h₁ h₂ h₃ h₄ h₅ => .viaR (hl _ _ h) h₁ h₂ h₃ h₄ (hR _ _ h₅)
+  | .viaVar h₁ h₂ => .viaVar (hu _ _ h₁) (hl _ _ h₂)
+  | .recordSig hd h => .recordSig hd (hR _ _ h)
+  | .sigL hb h => .sigL hb fun d hd => hR _ _ (h d hd)
+
 /-! ## Justification -/
 
 /-- Every logged constraint is justified, except possibly the `pending` ones

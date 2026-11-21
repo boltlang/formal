@@ -325,8 +325,11 @@ structure State where
 
 namespace State
 
-/-- The initial state, for the kinds `K` of the run. -/
-def initK (K : Nat → List String) : State := ⟨fun _ => {}, 0, [], [], [], K, fun _ => 0⟩
+/-- The initial state, for the kinds `K` and the levels `L` of the run. -/
+def initKL (K : Nat → List String) (L : Nat → Nat) : State := ⟨fun _ => {}, 0, [], [], [], K, L⟩
+
+/-- The initial state when every variable has level 0. -/
+def initK (K : Nat → List String) : State := initKL K fun _ => 0
 
 def init : State := initK fun _ => []
 
@@ -710,11 +713,39 @@ def State.instantiate (s : State) (gen : List Nat) (ρ : Nat → Nat) : State :=
 def ConstrainTop (s : State) (a b : SType) (s' : State) : Prop :=
   ∃ s₁, Constrain { s with cache := [] } a b s₁ ∧ s' = { s₁ with cache := [] }
 
-/-! ## Typing terms (Fig. 8, monomorphic `let`) -/
+/-! ## Typing terms (Fig. 8)
+
+The context gives a name a type, or the scheme of a `let`: its type with
+the variables it generalizes. The OCaml code keeps the level of the `let`
+instead (`Poly (lvl, body)`: the variables above it are generalized) and
+finds the generalized variables when instantiating; the model lists them,
+as `lib/typer.ml` does for certificates (`created_above`). -/
 
 abbrev SCtx := List (String × SType)
 
 def SCtx.lookup (Γ : SCtx) (x : String) : Option SType := (Γ.find? (·.1 = x)).map (·.2)
+
+/-- An entry of the context. -/
+inductive CEntry where
+  | mono (st : SType)
+  /-- A let-bound name, generalizing `gen` in `st`. -/
+  | poly (gen : List Nat) (st : SType)
+
+abbrev PCtx := List (String × CEntry)
+
+def PCtx.lookup (Γ : PCtx) (x : String) : Option CEntry := (Γ.find? (·.1 = x)).map (·.2)
+
+/-- The variables a `let` at level `lvl` generalizes: those allocated
+while its right-hand side was typed, from `n` up to `m`, whose level is
+above `lvl` (`created_above`). They are all of them, reachable from the
+type or not: an unreachable one may mention a generalized one. -/
+def genVars (L : Nat → Nat) (n m lvl : Nat) : List Nat :=
+  (List.range' n (m - n)).filter fun v => lvl < L v
+
+theorem mem_genVars {L : Nat → Nat} {n m lvl v : Nat} :
+    v ∈ genVars L n m lvl ↔ n ≤ v ∧ v < m ∧ lvl < L v := by
+  simp only [genVars, List.mem_filter, List.mem_range'_1, decide_eq_true_eq]
+  omega
 
 /-- A binding found by `List.lookup` is in the list. -/
 theorem lookup_mem {α β : Type} [BEq α] [LawfulBEq α] {k : α} {r : β} :
@@ -739,71 +770,84 @@ theorem lookup_map {α β : Type} (g : α → β) (Γ : List (String × α)) (x 
     · simp only [List.map_cons, List.find?_cons, h, decide_false]; exact ih
 
 mutual
-inductive TypeTerm : SCtx → State → Term → SType → State → Prop where
-  | lit : TypeTerm Γ s (.lit n) (.prim "int") s
-  | var : Γ.lookup x = some st → TypeTerm Γ s (.var x) st s
-  | lam : s.kind s.next = [] → TypeTerm ((x, .var s.next) :: Γ) s.fresh t st s₁ →
-      TypeTerm Γ s (.lam x t) (.arrow (.var s.next) st) s₁
+/-- `TypeTerm Γ lvl s t st s'`: typing `t` at level `lvl`. -/
+inductive TypeTerm : PCtx → Nat → State → Term → SType → State → Prop where
+  | lit : TypeTerm Γ lvl s (.lit n) (.prim "int") s
+  | var : Γ.lookup x = some (.mono st) → TypeTerm Γ lvl s (.var x) st s
+  /-- A use of a `let`-bound name instantiates its scheme. -/
+  | inst : Γ.lookup x = some (.poly gen st) → IsInst s lvl gen ρ →
+      TypeTerm Γ lvl s (.var x) (st.rename ρ) (s.instantiate gen ρ)
+  | lam : s.kind s.next = [] → s.level s.next = lvl →
+      TypeTerm ((x, .mono (.var s.next)) :: Γ) lvl s.fresh t st s₁ →
+      TypeTerm Γ lvl s (.lam x t) (.arrow (.var s.next) st) s₁
   /-- The result variable is allocated first, as in `lib/typer.ml`. -/
-  | app : s.kind s.next = [] → TypeTerm Γ s.fresh f stf s₁ → TypeTerm Γ s₁ a sta s₂ →
+  | app : s.kind s.next = [] → s.level s.next = lvl →
+      TypeTerm Γ lvl s.fresh f stf s₁ → TypeTerm Γ lvl s₁ a sta s₂ →
       ConstrainTop s₂ stf (.arrow sta (.var s.next)) s₃ →
-      TypeTerm Γ s (.app f a) (.var s.next) s₃
+      TypeTerm Γ lvl s (.app f a) (.var s.next) s₃
   /-- A record literal has exactly its fields: its row is closed. -/
-  | rcd : TypeFields Γ s fs F s₁ → TypeTerm Γ s (.rcd fs) (.record F .nil) s₁
-  | sel : s.kind s.next = [] → TypeTerm Γ s.fresh t st s₁ →
+  | rcd : TypeFields Γ lvl s fs F s₁ → TypeTerm Γ lvl s (.rcd fs) (.record F .nil) s₁
+  | sel : s.kind s.next = [] → s.level s.next = lvl → TypeTerm Γ lvl s.fresh t st s₁ →
       ConstrainTop s₁ st (.record (.cons l (.var s.next) .nil) .abs) s₂ →
-      TypeTerm Γ s (.sel t l) (.var s.next) s₂
+      TypeTerm Γ lvl s (.sel t l) (.var s.next) s₂
   /-- `t.l ?? d`: the field may be missing, and `d` has its type. -/
-  | selOr : s.kind s.next = [] → TypeTerm Γ s.fresh t st s₁ →
+  | selOr : s.kind s.next = [] → s.level s.next = lvl → TypeTerm Γ lvl s.fresh t st s₁ →
       ConstrainTop s₁ st (.record (.cons l (.opt (.var s.next)) .nil) .abs) s₂ →
-      TypeTerm Γ s₂ d std s₃ →
+      TypeTerm Γ lvl s₂ d std s₃ →
       ConstrainTop s₃ std (.var s.next) s₄ →
-      TypeTerm Γ s (.selOr t l d) (.var s.next) s₄
+      TypeTerm Γ lvl s (.selOr t l d) (.var s.next) s₄
   /-- `t with {fs}`: `t ≤ {fs ↦ Abs | ρ}`, result `{fs | ρ}`, where `ρ`
   lacks the labels of `fs`. -/
-  | ext : fs ≠ [] → TypeTerm Γ s t st s₁ → TypeFields Γ s₁ fs F s₂ →
-      s₂.kind s₂.next = F.labels →
+  | ext : fs ≠ [] → TypeTerm Γ lvl s t st s₁ → TypeFields Γ lvl s₁ fs F s₂ →
+      s₂.kind s₂.next = F.labels → s₂.level s₂.next = lvl →
       ConstrainTop s₂.fresh st (.record F.absOf (.var s₂.next)) s₃ →
-      TypeTerm Γ s (.ext t fs) (.record F (.var s₂.next)) s₃
+      TypeTerm Γ lvl s (.ext t fs) (.record F (.var s₂.next)) s₃
   /-- `t with {}` is just `t`. -/
-  | extNil : TypeTerm Γ s t st s₁ → TypeTerm Γ s (.ext t []) st s₁
-  | letIn : TypeTerm Γ s r str s₁ → TypeTerm ((x, str) :: Γ) s₁ b stb s₂ →
-      TypeTerm Γ s (.letIn false x r b) stb s₂
-  /-- `let rec` binds a function (as `type_let_rhs` checks). -/
-  | letRec : r.IsFun → s.kind s.next = [] → TypeTerm ((x, .var s.next) :: Γ) s.fresh r inf s₁ →
+  | extNil : TypeTerm Γ lvl s t st s₁ → TypeTerm Γ lvl s (.ext t []) st s₁
+  /-- `let x = r in b`: `r` is typed one level up, and the variables above
+  the level of the `let` that it allocated are generalized. -/
+  | letIn : TypeTerm Γ (lvl + 1) s r str s₁ →
+      TypeTerm ((x, .poly (genVars s.level s.next s₁.next lvl) str) :: Γ) lvl s₁ b stb s₂ →
+      TypeTerm Γ lvl s (.letIn false x r b) stb s₂
+  /-- `let rec` binds a function (as `type_let_rhs` checks), typed with
+  its own name at a variable that its type then flows into. -/
+  | letRec : r.IsFun → s.kind s.next = [] → s.level s.next = lvl + 1 →
+      TypeTerm ((x, .mono (.var s.next)) :: Γ) (lvl + 1) s.fresh r inf s₁ →
       ConstrainTop s₁ inf (.var s.next) s₂ →
-      TypeTerm ((x, .var s.next) :: Γ) s₂ b stb s₃ →
-      TypeTerm Γ s (.letIn true x r b) stb s₃
+      TypeTerm ((x, .poly (genVars s.level s.next s₂.next lvl) (.var s.next)) :: Γ) lvl s₂ b stb
+        s₃ →
+      TypeTerm Γ lvl s (.letIn true x r b) stb s₃
   /-- `if c then a else b`: the condition is a boolean, and both branches
   flow into the result variable, allocated first. -/
-  | ite : s.kind s.next = [] → TypeTerm Γ s.fresh c stc s₁ →
+  | ite : s.kind s.next = [] → s.level s.next = lvl → TypeTerm Γ lvl s.fresh c stc s₁ →
       ConstrainTop s₁ stc (.prim "bool") s₂ →
-      TypeTerm Γ s₂ a sta s₃ → ConstrainTop s₃ sta (.var s.next) s₄ →
-      TypeTerm Γ s₄ b stb s₅ → ConstrainTop s₅ stb (.var s.next) s₆ →
-      TypeTerm Γ s (.ite c a b) (.var s.next) s₆
+      TypeTerm Γ lvl s₂ a sta s₃ → ConstrainTop s₃ sta (.var s.next) s₄ →
+      TypeTerm Γ lvl s₄ b stb s₅ → ConstrainTop s₅ stb (.var s.next) s₆ →
+      TypeTerm Γ lvl s (.ite c a b) (.var s.next) s₆
   /-- `fn (…) -> t`: the parameters give the signature and the context of
   the body. The parameter list is well-formed (`Param.WF`), which the
   parser guarantees (`lib/parser.ml`); the typer does not check it. -/
-  | fn : Param.WF P.toList → TypeParams Γ s ps P Γ' s₁ → TypeTerm Γ' s₁ t st s₂ →
-      TypeTerm Γ s (.fn ps t) (.arrow (.sig P) st) s₂
+  | fn : Param.WF P.toList → TypeParams Γ lvl s ps P Γ' s₁ → TypeTerm Γ' lvl s₁ t st s₂ →
+      TypeTerm Γ lvl s (.fn ps t) (.arrow (.sig P) st) s₂
 
-inductive TypeFields : SCtx → State → List (String × Term) → SFields → State → Prop where
-  | nil : TypeFields Γ s [] .nil s
-  | cons : TypeTerm Γ s t st s₁ → TypeFields Γ s₁ fs F s₂ →
-      TypeFields Γ s ((l, t) :: fs) (.cons l st F) s₂
+inductive TypeFields : PCtx → Nat → State → List (String × Term) → SFields → State → Prop where
+  | nil : TypeFields Γ lvl s [] .nil s
+  | cons : TypeTerm Γ lvl s t st s₁ → TypeFields Γ lvl s₁ fs F s₂ →
+      TypeFields Γ lvl s ((l, t) :: fs) (.cons l st F) s₂
 
 /-- The parameters of a `fn`: each gets a fresh variable; a default is
 typed in the scope of the parameters before it and flows into its
 parameter's type, as an argument would. -/
-inductive TypeParams :
-    SCtx → State → List (String × PKind × Option Term) → SParams → SCtx → State → Prop where
-  | nil : TypeParams Γ s [] .nil Γ s
-  | req : s.kind s.next = [] → TypeParams ((x, .var s.next) :: Γ) s.fresh ps P Γ' s₁ →
-      TypeParams Γ s ((x, k, none) :: ps) (.cons x k false (.var s.next) P) Γ' s₁
-  | dflt : s.kind s.next = [] → TypeTerm Γ s.fresh d std s₁ →
+inductive TypeParams : PCtx → Nat → State → List (String × PKind × Option Term) → SParams →
+    PCtx → State → Prop where
+  | nil : TypeParams Γ lvl s [] .nil Γ s
+  | req : s.kind s.next = [] → s.level s.next = lvl →
+      TypeParams ((x, .mono (.var s.next)) :: Γ) lvl s.fresh ps P Γ' s₁ →
+      TypeParams Γ lvl s ((x, k, none) :: ps) (.cons x k false (.var s.next) P) Γ' s₁
+  | dflt : s.kind s.next = [] → s.level s.next = lvl → TypeTerm Γ lvl s.fresh d std s₁ →
       ConstrainTop s₁ std (.var s.next) s₂ →
-      TypeParams ((x, .var s.next) :: Γ) s₂ ps P Γ' s₃ →
-      TypeParams Γ s ((x, k, some d) :: ps) (.cons x k true (.var s.next) P) Γ' s₃
+      TypeParams ((x, .mono (.var s.next)) :: Γ) lvl s₂ ps P Γ' s₃ →
+      TypeParams Γ lvl s ((x, k, some d) :: ps) (.cons x k true (.var s.next) P) Γ' s₃
 end
 
 /-- The signature of a built-in: positional-only parameters, under names
@@ -819,20 +863,25 @@ def builtins : SCtx :=
     ("succ", .arrow (.sig (builtinSig 0 [.prim "int"])) (.prim "int")),
     ("add", .arrow (.sig (builtinSig 0 [.prim "int", .prim "int"])) (.prim "int")) ]
 
+/-- The built-ins as a context. -/
+def pbuiltins : PCtx := builtins.map fun p => (p.1, .mono p.2)
+
 /-! ## Sanity checks -/
 
 section Examples
 
 /-- `fun x -> x` gets `α₀ → α₀`, with no bounds. -/
 theorem typeTerm_id :
-    TypeTerm builtins State.init (.lam "x" (.var "x")) (.arrow (.var 0) (.var 0)) State.init.fresh :=
-  .lam rfl (.var rfl)
+    TypeTerm pbuiltins 0 State.init (.lam "x" (.var "x")) (.arrow (.var 0) (.var 0))
+      State.init.fresh :=
+  .lam rfl rfl (.var rfl)
 
 /-- `1 2` is rejected: there is no way to constrain `int ≤ int → α`. -/
-theorem typeTerm_app_lit : ¬ ∃ st s', TypeTerm builtins State.init (.app (.lit 1) (.lit 2)) st s' := by
+theorem typeTerm_app_lit :
+    ¬ ∃ st s', TypeTerm pbuiltins 0 State.init (.app (.lit 1) (.lit 2)) st s' := by
   rintro ⟨st, s', h⟩
   cases h with
-  | app _ hf ha hc =>
+  | app _ _ hf ha hc =>
     cases hf
     cases ha
     obtain ⟨s₁, hc, _⟩ := hc
@@ -843,9 +892,9 @@ theorem typeTerm_app_lit : ¬ ∃ st s', TypeTerm builtins State.init (.app (.li
 variable `α₀` the lower bound `int`: `α₁ → α₁ ≤ int → α₀` gives `int ≤ α₁`,
 then `α₁ ≤ α₀`, which propagates `α₁`'s lower bound to `int ≤ α₀`. -/
 theorem typeTerm_app_id :
-    ∃ s', TypeTerm builtins State.init (.app (.lam "x" (.var "x")) (.lit 42)) (.var 0) s' ∧
+    ∃ s', TypeTerm pbuiltins 0 State.init (.app (.lam "x" (.var "x")) (.lit 42)) (.var 0) s' ∧
       (s'.bounds 0).lower = [.prim "int"] := by
-  refine ⟨_, .app rfl (.lam rfl (.var rfl)) .lit
+  refine ⟨_, .app rfl rfl (.lam rfl rfl (.var rfl)) .lit
     ⟨_, .arrow ?n₁ (.varR ?n₂ ?nv₂ (Nat.le_refl _) .nil)
       (.varL ?n₃ ?na₃ (Nat.le_refl _) (.cons (.varR ?n₄ ?nv₄ (Nat.le_refl _) .nil) .nil)), rfl⟩, ?b⟩
   case b => rfl

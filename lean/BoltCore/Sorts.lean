@@ -442,26 +442,32 @@ theorem ConstrainTop.nac {s s' : State} (h : ConstrainTop s a b s') (i : Inv₂ 
   obtain ⟨s₁, hc, rfl⟩ := h
   exact hc.nac (i.of_bounds rfl fun _ hp => hp) ha hb hl
 
-/-- The context's types are `NAC` and are types. -/
-def CtxNAC (Γ : SCtx) : Prop := ∀ x st, Γ.lookup x = some st → st.NAC ∧ st.IsPre
+/-- The type of an entry. -/
+def CEntry.ty : CEntry → SType
+  | .mono st => st
+  | .poly _ st => st
 
-theorem CtxNAC.cons (h : CtxNAC Γ) (hs : st.NAC) (hn : st.IsPre) : CtxNAC ((x, st) :: Γ) := by
-  intro y t hy
-  simp only [SCtx.lookup, List.find?_cons] at hy
-  split at hy
-  · simp at hy; subst hy; exact ⟨hs, hn⟩
-  · exact h y t hy
+/-- The context's types are `NAC` and are types. -/
+def CtxNAC (Γ : PCtx) : Prop := ∀ x e, Γ.lookup x = some e → e.ty.NAC ∧ e.ty.IsPre
+
+theorem CtxNAC.cons {Γ : PCtx} {x : String} {e : CEntry} (h : CtxNAC Γ) (hs : e.ty.NAC)
+    (hn : e.ty.IsPre) : CtxNAC ((x, e) :: Γ) := by
+  intro y e' hy
+  rcases PCtx.lookup_cons hy with ⟨_, rfl⟩ | hy
+  · exact ⟨hs, hn⟩
+  · exact h y e' hy
 
 mutual
 /-- Inferred types are `NAC` and are types, and accepted constraints stay `NAC`. -/
-theorem TypeTerm.nac : TypeTerm Γ s t st s' → CtxNAC Γ → Inv₂ s → LogNAC s →
+theorem TypeTerm.nac : TypeTerm Γ lvl s t st s' → CtxNAC Γ → Inv₂ s → LogNAC s →
     LogNAC s' ∧ st.NAC ∧ st.IsPre
   | .lit, _, _, h => ⟨h, trivial, trivial⟩
   | .var hx, hΓ, _, h => ⟨h, (hΓ _ _ hx).1, (hΓ _ _ hx).2⟩
-  | .lam _ h', hΓ, i, h =>
-    have r := h'.nac (hΓ.cons trivial trivial) i.fresh h
+  | .inst hx _, hΓ, _, h => ⟨h.instantiate, (hΓ _ _ hx).1.rename, (hΓ _ _ hx).2.rename⟩
+  | .lam (x := x) _ _ h', hΓ, i, h =>
+    have r := h'.nac (hΓ.cons (x := x) (e := .mono _) trivial trivial) i.fresh h
     ⟨r.1, ⟨(fun h => nomatch h), r.2.2.ne_abs, trivial, r.2.1⟩, trivial⟩
-  | .app _ h₁ h₂ hc, hΓ, i, h =>
+  | .app _ _ h₁ h₂ hc, hΓ, i, h =>
     have r₁ := h₁.nac hΓ i.fresh h
     have i₁ := h₁.inv₂ i.fresh
     have r₂ := h₂.nac hΓ i₁ r₁.1
@@ -470,10 +476,10 @@ theorem TypeTerm.nac : TypeTerm Γ s t st s' → CtxNAC Γ → Inv₂ s → LogN
   | .rcd h', hΓ, i, h =>
     have r := h'.nac hΓ i h
     ⟨r.1, ⟨r.2, trivial⟩, trivial⟩
-  | .sel _ h' hc, hΓ, i, h =>
+  | .sel _ _ h' hc, hΓ, i, h =>
     have r := h'.nac hΓ i.fresh h
     ⟨hc.nac (h'.inv₂ i.fresh) r.2.1 ⟨⟨trivial, trivial⟩, trivial⟩ r.1, trivial, trivial⟩
-  | .ite _ hc h₁ ha h₂ hb h₃, hΓ, i, h =>
+  | .ite _ _ hc h₁ ha h₂ hb h₃, hΓ, i, h =>
     have rc := hc.nac hΓ i.fresh h
     have i₁ := hc.inv₂ i.fresh
     have n₁ := h₁.nac i₁ rc.2.1 trivial rc.1
@@ -484,7 +490,7 @@ theorem TypeTerm.nac : TypeTerm Γ s t st s' → CtxNAC Γ → Inv₂ s → LogN
     have i₄ := h₂.inv₂ i₃
     have rb := hb.nac hΓ i₄ n₂
     ⟨h₃.nac (hb.inv₂ i₄) rb.2.1 trivial rb.1, trivial, trivial⟩
-  | .selOr _ h' hc hd hc', hΓ, i, h =>
+  | .selOr _ _ h' hc hd hc', hΓ, i, h =>
     have r := h'.nac hΓ i.fresh h
     have i₁ := h'.inv₂ i.fresh
     have n₂ := hc.nac i₁ r.2.1 ⟨⟨trivial, trivial⟩, trivial⟩ r.1
@@ -492,26 +498,26 @@ theorem TypeTerm.nac : TypeTerm Γ s t st s' → CtxNAC Γ → Inv₂ s → LogN
     have rd := hd.nac hΓ i₂ n₂
     ⟨hc'.nac (hd.inv₂ i₂) rd.2.1 trivial rd.1, trivial, trivial⟩
   | .extNil h', hΓ, i, h => h'.nac hΓ i h
-  | .ext _ h₁ h₂ _ hc, hΓ, i, h =>
+  | .ext _ h₁ h₂ _ _ hc, hΓ, i, h =>
     have r₁ := h₁.nac hΓ i h
     have i₁ := h₁.inv₂ i
     have r₂ := h₂.nac hΓ i₁ r₁.1
     ⟨hc.nac (h₂.inv₂ i₁).fresh r₁.2.1 ⟨SFields.NAC.absOf, trivial⟩ r₂.1, ⟨r₂.2, trivial⟩,
       trivial⟩
-  | .letIn h₁ h₂, hΓ, i, h =>
+  | .letIn (x := x) h₁ h₂, hΓ, i, h =>
     have r₁ := h₁.nac hΓ i h
-    h₂.nac (hΓ.cons r₁.2.1 r₁.2.2) (h₁.inv₂ i) r₁.1
-  | .letRec _ _ h₁ hc h₂, hΓ, i, h =>
-    have hΓ' := hΓ.cons (st := .var _) trivial trivial
-    have r₁ := h₁.nac hΓ' i.fresh h
+    h₂.nac (hΓ.cons (x := x) (e := .poly _ _) r₁.2.1 r₁.2.2) (h₁.inv₂ i) r₁.1
+  | .letRec (x := x) _ _ _ h₁ hc h₂, hΓ, i, h =>
+    have r₁ := h₁.nac (hΓ.cons (x := x) (e := .mono (.var _)) trivial trivial) i.fresh h
     have i₁ := h₁.inv₂ i.fresh
-    h₂.nac hΓ' (hc.inv₂ i₁) (hc.nac i₁ r₁.2.1 trivial r₁.1)
+    h₂.nac (hΓ.cons (x := x) (e := .poly _ (.var _)) trivial trivial) (hc.inv₂ i₁)
+      (hc.nac i₁ r₁.2.1 trivial r₁.1)
   | .fn _ hp h', hΓ, i, h =>
     have rp := hp.nac hΓ i h
     have r := h'.nac rp.2.2 (hp.inv₂ i) rp.1
     ⟨r.1, ⟨(fun h => nomatch h), r.2.2.ne_abs, rp.2.1, r.2.1⟩, trivial⟩
 
-theorem TypeFields.nac : TypeFields Γ s fs F s' → CtxNAC Γ → Inv₂ s → LogNAC s →
+theorem TypeFields.nac : TypeFields Γ lvl s fs F s' → CtxNAC Γ → Inv₂ s → LogNAC s →
     LogNAC s' ∧ F.NAC
   | .nil, _, _, h => ⟨h, trivial⟩
   | .cons h₁ h₂, hΓ, i, h =>
@@ -520,26 +526,29 @@ theorem TypeFields.nac : TypeFields Γ s fs F s' → CtxNAC Γ → Inv₂ s → 
     ⟨r₂.1, r₁.2.1, r₂.2⟩
 
 /-- Parameters: the signature is `NAC`, and so is the context of the body. -/
-theorem TypeParams.nac : TypeParams Γ s ps P Γ' s' → CtxNAC Γ → Inv₂ s → LogNAC s →
+theorem TypeParams.nac : TypeParams Γ lvl s ps P Γ' s' → CtxNAC Γ → Inv₂ s → LogNAC s →
     LogNAC s' ∧ P.NAC ∧ CtxNAC Γ'
   | .nil, hΓ, _, h => ⟨h, trivial, hΓ⟩
-  | .req _ h', hΓ, i, h =>
-    have r := h'.nac (hΓ.cons trivial trivial) i.fresh h
+  | .req (x := x) _ _ h', hΓ, i, h =>
+    have r := h'.nac (hΓ.cons (x := x) (e := .mono _) trivial trivial) i.fresh h
     ⟨r.1, ⟨trivial, trivial, r.2.1⟩, r.2.2⟩
-  | .dflt _ hd hc h', hΓ, i, h =>
+  | .dflt (x := x) _ _ hd hc h', hΓ, i, h =>
     have rd := hd.nac hΓ i.fresh h
     have i₁ := hd.inv₂ i.fresh
-    have r := h'.nac (hΓ.cons trivial trivial) (hc.inv₂ i₁) (hc.nac i₁ rd.2.1 trivial rd.1)
+    have r := h'.nac (hΓ.cons (x := x) (e := .mono _) trivial trivial) (hc.inv₂ i₁)
+      (hc.nac i₁ rd.2.1 trivial rd.1)
     ⟨r.1, ⟨trivial, trivial, r.2.1⟩, r.2.2⟩
 end
 
-theorem LogNAC.init {K : Nat → List String} : LogNAC (State.initK K) := fun _ h => nomatch h
+theorem LogNAC.init {K : Nat → List String} {L : Nat → Nat} : LogNAC (State.initKL K L) :=
+  fun _ h => nomatch h
 
-theorem builtins_NAC : CtxNAC builtins := by
-  intro x st h
-  have hm := SCtx.lookup_mem h
-  simp only [builtins, List.mem_cons, Prod.mk.injEq, List.not_mem_nil, or_false] at hm
+theorem pbuiltins_NAC : CtxNAC pbuiltins := by
+  intro x e h
+  have hm := PCtx.lookup_mem h
+  simp only [pbuiltins, builtins, List.map_cons, List.map_nil, List.mem_cons, Prod.mk.injEq,
+    List.not_mem_nil, or_false] at hm
   rcases hm with ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, rfl⟩ <;>
-    exact ⟨by simp [SType.NAC, SParams.NAC, builtinSig, SType.IsPre], trivial⟩
+    exact ⟨by simp [CEntry.ty, SType.NAC, SParams.NAC, builtinSig, SType.IsPre], trivial⟩
 
 end BoltCore.Alg

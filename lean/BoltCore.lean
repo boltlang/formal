@@ -15,10 +15,11 @@ import BoltCore.Levels
 import BoltCore.ExtrusionSound
 import BoltCore.Instantiate
 import BoltCore.Soundness
+import BoltCore.TypeWf
 import BoltCore.Solution
 import BoltCore.Sorts
 import BoltCore.SolutionRows
-import BoltCore.Theorem1
+import BoltCore.Final
 import BoltCore.Kinds
 import BoltCore.Certificate
 import BoltCore.PolyLet

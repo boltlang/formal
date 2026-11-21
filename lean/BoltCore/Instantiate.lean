@@ -127,7 +127,8 @@ theorem in_scope_rename (hi : IsInst s lvl gen ρ) {t : SType} (ht : t.In (· < 
 theorem Scope.instantiate (hs : Scope s) (hi : IsInst s lvl gen ρ) :
     Scope (s.instantiate gen ρ) := by
   have hn : s.next ≤ s.next + gen.length := Nat.le_add_right _ _
-  refine ⟨fun w x hx => ?_, fun e he => Nat.lt_of_lt_of_le (hs.exps e he) hn, hs.expLevel⟩
+  refine ⟨fun w x hx => ?_, fun e he => ⟨Nat.lt_of_lt_of_le (hs.exps e he).1 hn,
+    Nat.lt_of_lt_of_le (hs.exps e he).2 hn⟩, hs.expLevel⟩
   rcases hx with hx | hx
   · rcases mem_upper_instantiate hx with ⟨α, hα, rfl, u, hu, rfl⟩ | hx
     · exact ⟨(hi.fresh α hα).2, in_scope_rename hi (hs.bounds α u (.inl hu)).2⟩

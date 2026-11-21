@@ -1,4 +1,4 @@
-import BoltCore.Soundness
+import BoltCore.TypeWf
 import BoltCore.Sub
 
 /-!
@@ -126,34 +126,38 @@ theorem ConstrainTop.inv₂ {s s' : State} (h : ConstrainTop s a b s') (hi : Inv
   obtain ⟨s₁, hc, rfl⟩ := h
   exact (hc.inv₂ (hi.of_bounds rfl fun _ hp => hp)).of_bounds rfl fun _ hp => hp
 
+theorem Inv₂.instantiate {s : State} {gen : List Nat} {ρ : Nat → Nat} (h : Inv₂ s) :
+    Inv₂ (s.instantiate gen ρ) := ⟨h.inLog.instantiate⟩
+
 mutual
-theorem TypeTerm.inv₂ : TypeTerm Γ s t st s' → Inv₂ s → Inv₂ s'
+theorem TypeTerm.inv₂ : TypeTerm Γ lvl s t st s' → Inv₂ s → Inv₂ s'
   | .lit, h => h
   | .var _, h => h
-  | .lam _ h', h => h'.inv₂ h.fresh
-  | .app _ h₁ h₂ hc, h => hc.inv₂ (h₂.inv₂ (h₁.inv₂ h.fresh))
+  | .inst _ _, h => h.instantiate
+  | .lam _ _ h', h => h'.inv₂ h.fresh
+  | .app _ _ h₁ h₂ hc, h => hc.inv₂ (h₂.inv₂ (h₁.inv₂ h.fresh))
   | .rcd h', h => h'.inv₂ h
-  | .sel _ h' hc, h => hc.inv₂ (h'.inv₂ h.fresh)
-  | .ite _ hc h₁ ha h₂ hb h₃, h =>
+  | .sel _ _ h' hc, h => hc.inv₂ (h'.inv₂ h.fresh)
+  | .ite _ _ hc h₁ ha h₂ hb h₃, h =>
     h₃.inv₂ (hb.inv₂ (h₂.inv₂ (ha.inv₂ (h₁.inv₂ (hc.inv₂ h.fresh)))))
-  | .selOr _ h' hc hd hc', h => hc'.inv₂ (hd.inv₂ (hc.inv₂ (h'.inv₂ h.fresh)))
-  | .ext _ h₁ h₂ _ hc, h => hc.inv₂ (h₂.inv₂ (h₁.inv₂ h)).fresh
+  | .selOr _ _ h' hc hd hc', h => hc'.inv₂ (hd.inv₂ (hc.inv₂ (h'.inv₂ h.fresh)))
+  | .ext _ h₁ h₂ _ _ hc, h => hc.inv₂ (h₂.inv₂ (h₁.inv₂ h)).fresh
   | .extNil h', h => h'.inv₂ h
   | .letIn h₁ h₂, h => h₂.inv₂ (h₁.inv₂ h)
-  | .letRec _ _ h₁ hc h₂, h => h₂.inv₂ (hc.inv₂ (h₁.inv₂ h.fresh))
+  | .letRec _ _ _ h₁ hc h₂, h => h₂.inv₂ (hc.inv₂ (h₁.inv₂ h.fresh))
   | .fn _ hp h', h => h'.inv₂ (hp.inv₂ h)
 
-theorem TypeFields.inv₂ : TypeFields Γ s fs F s' → Inv₂ s → Inv₂ s'
+theorem TypeFields.inv₂ : TypeFields Γ lvl s fs F s' → Inv₂ s → Inv₂ s'
   | .nil, h => h
   | .cons h₁ h₂, h => h₂.inv₂ (h₁.inv₂ h)
 
-theorem TypeParams.inv₂ : TypeParams Γ s ps P Γ' s' → Inv₂ s → Inv₂ s'
+theorem TypeParams.inv₂ : TypeParams Γ lvl s ps P Γ' s' → Inv₂ s → Inv₂ s'
   | .nil, h => h
-  | .req _ h', h => h'.inv₂ h.fresh
-  | .dflt _ hd hc h', h => h'.inv₂ (hc.inv₂ (hd.inv₂ h.fresh))
+  | .req _ _ h', h => h'.inv₂ h.fresh
+  | .dflt _ _ hd hc h', h => h'.inv₂ (hc.inv₂ (hd.inv₂ h.fresh))
 end
 
-theorem Inv₂.init {K : Nat → List String} : Inv₂ (State.initK K) :=
+theorem Inv₂.init {K : Nat → List String} {L : Nat → Nat} : Inv₂ (State.initKL K L) :=
   ⟨⟨(fun _ _ h => nomatch h), (fun _ _ h => nomatch h)⟩⟩
 
 /-! ## Closing chains of variable bounds -/

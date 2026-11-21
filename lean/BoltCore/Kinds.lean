@@ -1,4 +1,4 @@
-import BoltCore.Theorem1
+import BoltCore.Final
 
 /-!
 # Kinds for row variables, and Theorem 1 without assumptions
@@ -912,16 +912,15 @@ theorem ConstrainTop.kinds {s s' : State} (h : ConstrainTop s a b s') (i : Inv�
 /-! ## Inferred types -/
 
 /-- The context's types are well-kinded whole types. -/
-def CtxK (K : Nat → List String) (Γ : SCtx) : Prop :=
-  ∀ x st, Γ.lookup x = some st → WK K st ∧ KEmpty K st
+def CtxK (K : Nat → List String) (Γ : PCtx) : Prop :=
+  ∀ x e, Γ.lookup x = some e → WK K e.ty ∧ KEmpty K e.ty
 
-theorem CtxK.cons {Γ : SCtx} (h : CtxK K Γ) (hw : WK K st) (he : KEmpty K st) :
-    CtxK K ((x, st) :: Γ) := by
-  intro y t hy
-  simp only [SCtx.lookup, List.find?_cons] at hy
-  split at hy
-  · simp at hy; subst hy; exact ⟨hw, he⟩
-  · exact h y t hy
+theorem CtxK.cons {Γ : PCtx} {x : String} {e : CEntry} (h : CtxK K Γ) (hw : WK K e.ty)
+    (he : KEmpty K e.ty) : CtxK K ((x, e) :: Γ) := by
+  intro y e' hy
+  rcases PCtx.lookup_cons hy with ⟨_, rfl⟩ | hy
+  · exact ⟨hw, he⟩
+  · exact h y e' hy
 
 /-- A fresh ordinary type variable lacks nothing. -/
 theorem KEmpty.var_nil (h : K v = []) : KEmpty K (.var v) := fun ρ hρ l hl => by
@@ -930,7 +929,7 @@ theorem KEmpty.var_nil (h : K v = []) : KEmpty K (.var v) := fun ρ hρ l hl => 
   rw [h] at h₁
   exact nomatch h₁
 
-theorem TypeFields.ne_nil : TypeFields Γ s fs F s' → fs ≠ [] → F ≠ .nil
+theorem TypeFields.ne_nil : TypeFields Γ lvl s fs F s' → fs ≠ [] → F ≠ .nil
   | .nil, h => absurd rfl h
   | .cons _ _, _ => fun h => nomatch h
 
@@ -940,15 +939,19 @@ theorem SFields.absOf_ne_nil : ∀ {F : SFields}, F ≠ .nil → F.absOf ≠ .ni
 
 mutual
 /-- Typing preserves the kind invariant, and infers well-kinded whole types. -/
-theorem TypeTerm.kinds : TypeTerm Γ s t st s' → CtxK K Γ → Inv₂ s → KInv K s →
+theorem TypeTerm.kinds : TypeTerm Γ lvl s t st s' → CtxK K Γ → Inv₂ s → KInv K s →
     KInv K s' ∧ WK K st ∧ KEmpty K st
   | .lit, _, _, k => ⟨k, trivial, .of_nonvar (fun _ h => nomatch h)⟩
   | .var hx, hΓ, _, k => ⟨k, hΓ _ _ hx⟩
-  | .lam hn h, hΓ, i, k => by
+  | .inst (st := st) hx hi, hΓ, _, k => by
+    have hK := hi.kinds k.kind
+    exact ⟨k.instantiate hK, WK.rename hK (hΓ _ _ hx).1, (KSame.rename hK st).kempty (hΓ _ _ hx).2⟩
+  | .lam (x := x) hn _ h, hΓ, i, k => by
     have hv := KEmpty.var_nil (k.kind ▸ hn)
-    have r := h.kinds (hΓ.cons trivial hv) i.fresh ⟨k.kind, k.log, k.exps⟩
+    have r := h.kinds (hΓ.cons (x := x) (e := .mono (.var _)) trivial hv) i.fresh
+      ⟨k.kind, k.log, k.exps⟩
     exact ⟨r.1, ⟨trivial, hv, r.2.1, r.2.2⟩, .of_nonvar (fun _ h => nomatch h)⟩
-  | .app hn h₁ h₂ hc, hΓ, i, k => by
+  | .app hn _ h₁ h₂ hc, hΓ, i, k => by
     have hv := KEmpty.var_nil (k.kind ▸ hn)
     have r₁ := h₁.kinds hΓ i.fresh ⟨k.kind, k.log, k.exps⟩
     have i₁ := h₁.inv₂ i.fresh
@@ -958,13 +961,13 @@ theorem TypeTerm.kinds : TypeTerm Γ s t st s' → CtxK K Γ → Inv₂ s → KI
   | .rcd h, hΓ, i, k => by
     have r := h.kinds hΓ i k
     exact ⟨r.1, ⟨r.2, trivial, fun _ h => nomatch h⟩, .of_nonvar (fun _ h => nomatch h)⟩
-  | .sel hn h hc, hΓ, i, k => by
+  | .sel hn _ h hc, hΓ, i, k => by
     have hv := KEmpty.var_nil (k.kind ▸ hn)
     have r := h.kinds hΓ i.fresh ⟨k.kind, k.log, k.exps⟩
     exact ⟨hc.kinds (h.inv₂ i.fresh) r.1 r.2.1
       ⟨⟨trivial, hv, trivial⟩, trivial, fun _ h => nomatch h⟩
       (.of_nonvarR (fun _ h => nomatch h)), trivial, hv⟩
-  | .ite hn hc h₁ ha h₂ hb h₃, hΓ, i, k => by
+  | .ite hn _ hc h₁ ha h₂ hb h₃, hΓ, i, k => by
     have hv := KEmpty.var_nil (k.kind ▸ hn)
     have rc := hc.kinds hΓ i.fresh ⟨k.kind, k.log, k.exps⟩
     have i₁ := hc.inv₂ i.fresh
@@ -976,7 +979,7 @@ theorem TypeTerm.kinds : TypeTerm Γ s t st s' → CtxK K Γ → Inv₂ s → KI
     have i₄ := h₂.inv₂ i₃
     have rb := hb.kinds hΓ i₄ k₂
     exact ⟨h₃.kinds (hb.inv₂ i₄) rb.1 rb.2.1 trivial (.of_empty rb.2.2 hv), trivial, hv⟩
-  | .selOr hn h hc hd hc', hΓ, i, k => by
+  | .selOr hn _ h hc hd hc', hΓ, i, k => by
     have hv := KEmpty.var_nil (k.kind ▸ hn)
     have r := h.kinds hΓ i.fresh ⟨k.kind, k.log, k.exps⟩
     have i₁ := h.inv₂ i.fresh
@@ -986,7 +989,7 @@ theorem TypeTerm.kinds : TypeTerm Γ s t st s' → CtxK K Γ → Inv₂ s → KI
     have i₂ := hc.inv₂ i₁
     have rd := hd.kinds hΓ i₂ k₂
     exact ⟨hc'.kinds (hd.inv₂ i₂) rd.1 rd.2.1 trivial (.of_empty rd.2.2 hv), trivial, hv⟩
-  | .ext (F := F) (s₂ := s₂) hfs h₁ h₂ hn hc, hΓ, i, k => by
+  | .ext (F := F) (s₂ := s₂) hfs h₁ h₂ hn _ hc, hΓ, i, k => by
     have r₁ := h₁.kinds hΓ i k
     have i₁ := h₁.inv₂ i
     have r₂ := h₂.kinds hΓ i₁ r₁.1
@@ -1007,22 +1010,23 @@ theorem TypeTerm.kinds : TypeTerm Γ s t st s' → CtxK K Γ → Inv₂ s → KI
     exact ⟨hc.kinds (h₂.inv₂ i₁).fresh ⟨r₂.1.kind, r₂.1.log, r₂.1.exps⟩ r₁.2.1 rhs.1
       (.of_empty r₁.2.2 rhs.2), res⟩
   | .extNil h, hΓ, i, k => h.kinds hΓ i k
-  | .letIn h₁ h₂, hΓ, i, k => by
+  | .letIn (x := x) h₁ h₂, hΓ, i, k => by
     have r₁ := h₁.kinds hΓ i k
-    exact h₂.kinds (hΓ.cons r₁.2.1 r₁.2.2) (h₁.inv₂ i) r₁.1
-  | .letRec (x := x) _ hn h₁ hc h₂, hΓ, i, k => by
+    exact h₂.kinds (hΓ.cons (x := x) (e := .poly _ _) r₁.2.1 r₁.2.2) (h₁.inv₂ i) r₁.1
+  | .letRec (x := x) _ hn _ h₁ hc h₂, hΓ, i, k => by
     have hv := KEmpty.var_nil (k.kind ▸ hn)
-    have hΓ' := hΓ.cons (x := x) (st := .var _) trivial hv
-    have r₁ := h₁.kinds hΓ' i.fresh ⟨k.kind, k.log, k.exps⟩
+    have r₁ := h₁.kinds (hΓ.cons (x := x) (e := .mono (.var _)) trivial hv) i.fresh
+      ⟨k.kind, k.log, k.exps⟩
     have i₁ := h₁.inv₂ i.fresh
-    exact h₂.kinds hΓ' (hc.inv₂ i₁) (hc.kinds i₁ r₁.1 r₁.2.1 trivial (.of_empty r₁.2.2 hv))
+    exact h₂.kinds (hΓ.cons (x := x) (e := .poly _ (.var _)) trivial hv) (hc.inv₂ i₁)
+      (hc.kinds i₁ r₁.1 r₁.2.1 trivial (.of_empty r₁.2.2 hv))
   | .fn _ hp h, hΓ, i, k => by
     have rp := hp.kinds hΓ i k
     have r := h.kinds rp.2.2 (hp.inv₂ i) rp.1
     exact ⟨r.1, ⟨rp.2.1, .of_nonvar (fun _ h => nomatch h), r.2.1, r.2.2⟩,
       .of_nonvar (fun _ h => nomatch h)⟩
 
-theorem TypeFields.kinds : TypeFields Γ s fs F s' → CtxK K Γ → Inv₂ s → KInv K s →
+theorem TypeFields.kinds : TypeFields Γ lvl s fs F s' → CtxK K Γ → Inv₂ s → KInv K s →
     KInv K s' ∧ FWK K F
   | .nil, _, _, k => ⟨k, trivial⟩
   | .cons h₁ h₂, hΓ, i, k => by
@@ -1031,31 +1035,33 @@ theorem TypeFields.kinds : TypeFields Γ s fs F s' → CtxK K Γ → Inv₂ s �
     exact ⟨r₂.1, r₁.2.1, r₁.2.2, r₂.2⟩
 
 /-- Parameters: the signature is well-kinded, and so is the body's context. -/
-theorem TypeParams.kinds : TypeParams Γ s ps P Γ' s' → CtxK K Γ → Inv₂ s → KInv K s →
+theorem TypeParams.kinds : TypeParams Γ lvl s ps P Γ' s' → CtxK K Γ → Inv₂ s → KInv K s →
     KInv K s' ∧ PWK K P ∧ CtxK K Γ'
   | .nil, hΓ, _, k => ⟨k, trivial, hΓ⟩
-  | .req (x := x) hn h, hΓ, i, k => by
+  | .req (x := x) hn _ h, hΓ, i, k => by
     have hv := KEmpty.var_nil (k.kind ▸ hn)
-    have r := h.kinds (hΓ.cons (x := x) (st := .var _) trivial hv) i.fresh ⟨k.kind, k.log, k.exps⟩
+    have r := h.kinds (hΓ.cons (x := x) (e := .mono (.var _)) trivial hv) i.fresh
+      ⟨k.kind, k.log, k.exps⟩
     exact ⟨r.1, ⟨trivial, hv, r.2.1⟩, r.2.2⟩
-  | .dflt (x := x) hn hd hc h, hΓ, i, k => by
+  | .dflt (x := x) hn _ hd hc h, hΓ, i, k => by
     have hv := KEmpty.var_nil (k.kind ▸ hn)
     have rd := hd.kinds hΓ i.fresh ⟨k.kind, k.log, k.exps⟩
     have i₁ := hd.inv₂ i.fresh
     have k₂ := hc.kinds i₁ rd.1 rd.2.1 trivial (.of_empty rd.2.2 hv)
-    have r := h.kinds (hΓ.cons (x := x) (st := .var _) trivial hv) (hc.inv₂ i₁) k₂
+    have r := h.kinds (hΓ.cons (x := x) (e := .mono (.var _)) trivial hv) (hc.inv₂ i₁) k₂
     exact ⟨r.1, ⟨trivial, hv, r.2.1⟩, r.2.2⟩
 end
 
-theorem KInv.init : KInv K (State.initK K) :=
+theorem KInv.init {L : Nat → Nat} : KInv K (State.initKL K L) :=
   ⟨rfl, (fun _ h => nomatch h), (fun _ _ _ h => nomatch h)⟩
 
-theorem builtins_K : CtxK K builtins := by
-  intro x st h
-  have hm := SCtx.lookup_mem h
-  simp only [builtins, List.mem_cons, Prod.mk.injEq, List.not_mem_nil, or_false] at hm
+theorem pbuiltins_K : CtxK K pbuiltins := by
+  intro x e h
+  have hm := PCtx.lookup_mem h
+  simp only [pbuiltins, builtins, List.map_cons, List.map_nil, List.mem_cons, Prod.mk.injEq,
+    List.not_mem_nil, or_false] at hm
   rcases hm with ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, rfl⟩ <;>
-    simp [WK, PWK, builtinSig, KEmpty, rowView]
+    simp [CEntry.ty, WK, PWK, builtinSig, KEmpty, rowView]
 
 /-! ## Ranking tails by kinds -/
 
@@ -1156,16 +1162,5 @@ theorem kinds_tailRanked {s : State} (k : KInv K s) (i : BoundsInLog s) :
   lower := fun _ _ _ hx hnv hρ =>
     let ⟨h₁, _, h₂, h₃, h₄⟩ := lower_kinds k i hx hnv hρ
     countP_lt h₁ h₂ h₃ h₄
-
-/-! ## Theorem 1 -/
-
-/-- **Theorem 1** (soundness of type inference), with no assumption left:
-if the algorithm types `t` with `st` in the built-in context, for the kinds
-`K` of its run, ending in state `s'`, then `t : θ(st)` in the declarative
-system, where `θ` is the solution of `s'`. -/
-theorem theorem1 (h : TypeTerm builtins (State.initK K) t st s') :
-    Typ (defsOf s') builtins.toCtx t st.toTy :=
-  soundness h (kinds_tailRanked (h.kinds builtins_K Inv₂.init KInv.init).1
-    (h.inv₂ Inv₂.init).inLog)
 
 end BoltCore.Alg
