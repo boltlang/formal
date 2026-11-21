@@ -27,3 +27,12 @@ fn (k) -> let h = k(fn (x) -> x) in h
 fn (k) -> let h = k(fn (x, y = 1, /, z = 2, *, w) -> add(x, y)) in h
 fn (k) -> let h(v) = k(fn (x, y = v) -> x) in {a = h(1); b = h(true)}
 let twice(f) = fn (x) -> f(f(x)) in twice(fn (a, b = 0) -> add(a, b))(1)
+# Three levels: a variable of an inner let that is a lower bound of another
+# is extruded past the outer let, so consistency relates the original to the
+# copy of its upper bound through its own copy (`GStep.viaVar`).
+fn (a) -> let f(x) = let g(y) = a(if true then x else y) in g in f
+fn (a) -> fn (b) -> let f(x) = let g(y) = let h(z) = a(if z then x else y) in h in g in f(b)
+# A repeated label under extrusion: a step compares the first field of a
+# label on each side, the others are shadowed.
+fn (a) -> let f(x) = a({l = x; l = 1}) in f
+fn (a) -> let f(x) = a({l = 1; l = x}) in f

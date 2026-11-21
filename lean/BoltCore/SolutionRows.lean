@@ -54,25 +54,6 @@ theorem SFields.lookup_append (l : String) : ∀ (fs gs : SFields),
     · simp [h]
     · simp [h, SFields.lookup_append l fs gs]
 
-theorem SFields.common_mem {f₀ f₁ : SType} {l : String} {fs₀ : SFields} :
-    ∀ fs₁ : SFields, fs₁.lookup l = some f₁ → fs₀.lookup l = some f₀ →
-      (f₀, f₁) ∈ fs₀.common fs₁
-  | .nil, h, _ => by simp [SFields.lookup] at h
-  | .cons n g rest, h₁, h₀ => by
-    simp only [SFields.lookup] at h₁
-    simp only [SFields.common]
-    by_cases hn : n = l
-    · subst hn
-      simp at h₁
-      subst h₁
-      rw [h₀]
-      exact List.mem_cons_self ..
-    · simp only [hn, ite_false] at h₁
-      have := SFields.common_mem rest h₁ h₀
-      split
-      · exact List.mem_cons_of_mem _ this
-      · exact this
-
 theorem SFields.missing_lookup (fs₀ : SFields) (l : String) : ∀ fs₁ : SFields,
     (fs₀.missing fs₁).lookup l =
       if (fs₀.lookup l).isSome then none else fs₁.lookup l
@@ -291,6 +272,7 @@ theorem lower_chain (hi : Inv s) {rank : Nat → Nat} (hr : TailRanked s rank)
             (ih _ hl h₁ B hB')
         | varL => exact absurd rfl (hxv _)
         | viaL => exact absurd rfl (hxv _)
+        | viaVar => exact absurd rfl (hxv _)
         | sigL hb => exact absurd hb id
     · exact nomatch h
 
@@ -594,6 +576,7 @@ theorem stepNonvarG₀ (hi : Inv s) (hn : LogNAC s) (hl : Logged s a b) (ha : a 
     | varR => exact absurd rfl (hbv _)
     | viaL => exact absurd rfl (hav _)
     | viaR => exact absurd rfl (hbv _)
+    | viaVar => exact absurd rfl (hav _)
     | recordSig hd hR => exact StG.sigR (hn _ hl).2 hd (.rcd (.base (SolG.row hR)))
     | sigL _ hR => exact hsig _ rfl (hn _ hl).1 hR
 
@@ -634,6 +617,7 @@ theorem stepVarNonvarG (hi : Inv s) (hn : LogNAC s) (hg : GenHyp s A I) (hw : w 
       exact .defL (defsOf.clo .ty (.here hb hbv)) h'
     | varR => exact absurd rfl (hnv _)
     | viaR => exact absurd rfl (hnv _)
+    | viaVar => exact absurd rfl (hnv _)
 
 /-- **Variable lower bounds**: a variable lower bound `w` of `m` (outside
 `A`) is below every upper bound reachable from `m`, one layer. -/
@@ -661,7 +645,49 @@ theorem stepVarLowerG (hi : Inv s) (hn : LogNAC s) (hg : GenHyp s A I) (hc : Clo
         | varR hl => exact ih hm'A w hl
         | viaL _ _ _ hbv => exact absurd rfl (hbv _)
         | viaR _ _ _ hav => exact absurd rfl (hav _)
+        | viaVar hu' hl' =>
+          -- `w ≤ m₂` by the definitions, and `m₂` is a lower bound of `m'`
+          refine StG.comp (.defR fun τ ⟨u', hc', e⟩ => ?_) (ih hm'A _ hl')
+          subst e
+          exact .defL (defsOf.clo .ty (.step hu' hc')) (StG.of_sub Sub.refl)
     · exact nomatch h
+
+/-- A variable below one of its upper bounds, one layer. -/
+theorem stepUpperG (hg : GenHyp s A I) {v : Nat} {b : SType} (hub : b ∈ (s.bounds v).upper) :
+    StG s I (I .ty v) (b.toTyI I) := by
+  by_cases hv : v ∈ A
+  · exact .of_sub (hg.up v hv _ hub).1
+  rw [hg.out .ty v hv]
+  match b, hub with
+  | .var w, hub =>
+    show StG s I _ (I .ty w)
+    rw [hg.out .ty w (hg.var_out hv (.inl hub))]
+    exact .defR fun τ ⟨u, hc, e⟩ => by
+      subst e; exact .defL (defsOf.clo .ty (.step hub hc)) (StG.of_sub Sub.refl)
+  | .prim _, hub | .arrow _ _, hub | .record _ _, hub | .abs, hub
+  | .missing, hub | .opt _, hub | .nil, hub | .sig _, hub =>
+    rw [SType.interp_avoid_ty hg (hg.avoid v hv _ (.inl hub))]
+    exact .defL (defsOf.clo .ty (.here hub (fun _ h => nomatch h))) (StG.of_sub Sub.refl)
+
+/-- A lower bound of a variable below the variable, one layer. -/
+theorem stepLowerG (hi : Inv s) (hn : LogNAC s) (hr : TailRanked s rank) (hg : GenHyp s A I)
+    {v : Nat} {a : SType} (hlb : a ∈ (s.bounds v).lower) (ha' : a ≠ .abs) :
+    StG s I (a.toTyI I) (I .ty v) := by
+  by_cases hv : v ∈ A
+  · exact .of_sub ((hg.low v hv _ hlb).1 ha')
+  rw [hg.out .ty v hv]
+  refine .defR fun τ ⟨u, hc, e⟩ => ?_
+  subst e
+  show StG s I _ u.toTy
+  rw [← SType.interp_avoid_ty hg (hc.avoid hg hv)]
+  cases a with
+  | var w =>
+    show StG s I (I .ty w) _
+    rw [hg.out .ty w (hg.var_out hv (.inr hlb))]
+    exact stepVarLowerG hi hn hg hc hv w hlb
+  | prim _ | arrow _ _ | record _ _ | missing | opt _ | nil | sig _ =>
+    exact (lower_chain hi hr hc _ hlb (fun _ h => nomatch h) _ (Nat.le_refl _)).stepG hi hn ha'
+  | abs => exact absurd rfl ha'
 
 theorem stepTyG (hi : Inv s) (hn : LogNAC s) (hr : TailRanked s rank) (hg : GenHyp s A I)
     (hl : Logged s a b) (ha : a ≠ .abs ∨ a = b) : StG s I (a.toTyI I) (b.toTyI I) := by
@@ -677,42 +703,14 @@ theorem stepTyG (hi : Inv s) (hn : LogNAC s) (hr : TailRanked s rank) (hg : GenH
     | recordNil => exact .rcd (.base (SolG.row (a := .record _ _) (b := .nil) (.inr hl)))
     | @record fa ta _ _ fb tb =>
       exact .rcd (.base (SolG.row (a := .record fa ta) (b := .record fb tb) (.inr hl)))
-    | @varL v _ hub =>
-      by_cases hv : v ∈ A
-      · exact .of_sub (hg.up v hv _ hub).1
-      show StG s I (I .ty v) _
-      rw [hg.out .ty v hv]
-      match b, hub with
-      | .var w, hub =>
-        show StG s I _ (I .ty w)
-        rw [hg.out .ty w (hg.var_out hv (.inl hub))]
-        exact .defR fun τ ⟨u, hc, e⟩ => by
-          subst e; exact .defL (defsOf.clo .ty (.step hub hc)) (StG.of_sub Sub.refl)
-      | .prim _, hub | .arrow _ _, hub | .record _ _, hub | .abs, hub
-      | .missing, hub | .opt _, hub | .nil, hub | .sig _, hub =>
-        rw [SType.interp_avoid_ty hg (hg.avoid v hv _ (.inl hub))]
-        exact .defL (defsOf.clo .ty (.here hub (fun _ h => nomatch h))) (StG.of_sub Sub.refl)
-    | @varR v _ hlb =>
-      have ha' : a ≠ .abs := by
-        rcases ha with ha | ha
-        · exact ha
-        · subst ha; exact fun h => nomatch h
-      by_cases hv : v ∈ A
-      · exact .of_sub ((hg.low v hv _ hlb).1 ha')
-      show StG s I _ (I .ty v)
-      rw [hg.out .ty v hv]
-      refine .defR fun τ ⟨u, hc, e⟩ => ?_
-      subst e
-      show StG s I _ u.toTy
-      rw [← SType.interp_avoid_ty hg (hc.avoid hg hv)]
-      cases a with
-      | var w =>
-        show StG s I (I .ty w) _
-        rw [hg.out .ty w (hg.var_out hv (.inr hlb))]
-        exact stepVarLowerG hi hn hg hc hv w hlb
-      | prim _ | arrow _ _ | record _ _ | missing | opt _ | nil | sig _ =>
-        exact (lower_chain hi hr hc _ hlb (fun _ h => nomatch h) _ (Nat.le_refl _)).stepG hi hn ha'
-      | abs => exact absurd rfl ha'
+    | varL hub => exact stepUpperG hg hub
+    | varR hlb =>
+      refine stepLowerG hi hn hr hg hlb ?_
+      rcases ha with ha | ha
+      · exact ha
+      · subst ha; exact fun h => nomatch h
+    | viaVar hu hl' =>
+      exact (stepUpperG hg hu).comp (stepLowerG hi hn hr hg hl' (fun h => nomatch h))
     | @viaL v b' _ hb hbv hba hnv hR =>
       by_cases hv : v ∈ A
       · exact (StG.of_sub (hg.up v hv _ hb).1).comp (stepNonvarG hi hn hR hba hbv hnv)
@@ -841,6 +839,7 @@ theorem fieldVarLowerG (hi : Inv s) (hr : TailRanked s rank) (hg : GenHyp s A I)
           exact .projDefL (defsOf.clo .row (.here hb hbv)) h'
         | varR => exact absurd rfl (hnv _)
         | viaR => exact absurd rfl (hnv _)
+        | viaVar => exact absurd rfl (hnv _)
     · exact nomatch h
   | @step n m' u hm' hc ih' =>
     intro w hw hB
@@ -858,6 +857,11 @@ theorem fieldVarLowerG (hi : Inv s) (hr : TailRanked s rank) (hg : GenHyp s A I)
         | varR hl => exact ih' hm'A w hl (Nat.le_trans (tailRank_upVar_le hr hm') hB)
         | viaL _ _ _ hbv => exact absurd rfl (hbv _)
         | viaR _ _ _ hav => exact absurd rfl (hav _)
+        | viaVar hu' hl' =>
+          refine StG.comp (.projDefR fun τ ⟨u', hc', e⟩ => ?_)
+            (ih' hm'A _ hl' (Nat.le_trans (tailRank_upVar_le hr hm') hB))
+          subst e
+          exact .projDefL (defsOf.clo .row (.step hu' hc')) (StG.of_sub Sub.refl)
     · exact nomatch h
 
 /-- A record below a record, at a field, as the algorithm's record case
@@ -865,7 +869,8 @@ goes, given the step from the rest of the left row into the right tail. -/
 theorem stepFieldRecordG (hi : Inv s) (hn : LogNAC s) (hr : TailRanked s rank) (hg : GenHyp s A I)
     {fa fb fs₀ fs₁ : SFields} {ta tb t₀ t₁ t₀' : SType} (l : String)
     (e₀ : rowView (.record fa ta) = (fs₀, t₀)) (e₁ : rowView (.record fb tb) = (fs₁, t₁))
-    (hcom : ∀ p ∈ fs₀.common fs₁, FieldR (Logged s) p.1 p.2)
+    (hcom : ∀ l f₀ f₁, fs₀.lookup l = some f₀ → fs₁.lookup l = some f₁ →
+      FieldR (Logged s) f₀ f₁)
     (hexp : ExpandG s.bounds (Logged s) t₀ (fs₀.missing fs₁) t₀')
     (hrec : StG s I (((restRow (fs₁.missing fs₀) t₀').toRowI I).field l)
       ((t₁.toRowI I).field l)) :
@@ -883,7 +888,7 @@ theorem stepFieldRecordG (hi : Inv s) (hn : LogNAC s) (hr : TailRanked s rank) (
     cases h₀ : fs₀.lookup l with
     | some f₀ =>
       dsimp only
-      exact stepFieldRG hi hn hr hg (hcom _ (SFields.common_mem fs₁ h₁ h₀))
+      exact stepFieldRG hi hn hr hg (hcom l f₀ f₁ h₀ h₁)
     | none =>
       dsimp only
       simp only [h₀, h₁, Option.isSome, Bool.false_eq_true, ite_false] at hmiss
@@ -1007,6 +1012,7 @@ theorem stepFieldNVG₀ (hi : Inv s) (hn : LogNAC s) (hr : TailRanked s rank) (h
       · rw [ht]; exact rowView_tail_lt fb tb
     | varL => exact absurd rfl (hav _)
     | viaL => exact absurd rfl (hav _)
+    | viaVar => exact absurd rfl (hav _)
     | @varR v _ hlb =>
       by_cases hv : v ∈ A
       · exact .of_sub ((hg.low v hv _ hlb).2.fields l)
@@ -1050,6 +1056,42 @@ theorem stepFieldNVG (hi : Inv s) (hn : LogNAC s) (hr : TailRanked s rank) (hg :
       stepFieldNVG₀ hi hn hr hg b ihRank ihSize d (SParams.domains_nonvar hd) l (hR d hd)
         fun Q e => absurd e (SParams.domains_ne_sig hd Q)
 
+/-- A row variable below one of its upper bounds, at a field. -/
+theorem fieldUpperG (hg : GenHyp s A I) {w : Nat} {b : SType} {l : String}
+    (hub : b ∈ (s.bounds w).upper) :
+    StG s I ((I .row w).field l) ((b.toRowI I).field l) := by
+  by_cases hw : w ∈ A
+  · exact .of_sub ((hg.up w hw _ hub).2.fields l)
+  rw [hg.out .row w hw]
+  match b, hub with
+  | .var w', hub =>
+    show StG s I _ ((I .row w').field l)
+    rw [hg.out .row w' (hg.var_out hw (.inl hub))]
+    exact .projDefR fun τ ⟨u, hc, e⟩ => by
+      subst e; exact .projDefL (defsOf.clo .row (.step hub hc)) (StG.of_sub Sub.refl)
+  | .prim _, hub | .arrow _ _, hub | .record _ _, hub | .abs, hub
+  | .missing, hub | .opt _, hub | .nil, hub | .sig _, hub =>
+    rw [SType.interp_avoid_row hg (hg.avoid w hw _ (.inl hub))]
+    exact .projDefL (defsOf.clo .row (.here hub (fun _ h => nomatch h))) (StG.of_sub Sub.refl)
+
+/-- A variable lower bound of a row variable below it, at a field, given
+field steps for accepted constraints into right sides of smaller tail
+rank. -/
+theorem fieldLowerVarG (hi : Inv s) (hr : TailRanked s rank) (hg : GenHyp s A I) {l : String}
+    {v w : Nat}
+    (ih : ∀ x y, Logged s x y → tailRank rank y < tailRank rank (.var v) →
+      StG s I ((x.toRowI I).field l) ((y.toRowI I).field l))
+    (hlb : SType.var w ∈ (s.bounds v).lower) :
+    StG s I ((I .row w).field l) ((I .row v).field l) := by
+  by_cases hv : v ∈ A
+  · exact .of_sub ((hg.low v hv _ hlb).2.fields l)
+  rw [hg.out .row w (hg.var_out hv (.inr hlb)), hg.out .row v hv]
+  refine .projDefR fun τ ⟨u, hc, e⟩ => ?_
+  subst e
+  show StG s I _ (u.toRow.field l)
+  rw [← SType.interp_avoid_row hg (hc.avoid hg hv)]
+  exact fieldVarLowerG hi hr hg ih hc hv w hlb (Nat.le_refl _)
+
 theorem stepFieldCoreG (hi : Inv s) (hn : LogNAC s) (hr : TailRanked s rank) (hg : GenHyp s A I)
     (b : SType)
     (ihRank : ∀ u a l, tailRank rank u < tailRank rank b → Logged s a u →
@@ -1074,35 +1116,15 @@ theorem stepFieldCoreG (hi : Inv s) (hn : LogNAC s) (hr : TailRanked s rank) (hg
     · exact .of_sub Sub.refl
     · cases hi.just.step hl with
       | absR => exact .top
-      | varL hub =>
-        by_cases hw : w ∈ A
-        · exact .of_sub ((hg.up w hw _ hub).2.fields l)
-        show StG s I ((I .row w).field l) _
-        rw [hg.out .row w hw]
-        match b, hub with
-        | .var w', hub =>
-          show StG s I _ ((I .row w').field l)
-          rw [hg.out .row w' (hg.var_out hw (.inl hub))]
-          exact .projDefR fun τ ⟨u, hc, e⟩ => by
-            subst e; exact .projDefL (defsOf.clo .row (.step hub hc)) (StG.of_sub Sub.refl)
-        | .prim _, hub | .arrow _ _, hub | .record _ _, hub | .abs, hub
-        | .missing, hub | .opt _, hub | .nil, hub | .sig _, hub =>
-          rw [SType.interp_avoid_row hg (hg.avoid w hw _ (.inl hub))]
-          exact .projDefL (defsOf.clo .row (.here hub (fun _ h => nomatch h))) (StG.of_sub Sub.refl)
-      | @varR v _ hlb =>
-        by_cases hv : v ∈ A
-        · exact .of_sub ((hg.low v hv _ hlb).2.fields l)
-        show StG s I ((I .row w).field l) ((I .row v).field l)
-        rw [hg.out .row w (hg.var_out hv (.inr hlb)), hg.out .row v hv]
-        refine .projDefR fun τ ⟨u, hc, e⟩ => ?_
-        subst e
-        show StG s I _ (u.toRow.field l)
-        rw [← SType.interp_avoid_row hg (hc.avoid hg hv)]
-        exact fieldVarLowerG hi hr hg (fun x y hxy hy => ihRank y x l hy hxy) hc hv w hlb
-          (Nat.le_refl _)
+      | varL hub => exact fieldUpperG hg hub
+      | varR hlb =>
+        exact fieldLowerVarG hi hr hg (fun x y hxy hy => ihRank y x l hy hxy) hlb
       | viaL hb hbv _ _ hR =>
         exact boundField hg hb hbv (stepFieldNVG hi hn hr hg b ihRank ihSize _ hbv l hR)
       | viaR _ _ _ hav => exact absurd rfl (hav _)
+      | viaVar hu hl' =>
+        exact (fieldUpperG hg hu).comp
+          (fieldLowerVarG hi hr hg (fun x y hxy hy => ihRank y x l hy hxy) hl')
 
 theorem stepFieldG (hi : Inv s) (hn : LogNAC s) (hr : TailRanked s rank) (hg : GenHyp s A I)
     (b a : SType) (l : String) (hl : Logged s a b) :

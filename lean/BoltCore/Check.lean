@@ -142,6 +142,32 @@ theorem pairsB_sound {ps : List (SType × SType)} (h : pairsB R ps = true) :
     ∀ p ∈ ps, FieldR R p.1 p.2 :=
   fun p hp => fieldB_sound (List.all_eq_true.mp h p hp)
 
+variable (R) in
+/-- The first field of each label of `fs₁` is above the first field of
+that label in `fs₀`, if there is one. -/
+def lookupsB (fs₀ fs₁ : SFields) : Bool :=
+  fs₁.labels.all fun l =>
+    match fs₀.lookup l, fs₁.lookup l with
+    | some f₀, some f₁ => fieldB R f₀ f₁
+    | _, _ => true
+
+theorem SFields.lookup_labels {l : String} {f : SType} :
+    ∀ {fs : SFields}, fs.lookup l = some f → l ∈ fs.labels
+  | .nil, h => by simp [SFields.lookup] at h
+  | .cons n _ fs, h => by
+    simp only [SFields.lookup] at h
+    simp only [SFields.labels, List.mem_cons]
+    by_cases hn : n = l
+    · exact .inl hn.symm
+    · simp only [hn, ite_false] at h; exact .inr (SFields.lookup_labels h)
+
+theorem lookupsB_sound {fs₀ fs₁ : SFields} (h : lookupsB R fs₀ fs₁ = true) :
+    ∀ l f₀ f₁, fs₀.lookup l = some f₀ → fs₁.lookup l = some f₁ → FieldR R f₀ f₁ := by
+  intro l f₀ f₁ h₀ h₁
+  have := List.all_eq_true.mp h l (SFields.lookup_labels h₁)
+  simp only [h₀, h₁] at this
+  exact fieldB_sound this
+
 variable (σ K R) in
 /-- The tails `t'` such that `ExpandG σ R t ms t'` holds (with the kind
 `K v` for a row variable `v`). -/
@@ -196,7 +222,7 @@ def structB : SType → SType → Bool
   | .record fa ta, .nil =>
     pairsB R (rowView (.record fa ta)).1.toMisPairs && decide (R (rowView (.record fa ta)).2 .nil)
   | .record fa ta, .record fb tb =>
-    pairsB R ((rowView (.record fa ta)).1.common (rowView (.record fb tb)).1) &&
+    lookupsB R (rowView (.record fa ta)).1 (rowView (.record fb tb)).1 &&
       (expandRes σ K R (rowView (.record fa ta)).2
           ((rowView (.record fa ta)).1.missing (rowView (.record fb tb)).1)).any fun t₀' =>
         decide (R (restRow ((rowView (.record fb tb)).1.missing (rowView (.record fa ta)).1) t₀')
@@ -219,7 +245,7 @@ theorem structB_sound {a b : SType} (h : structB σ K R a b = true) : GStep σ R
     exact .recordNil rfl (pairsB_sound h.1) h.2
   · simp only [Bool.and_eq_true, List.any_eq_true, decide_eq_true_eq] at h
     obtain ⟨hf, t₀', he, ht⟩ := h
-    exact .record rfl rfl (pairsB_sound hf) (expandRes_sound he) ht
+    exact .record rfl rfl (lookupsB_sound hf) (expandRes_sound he) ht
   · simp only [List.any_eq_true, decide_eq_true_eq] at h
     obtain ⟨d, hd, hR⟩ := h
     exact .recordSig hd hR
@@ -263,18 +289,42 @@ theorem varRB_sound : ∀ {a b : SType}, varRB σ R a b = true → GStep σ R a 
   | _, .prim _, h | _, .arrow _ _, h | _, .record _ _, h | _, .abs, h
   | _, .missing, h | _, .opt _, h | _, .nil, h | _, .sig _, h => by simp [varRB] at h
 
+variable (σ) in
+/-- Between variables, through a variable that is an upper bound of the
+left one and a lower bound of the right one (`viaVar`). -/
+def viaVarB : SType → SType → Bool
+  | .var v, .var w => (σ v).upper.any fun m =>
+      match m with
+      | .var _ => decide (m ∈ (σ w).lower)
+      | _ => false
+  | _, _ => false
+
+theorem viaVarB_sound {R : SType → SType → Prop} :
+    ∀ {a b : SType}, viaVarB σ a b = true → GStep σ R a b
+  | .var v, .var w, h => by
+    simp only [viaVarB, List.any_eq_true] at h
+    obtain ⟨m, hm, hl⟩ := h
+    cases m with
+    | var m => exact .viaVar hm (of_decide_eq_true hl)
+    | _ => simp at hl
+  | .var _, .prim _, h | .var _, .arrow _ _, h | .var _, .record _ _, h | .var _, .abs, h
+  | .var _, .missing, h | .var _, .opt _, h | .var _, .nil, h | .var _, .sig _, h
+  | .prim _, _, h | .arrow _ _, _, h | .record _ _, _, h | .abs, _, h
+  | .missing, _, h | .opt _, _, h | .nil, _, h | .sig _, _, h => by simp [viaVarB] at h
+
 variable (σ K R) in
 /-- One justification step (`GStep`). -/
 def gstepB (a b : SType) : Bool :=
-  b == .abs || structB σ K R a b || varLB σ R a b || varRB σ R a b
+  b == .abs || structB σ K R a b || varLB σ R a b || varRB σ R a b || viaVarB σ a b
 
 theorem gstepB_sound {a b : SType} (h : gstepB σ K R a b = true) : GStep σ R a b := by
   simp only [gstepB, Bool.or_eq_true, beq_iff_eq] at h
-  rcases h with ((h | h) | h) | h
+  rcases h with (((h | h) | h) | h) | h
   · subst h; exact .absR
   · exact structB_sound h
   · exact varLB_sound h
   · exact varRB_sound h
+  · exact viaVarB_sound h
 
 end Just
 

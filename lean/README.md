@@ -318,7 +318,9 @@ are needed ("option C").
      checker does not need them. Extrusion: done. Justification accepts
      variables as lower bounds; `v ≤ b` through an upper bound `b'` of `v`
      with `b' ≤ b` accepted (`viaL`), and dually through a lower bound
-     (`viaR`), both between non-variables so they stay guarded; and row
+     (`viaR`), both between non-variables so they stay guarded; between
+     variables, through a variable that is an upper bound of one and a
+     lower bound of the other (`viaVar`, needed from three levels on); and row
      expansion through an installed upper bound whose fields are below the
      expanded ones. Instantiation: done. A use of a let-bound name carries
      a renaming, and the checker verifies that it fixes every

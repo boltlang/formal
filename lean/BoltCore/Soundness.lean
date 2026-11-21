@@ -50,6 +50,27 @@ inductive FieldR (R : SType → SType → Prop) : SType → SType → Prop where
   | preOpt : f₀.IsPre → R f₀ τ₁ → FieldR R f₀ (.opt τ₁)
   | pre : f₀.IsPre → f₁.IsPre → R f₀ f₁ → FieldR R f₀ f₁
 
+/-- The pair of the fields two lists have at a label is among their common
+pairs. -/
+theorem SFields.common_mem {f₀ f₁ : SType} {l : String} {fs₀ : SFields} :
+    ∀ fs₁ : SFields, fs₁.lookup l = some f₁ → fs₀.lookup l = some f₀ →
+      (f₀, f₁) ∈ fs₀.common fs₁
+  | .nil, h, _ => by simp [SFields.lookup] at h
+  | .cons n g rest, h₁, h₀ => by
+    simp only [SFields.lookup] at h₁
+    simp only [SFields.common]
+    by_cases hn : n = l
+    · subst hn
+      simp at h₁
+      subst h₁
+      rw [h₀]
+      exact List.mem_cons_self ..
+    · simp only [hn, ite_false] at h₁
+      have := SFields.common_mem rest h₁ h₀
+      split
+      · exact List.mem_cons_of_mem _ this
+      · exact this
+
 /-- Two field lists with the same labels, related field by field. -/
 inductive SFields.Rel (Q : SType → SType → Prop) : SFields → SFields → Prop where
   | nil : SFields.Rel Q .nil .nil
@@ -88,8 +109,12 @@ inductive GStep (σ : Nat → Bounds) (R : SType → SType → Prop) : SType →
   | recordNil : rowView (.record fa ta) = (fs₀, t₀) →
       (∀ p ∈ fs₀.toMisPairs, FieldR R p.1 p.2) → R t₀ .nil →
       GStep σ R (.record fa ta) .nil
+  /-- The fields are compared label by label: the first field of each
+  label on the left with the first on the right (a repeated label is
+  shadowed, as in `Ty.field`). The algorithm compares every field of the
+  right side, which is more than a step needs. -/
   | record : rowView (.record fa ta) = (fs₀, t₀) → rowView (.record fb tb) = (fs₁, t₁) →
-      (∀ p ∈ fs₀.common fs₁, FieldR R p.1 p.2) →
+      (∀ l f₀ f₁, fs₀.lookup l = some f₀ → fs₁.lookup l = some f₁ → FieldR R f₀ f₁) →
       ExpandG σ R t₀ (fs₀.missing fs₁) t₀' →
       R (restRow (fs₁.missing fs₀) t₀') t₁ →
       GStep σ R (.record fa ta) (.record fb tb)
@@ -102,6 +127,12 @@ inductive GStep (σ : Nat → Bounds) (R : SType → SType → Prop) : SType →
   /-- Through a lower bound: `a ≤ a'` and `a' ≤ v`, between non-variables. -/
   | viaR : a' ∈ (σ v).lower → (∀ w, a' ≠ .var w) → a' ≠ .abs → (∀ w, a ≠ .var w) →
       a ≠ .abs → R a a' → GStep σ R a (.var v)
+  /-- Between variables, through a variable `m` that is an upper bound of
+  `v` and a lower bound of `w`. Extrusion produces this: when `v` is a
+  lower bound of `u` and both are copied, the copy `m` of `v` is an upper
+  bound of `v` and a lower bound of the copy `w` of `u`, and consistency
+  at `u` asks for `v ≤ w`. -/
+  | viaVar : .var m ∈ (σ v).upper → .var m ∈ (σ w).lower → GStep σ R (.var v) (.var w)
   /-- A record below a signature: it is below one of its argument records. -/
   | recordSig : d ∈ P.domains → R (.record fa ta) d → GStep σ R (.record fa ta) (.sig P)
   /-- A signature below a record or a signature: each argument record is. -/
@@ -249,12 +280,13 @@ theorem GStep.mono (g : Grows s s') :
   | .recordNil h₀ hf ht =>
     .recordNil h₀ (fun p hp => (hf p hp).mono fun _ _ => Logged.mono g) (ht.mono g)
   | .record h₀ h₁ hf he ht =>
-    .record h₀ h₁ (fun p hp => (hf p hp).mono fun _ _ => Logged.mono g)
+    .record h₀ h₁ (fun l f₀ f₁ e₀ e₁ => (hf l f₀ f₁ e₀ e₁).mono fun _ _ => Logged.mono g)
       (he.mono g.upper fun _ _ => Logged.mono g) (ht.mono g)
   | .varL h => .varL (g.upper _ _ h)
   | .varR h => .varR (g.lower _ _ h)
   | .viaL h h₁ h₂ h₃ h₄ => .viaL (g.upper _ _ h) h₁ h₂ h₃ (h₄.mono g)
   | .viaR h h₁ h₂ h₃ h₄ h₅ => .viaR (g.lower _ _ h) h₁ h₂ h₃ h₄ (h₅.mono g)
+  | .viaVar h₁ h₂ => .viaVar (g.upper _ _ h₁) (g.lower _ _ h₂)
   | .recordSig hd h => .recordSig hd (h.mono g)
   | .sigL hb h => .sigL hb fun d hd => (h d hd).mono g
 
@@ -473,7 +505,8 @@ theorem Constrain.just : Constrain s a b s' → CacheInLog s → JustExcept s P 
     have r₂ := h₂.logged r₁.1
     have j₃ := h₃.just r₂.1 (h₂.just r₁.1 (h₁.just hc.remember h.remember))
     j₃.close (.record e₀ e₁
-      (fun p hp => (r₁.2 p hp).mono fun _ _ => Logged.mono (h₂.grows.trans h₃.grows))
+      (fun _ _ _ l₀ l₁ => (r₁.2 _ (SFields.common_mem _ l₁ l₀)).mono
+        fun _ _ => Logged.mono (h₂.grows.trans h₃.grows))
       (r₂.2.mono h₃.grows.upper fun _ _ => Logged.mono h₃.grows) (h₃.logged r₂.1).2)
   | .varL (s := s₀) (v := v) (b := b) _ _ h, hc, hj =>
     have j := h.just hc.rememberUpper
