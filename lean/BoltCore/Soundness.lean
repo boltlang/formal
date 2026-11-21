@@ -1,4 +1,4 @@
-import BoltCore.ExtrusionSound
+import BoltCore.Instantiate
 
 /-!
 # Soundness of constraining, at the level of the bound graph

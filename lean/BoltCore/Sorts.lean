@@ -304,6 +304,34 @@ theorem ExtrudeEach.nac : ExtrudeEach s c pol lvl ts ts' s' c' → BoundsInLog s
     · exact r₂.2 t' h
 end
 
+/-! ## Instantiation -/
+
+mutual
+theorem SType.NAC.rename {ρ : Nat → Nat} : ∀ {t : SType}, t.NAC → (t.rename ρ).NAC
+  | .var _, _ | .prim _, _ | .abs, _ | .missing, _ | .nil, _ => trivial
+  | .opt t, h => SType.NAC.rename (t := t) h
+  | .arrow _ _, ⟨h₁, h₂, h₃, h₄⟩ =>
+    ⟨SType.rename_ne_abs h₁, SType.rename_ne_abs h₂, h₃.rename, h₄.rename⟩
+  | .record _ _, ⟨h₁, h₂⟩ => ⟨h₁.rename, h₂.rename⟩
+  | .sig _, h => SParams.NAC.rename h
+
+theorem SFields.NAC.rename {ρ : Nat → Nat} : ∀ {fs : SFields}, fs.NAC → (fs.rename ρ).NAC
+  | .nil, _ => trivial
+  | .cons _ _ _, ⟨h₁, h₂⟩ => ⟨h₁.rename, h₂.rename⟩
+
+theorem SParams.NAC.rename {ρ : Nat → Nat} : ∀ {P : SParams}, P.NAC → (P.rename ρ).NAC
+  | .nil, _ => trivial
+  | .cons _ _ _ _ _, ⟨h₁, h₂, h₃⟩ => ⟨h₁.rename, h₂.rename, h₃.rename⟩
+end
+
+theorem LogNAC.instantiate {s : State} {gen : List Nat} {ρ : Nat → Nat} (h : LogNAC s) :
+    LogNAC (s.instantiate gen ρ) := by
+  intro p hp
+  rcases List.mem_append.mp hp with hp | hp
+  · obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+    exact ⟨(h q hq).1.rename, (h q hq).2.rename⟩
+  · exact h p hp
+
 mutual
 theorem Constrain.nac : Constrain s a b s' → Inv₂ s → a.NAC → b.NAC → LogNAC s → LogNAC s'
   | .cached _, _, _, _, h => h

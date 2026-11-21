@@ -13,6 +13,7 @@ import BoltCore.Justify
 import BoltCore.Rename
 import BoltCore.Levels
 import BoltCore.ExtrusionSound
+import BoltCore.Instantiate
 import BoltCore.Soundness
 import BoltCore.Solution
 import BoltCore.Sorts

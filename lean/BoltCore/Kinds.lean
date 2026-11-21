@@ -661,6 +661,72 @@ theorem ExtrudeEach.kinds : ExtrudeEach s c pol lvl ts ts' s' c' → BoundsInLog
     · exact r₂.2 t' h
 end
 
+/-! ## Instantiation
+
+A copy has the kind of its original, so renaming keeps types well-kinded. -/
+
+theorem SType.rename_eq_var {ρ : Nat → Nat} {σ : Nat} : ∀ {t : SType}, t.rename ρ = .var σ →
+    ∃ σ₀, t = .var σ₀ ∧ ρ σ₀ = σ
+  | .var v, h => ⟨v, rfl, by simpa [SType.rename] using h⟩
+  | .prim _, h | .abs, h | .missing, h | .nil, h | .opt _, h | .arrow _ _, h | .record _ _, h
+  | .sig _, h => by simp [SType.rename] at h
+
+/-- A type and its renaming lack the same labels as rows, when the
+renaming keeps kinds. -/
+theorem KSame.rename {ρ : Nat → Nat} (hK : ∀ v, K (ρ v) = K v) (t : SType) :
+    KSame K t (t.rename ρ) := by
+  refine ⟨?_, fun σ h => ?_, fun ρ₀ h => ?_⟩
+  · rw [rowView_rename, SFields.labels_rename]
+  · rw [rowView_rename] at h
+    obtain ⟨σ₀, e, rfl⟩ := SType.rename_eq_var h
+    exact ⟨σ₀, e, hK σ₀⟩
+  · exact ⟨ρ ρ₀, by rw [rowView_rename]; simp only [h, SType.rename], hK ρ₀⟩
+
+theorem KOK.rename {ρ : Nat → Nat} (hK : ∀ v, K (ρ v) = K v) {a b : SType} (h : KOK K a b) :
+    KOK K (a.rename ρ) (b.rename ρ) :=
+  (KSame.rename hK b).kok_right ((KSame.rename hK a).kok_left h)
+
+mutual
+theorem WK.rename {ρ : Nat → Nat} (hK : ∀ v, K (ρ v) = K v) : ∀ {t : SType}, WK K t →
+    WK K (t.rename ρ)
+  | .var _, _ | .prim _, _ | .abs, _ | .missing, _ | .nil, _ => trivial
+  | .opt t, ⟨h₁, h₂⟩ => ⟨WK.rename hK h₁, (KSame.rename hK t).kempty h₂⟩
+  | .arrow a b, ⟨h₁, h₂, h₃, h₄⟩ =>
+    ⟨WK.rename hK h₁, (KSame.rename hK a).kempty h₂, WK.rename hK h₃,
+      (KSame.rename hK b).kempty h₄⟩
+  | .record fs t, ⟨h₁, h₂, h₃⟩ =>
+    ⟨FWK.rename hK h₁, WK.rename hK h₂, (KSame.rename hK (.record fs t)).recOK h₃⟩
+  | .sig _, h => PWK.rename hK h
+
+theorem FWK.rename {ρ : Nat → Nat} (hK : ∀ v, K (ρ v) = K v) : ∀ {fs : SFields}, FWK K fs →
+    FWK K (fs.rename ρ)
+  | .nil, _ => trivial
+  | .cons _ f _, ⟨h₁, h₂, h₃⟩ =>
+    ⟨WK.rename hK h₁, (KSame.rename hK f).kempty h₂, FWK.rename hK h₃⟩
+
+theorem PWK.rename {ρ : Nat → Nat} (hK : ∀ v, K (ρ v) = K v) : ∀ {P : SParams}, PWK K P →
+    PWK K (P.rename ρ)
+  | .nil, _ => trivial
+  | .cons _ _ _ τ _, ⟨h₁, h₂, h₃⟩ =>
+    ⟨WK.rename hK h₁, (KSame.rename hK τ).kempty h₂, PWK.rename hK h₃⟩
+end
+
+theorem KInv.instantiate {s : State} {gen : List Nat} {ρ : Nat → Nat} (k : KInv K s)
+    (hK : ∀ v, K (ρ v) = K v) : KInv K (s.instantiate gen ρ) := by
+  refine ⟨k.kind, fun p hp => ?_, k.exps⟩
+  rcases List.mem_append.mp hp with hp | hp
+  · obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+    have := k.log q hq
+    exact ⟨WK.rename hK this.1, WK.rename hK this.2.1, this.2.2.rename hK⟩
+  · exact k.log p hp
+
+/-- An instantiation keeps kinds. -/
+theorem IsInst.kinds {s : State} {lvl : Nat} {gen : List Nat} {ρ : Nat → Nat}
+    (hi : IsInst s lvl gen ρ) (hk : s.kind = K) : ∀ v, K (ρ v) = K v := fun v => by
+  by_cases hg : v ∈ gen
+  · rw [← hk]; exact hi.kind v hg
+  · rw [hi.fix v hg]
+
 mutual
 theorem Constrain.kinds : Constrain s a b s' → Inv₂ s → KInv K s →
     WK K a → WK K b → KOK K a b → KInv K s'

@@ -667,6 +667,45 @@ inductive Expand : State → SType → SFields → SType → State → Prop wher
       Expand s (.var v) ms (.var s₁.next) s₂
 end
 
+/-! ## Instantiation
+
+A use of a `let`-bound name copies the generalized variables `gen` of its
+scheme: each gets a fresh variable, with its bounds renamed
+(`freshen_above`). The copies are given by the renaming `ρ`.
+
+`freshen_above` copies the generalized variables it reaches from the type.
+While recording a certificate, `lib/typer.ml` copies the others too
+(`complete_copies`), since a certificate instantiates every constraint of
+the scheme; this is what the model does. The variables it does not reach
+are not reachable from anything else either, so the inferred types are the
+same.
+
+The ghost log gets a renamed copy of every logged constraint (those that
+do not mention `gen` are unchanged). -/
+
+/-- `ρ` instantiates `gen` at level `lvl`: it sends the generalized
+variables to distinct fresh variables, of level `lvl` and of their kinds,
+and fixes every other variable. -/
+structure IsInst (s : State) (lvl : Nat) (gen : List Nat) (ρ : Nat → Nat) : Prop where
+  fix : ∀ v, v ∉ gen → ρ v = v
+  fresh : ∀ α ∈ gen, s.next ≤ ρ α ∧ ρ α < s.next + gen.length
+  inj : ∀ α ∈ gen, ∀ β ∈ gen, ρ α = ρ β → α = β
+  level : ∀ α ∈ gen, s.level (ρ α) = lvl
+  kind : ∀ α ∈ gen, s.kind (ρ α) = s.kind α
+
+/-- The state after instantiating `gen` by `ρ`: the copies are allocated
+and get the renamed bounds of their originals. -/
+def State.instantiate (s : State) (gen : List Nat) (ρ : Nat → Nat) : State :=
+  { s with
+    next := s.next + gen.length
+    bounds := fun w =>
+      match gen.find? (fun α => ρ α = w) with
+      | some α =>
+        ⟨(s.bounds α).lower.map (·.rename ρ) ++ (s.bounds w).lower,
+          (s.bounds α).upper.map (·.rename ρ) ++ (s.bounds w).upper⟩
+      | none => s.bounds w
+    log := s.log.map (fun p => (p.1.rename ρ, p.2.rename ρ)) ++ s.log }
+
 /-- A top-level `constrain` call: it starts and ends with an empty cache. -/
 def ConstrainTop (s : State) (a b : SType) (s' : State) : Prop :=
   ∃ s₁, Constrain { s with cache := [] } a b s₁ ∧ s' = { s₁ with cache := [] }
