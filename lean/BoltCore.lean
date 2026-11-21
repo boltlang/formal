@@ -10,6 +10,8 @@ import BoltCore.Algorithm
 import BoltCore.Extrusion
 import BoltCore.Locality
 import BoltCore.Justify
+import BoltCore.Rename
+import BoltCore.Levels
 import BoltCore.ExtrusionSound
 import BoltCore.Soundness
 import BoltCore.Solution

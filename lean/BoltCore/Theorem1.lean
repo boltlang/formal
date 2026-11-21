@@ -117,63 +117,6 @@ variables: a *renaming*. The soundness proof below is stated for any
 renaming `f` of the type variables, given that the renamed accepted
 constraints hold; the plain theorem is the case `f = id`. -/
 
-mutual
-def SType.rename (f : Nat → Nat) : SType → SType
-  | .var v => .var (f v)
-  | .prim n => .prim n
-  | .arrow a b => .arrow (a.rename f) (b.rename f)
-  | .record fs t => .record (fs.rename f) (t.rename f)
-  | .abs => .abs
-  | .missing => .missing
-  | .opt t => .opt (t.rename f)
-  | .nil => .nil
-  | .sig P => .sig (P.rename f)
-
-def SFields.rename (f : Nat → Nat) : SFields → SFields
-  | .nil => .nil
-  | .cons n g fs => .cons n (g.rename f) (fs.rename f)
-
-def SParams.rename (f : Nat → Nat) : SParams → SParams
-  | .nil => .nil
-  | .cons n k o τ P => .cons n k o (τ.rename f) (P.rename f)
-end
-
-mutual
-theorem SType.rename_id : ∀ a : SType, a.rename id = a
-  | .var _ | .prim _ | .abs | .missing | .nil => rfl
-  | .opt t => by simp only [SType.rename, SType.rename_id t]
-  | .arrow a b => by simp only [SType.rename, SType.rename_id a, SType.rename_id b]
-  | .record fs t => by simp only [SType.rename, SFields.rename_id fs, SType.rename_id t]
-  | .sig P => by simp only [SType.rename, SParams.rename_id P]
-
-theorem SFields.rename_id : ∀ fs : SFields, fs.rename id = fs
-  | .nil => rfl
-  | .cons _ g fs => by simp only [SFields.rename, SType.rename_id g, SFields.rename_id fs]
-
-theorem SParams.rename_id : ∀ P : SParams, P.rename id = P
-  | .nil => rfl
-  | .cons _ _ _ τ P => by simp only [SParams.rename, SType.rename_id τ, SParams.rename_id P]
-end
-
-theorem SFields.rename_absOf (f : Nat → Nat) : ∀ F : SFields, F.absOf.rename f = (F.rename f).absOf
-  | .nil => rfl
-  | .cons _ _ F => by simp only [SFields.absOf, SFields.rename, SType.rename, SFields.rename_absOf f F]
-
-theorem SType.rename_ne_abs {f : Nat → Nat} : ∀ {a : SType}, a ≠ .abs → a.rename f ≠ .abs
-  | .var _, _ | .prim _, _ | .arrow _ _, _ | .record _ _, _
-  | .missing, _ | .opt _, _ | .nil, _ | .sig _, _ => fun h => nomatch h
-  | .abs, h => absurd rfl h
-
-theorem SType.IsPre.rename {f : Nat → Nat} : ∀ {a : SType}, a.IsPre → (a.rename f).IsPre
-  | .var _, _ | .prim _, _ | .arrow _ _, _ | .record _ _, _ | .nil, _ | .sig _, _ => trivial
-  | .abs, h | .missing, h | .opt _, h => absurd h id
-
-theorem SParams.toList_rename (f : Nat → Nat) : ∀ P : SParams,
-    (P.rename f).toList = P.toList.map (Param.map (·.rename f))
-  | .nil => rfl
-  | .cons _ _ _ _ P => by
-    simp only [SParams.rename, SParams.toList, List.map_cons, SParams.toList_rename f P]; rfl
-
 /-! ## Fields of inferred records -/
 
 /-- The fields as a list of label and type, under an interpretation. -/
